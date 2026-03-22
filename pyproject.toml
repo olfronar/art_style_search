@@ -1,0 +1,43 @@
+[project]
+name = "art-style-search"
+version = "0.1.0"
+description = "Self-improving loop for finding the best prompt to define and follow an art style from reference images"
+readme = "README.md"
+authors = [
+    { name = "Maxim Kruglikov", email = "olfronar@users.noreply.github.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.44.0",
+    "google-genai>=1.51.0",
+    "Pillow>=10.0.0",
+    "torch>=2.1.0",
+    "torchvision>=0.16.0",
+    "transformers>=4.40.0",
+    "lpips>=0.1.4",
+    "hpsv2>=1.2.0",
+    "simple-aesthetics-predictor>=0.1.2",
+    "numpy>=1.26.0",
+    "tqdm>=4.66.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.9.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.8.23,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

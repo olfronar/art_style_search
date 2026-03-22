@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:pypi.org)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:ai.google.dev)",
+      "Bash(git init:*)",
+      "Bash(uv init:*)",
+      "Bash(uv pip:*)",
+      "Bash(pip index:*)",
+      "Bash(curl -s https://pypi.org/pypi/simple-aesthetics-predictor/json)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(sorted\\(d[''''releases''''].keys\\(\\)\\)\\)\")",
+      "Bash(curl -s https://pypi.org/pypi/hpsv2/json)",
+      "Bash(uv sync:*)",
+      "Bash(uv run:*)",
+      "Skill(commit-commands:commit)",
+      "Bash(git:*)"
+    ]
+  }
+}
