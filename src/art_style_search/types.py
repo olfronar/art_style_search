@@ -125,6 +125,7 @@ class IterationResult:
     claude_analysis: str
     template_changes: str
     kept: bool
+    vision_feedback: str = ""
 
 
 @dataclass

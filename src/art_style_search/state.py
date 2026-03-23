@@ -129,6 +129,7 @@ def _iteration_result_from_dict(d: dict[str, Any]) -> IterationResult:
         claude_analysis=d["claude_analysis"],
         template_changes=d["template_changes"],
         kept=d["kept"],
+        vision_feedback=d.get("vision_feedback", ""),
     )
 
 

@@ -35,9 +35,11 @@ async def _generate_single(
                     model=model,
                     contents=prompt,
                     config=genai_types.GenerateContentConfig(
-                        response_modalities=["TEXT", "IMAGE"],
-                        image_generation_config=genai_types.ImageGenerationConfig(
+                        response_modalities=["IMAGE"],
+                        thinking_config=genai_types.ThinkingConfig(thinking_level="MINIMAL"),
+                        image_config=genai_types.ImageConfig(
                             aspect_ratio=aspect_ratio,
+                            image_size="1K",
                         ),
                     ),
                 )
@@ -50,8 +52,19 @@ async def _generate_single(
                     if part.inline_data is not None:
                         output_path.write_bytes(part.inline_data.data)
                         return output_path
+                    if hasattr(part, "image") and part.image is not None:
+                        output_path.write_bytes(part.image.image_bytes)
+                        return output_path
 
-                msg = f"Image {index}: no inline_data found in response parts"
+                part_types = [getattr(p, "type", type(p).__name__) for p in response.candidates[0].content.parts]
+                text_parts = [p.text for p in response.candidates[0].content.parts if hasattr(p, "text") and p.text]
+                logger.warning(
+                    "Image %d: response parts=%s, text=%s",
+                    index,
+                    part_types,
+                    text_parts[:200] if text_parts else "none",
+                )
+                msg = f"Image {index}: no image data found in response parts"
                 raise RuntimeError(msg)
 
             except genai.errors.ClientError as exc:
@@ -66,8 +79,6 @@ async def _generate_single(
                     exc,
                 )
                 await asyncio.sleep(delay)
-            except RuntimeError:
-                raise
             except Exception as exc:
                 # Catch rate-limit or transient errors
                 last_exc = exc

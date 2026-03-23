@@ -4,14 +4,76 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from pathlib import Path
 
+from google import genai
+from google.genai import types as genai_types
 from PIL import Image
 
 from art_style_search.models import ModelRegistry
 from art_style_search.types import AggregatedMetrics, MetricScores
 
 logger = logging.getLogger(__name__)
+
+_MIME_MAP = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".bmp": "image/bmp",
+}
+
+_VISION_COMPARE_PROMPT = (
+    "You are an expert art analyst. You are shown reference images (the target art style) "
+    "and generated images (attempts to reproduce that style).\n\n"
+    "Compare the generated images against the reference images and describe:\n"
+    "1. **Style differences**: Color palette, brushwork/technique, level of detail, abstraction level\n"
+    "2. **Composition differences**: Layout, spacing, framing, perspective\n"
+    "3. **Mood/atmosphere differences**: Lighting, emotional tone, energy\n"
+    "4. **What's working well**: Aspects the generated images capture correctly\n"
+    "5. **Specific improvements needed**: Concrete, actionable changes to make the generated images "
+    "match the reference style more closely\n\n"
+    "Be precise and specific. Focus on art style reproduction, not subject matter."
+)
+
+
+async def compare_vision(
+    generated_paths: list[Path],
+    reference_paths: list[Path],
+    *,
+    client: genai.Client,
+    model: str,
+    semaphore: asyncio.Semaphore,
+    max_images: int = 3,
+) -> str:
+    """Use Gemini vision to compare generated vs reference images and describe differences."""
+    # Sample a subset to keep the request manageable
+    gen_sample = random.sample(generated_paths, min(max_images, len(generated_paths)))
+    ref_sample = random.sample(reference_paths, min(max_images, len(reference_paths)))
+
+    contents: list[genai_types.Part | str] = []
+
+    contents.append("## Reference images (target style):\n")
+    for path in ref_sample:
+        mime_type = _MIME_MAP.get(path.suffix.lower(), "image/png")
+        contents.append(genai_types.Part.from_bytes(data=path.read_bytes(), mime_type=mime_type))
+
+    contents.append("\n## Generated images (to evaluate):\n")
+    for path in gen_sample:
+        mime_type = _MIME_MAP.get(path.suffix.lower(), "image/png")
+        contents.append(genai_types.Part.from_bytes(data=path.read_bytes(), mime_type=mime_type))
+
+    contents.append(f"\n{_VISION_COMPARE_PROMPT}")
+
+    async with semaphore:
+        response = await client.aio.models.generate_content(
+            model=model,
+            contents=contents,
+        )
+
+    return response.text
 
 
 def _aggregate(scores: list[MetricScores]) -> AggregatedMetrics:

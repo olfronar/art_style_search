@@ -11,6 +11,7 @@ import logging
 import re
 
 import anthropic
+from anthropic.types import Message
 
 from art_style_search.types import (
     AggregatedMetrics,
@@ -21,6 +22,21 @@ from art_style_search.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_text(response: Message) -> str:
+    """Extract text content from a response that may contain thinking blocks."""
+    for block in response.content:
+        if block.type == "text":
+            return block.text
+    return ""
+
+
+async def _stream_message(client: anthropic.AsyncAnthropic, **kwargs: object) -> Message:
+    """Call messages.create with streaming and return the final Message."""
+    async with client.messages.stream(**kwargs) as stream:
+        return await stream.get_final_message()
+
 
 # ---------------------------------------------------------------------------
 # Formatting helpers
@@ -70,13 +86,16 @@ def _format_history_tail(branch: BranchState, max_entries: int = 5) -> str:
     parts: list[str] = []
     for r in recent:
         kept_tag = "KEPT" if r.kept else "DISCARDED"
-        parts.append(
+        entry = (
             f"### Iteration {r.iteration} [{kept_tag}]\n"
             f"Rendered prompt: {r.rendered_prompt}\n"
             f"Metrics:\n{_format_metrics(r.aggregated)}\n"
             f"Analysis: {r.claude_analysis}\n"
             f"Template changes: {r.template_changes}"
         )
+        if r.vision_feedback:
+            entry += f"\nVision feedback: {r.vision_feedback}"
+        parts.append(entry)
     return "\n\n".join(parts)
 
 
@@ -198,13 +217,15 @@ async def propose_initial_templates(
 
     logger.info("Requesting %d initial templates from Claude (%s)", num_branches, model)
 
-    response = await client.messages.create(
+    response = await _stream_message(
+        client,
         model=model,
-        max_tokens=4096,
+        max_tokens=80000,
+        thinking={"type": "adaptive"},
         system=system,
         messages=[{"role": "user", "content": user}],
     )
-    text = response.content[0].text
+    text = _extract_text(response)
 
     templates = _parse_initial_templates(text, num_branches)
 
@@ -223,6 +244,7 @@ async def refine_template(
     *,
     client: anthropic.AsyncAnthropic,
     model: str,
+    vision_feedback: str = "",
 ) -> tuple[PromptTemplate, str, str, bool]:
     """Refine a branch's template based on metric feedback.
 
@@ -287,19 +309,35 @@ async def refine_template(
         user_parts.append(f"\nRendered prompt: {global_best.render()}")
         user_parts.append(f"\nMetrics:\n{_format_metrics(global_best_metrics)}")
 
-    user_parts.append("\n\nPropose an improved template.  Focus on the weakest metrics while maintaining strengths.")
+    if vision_feedback:
+        user_parts.append("\n\n## Vision Comparison (Gemini analysis of generated vs reference images)\n")
+        user_parts.append(vision_feedback)
+
+    # Include vision feedback from recent history
+    recent_with_vision = [r for r in branch.history[-3:] if r.vision_feedback]
+    if recent_with_vision:
+        user_parts.append("\n\n## Previous Vision Feedback\n")
+        for r in recent_with_vision:
+            user_parts.append(f"### Iteration {r.iteration}\n{r.vision_feedback}\n")
+
+    user_parts.append(
+        "\n\nPropose an improved template.  Focus on the weakest metrics while maintaining strengths. "
+        "Pay special attention to the vision comparison feedback for concrete style differences."
+    )
 
     user = "".join(user_parts)
 
     logger.info("Requesting template refinement for branch %d from Claude (%s)", branch.branch_id, model)
 
-    response = await client.messages.create(
+    response = await _stream_message(
+        client,
         model=model,
-        max_tokens=4096,
+        max_tokens=80000,
+        thinking={"type": "adaptive"},
         system=system,
         messages=[{"role": "user", "content": user}],
     )
-    text = response.content[0].text
+    text = _extract_text(response)
 
     new_template = _parse_template(text)
     analysis_text = _parse_analysis(text)

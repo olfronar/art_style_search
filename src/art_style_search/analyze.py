@@ -9,10 +9,26 @@ import re
 from pathlib import Path
 
 import anthropic
+from anthropic.types import Message
 from google import genai
 from google.genai import types as genai_types
 
 from art_style_search.types import Caption, PromptSection, PromptTemplate, StyleProfile
+
+
+def _extract_text(response: Message) -> str:
+    """Extract text content from a response that may contain thinking blocks."""
+    for block in response.content:
+        if block.type == "text":
+            return block.text
+    return ""
+
+
+async def _stream_message(client: anthropic.AsyncAnthropic, **kwargs: object) -> Message:
+    """Call messages.create with streaming and return the final Message."""
+    async with client.messages.stream(**kwargs) as stream:
+        return await stream.get_final_message()
+
 
 logger = logging.getLogger(__name__)
 
@@ -170,13 +186,15 @@ async def _claude_analyze(
     prompt = _CLAUDE_ANALYSIS_PROMPT.format(captions=captions_text)
 
     logger.info("Sending %d captions to Claude (%s) for style analysis", len(captions), model)
-    response = await client.messages.create(
+    response = await _stream_message(
+        client,
         model=model,
-        max_tokens=4096,
+        max_tokens=80000,
+        thinking={"type": "adaptive"},
         system=_ANALYSIS_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
     )
-    return response.content[0].text
+    return _extract_text(response)
 
 
 async def _claude_compile(
@@ -193,13 +211,15 @@ async def _claude_compile(
     )
 
     logger.info("Compiling style profile via Claude (%s)", model)
-    response = await client.messages.create(
+    response = await _stream_message(
+        client,
         model=model,
-        max_tokens=4096,
+        max_tokens=80000,
+        thinking={"type": "adaptive"},
         system=_ANALYSIS_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
     )
-    raw_text = response.content[0].text
+    raw_text = _extract_text(response)
     return _parse_compilation(raw_text, gemini_raw=gemini_analysis, claude_raw=claude_analysis)
 
 

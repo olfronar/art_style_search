@@ -109,13 +109,27 @@ async def _run_branch_iteration(
 
     # Phase 3: Evaluate (re-sample references for this iteration)
     eval_refs = _sample(all_ref_paths, config.max_eval_images)
-    scores, aggregated = await evaluate_images(
+
+    # Run metric evaluation and vision comparison in parallel
+    from art_style_search.evaluate import compare_vision
+
+    eval_task = evaluate_images(
         image_paths,
         eval_refs,
         rendered,
         registry=registry,
         semaphore=eval_semaphore,
     )
+    vision_task = compare_vision(
+        image_paths,
+        eval_refs,
+        client=gemini_client,
+        model=config.caption_model,
+        semaphore=gen_semaphore,
+    )
+
+    (scores, aggregated), vision_feedback = await asyncio.gather(eval_task, vision_task)
+    logger.info("Branch %d iter %d — vision feedback: %.120s...", branch.branch_id, iteration, vision_feedback)
 
     # Phase 1 (next iter prep): Refine template
     new_template, analysis, template_changes, should_stop = await refine_template(
@@ -125,6 +139,7 @@ async def _run_branch_iteration(
         global_best_metrics,
         client=anthropic_client,
         model=config.claude_model,
+        vision_feedback=vision_feedback,
     )
 
     # Determine if this iteration improved
@@ -142,6 +157,7 @@ async def _run_branch_iteration(
         claude_analysis=analysis,
         template_changes=template_changes,
         kept=kept,
+        vision_feedback=vision_feedback,
     )
 
     # Update branch state
@@ -174,6 +190,8 @@ async def _run_branch_iteration(
 async def run(config: Config) -> LoopState:
     """Run the full optimization loop."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    logging.getLogger("google_genai").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
     # Set thread pool size for torch evaluation
     loop = asyncio.get_running_loop()

@@ -83,13 +83,13 @@ def parse_args(argv: list[str] | None = None) -> Config:
 
     # Models
     models = parser.add_argument_group("Models")
-    models.add_argument("--caption-model", default="gemini-2.5-pro-preview-06-05", help="Gemini model for captioning")
+    models.add_argument("--caption-model", default="gemini-3.1-pro-preview", help="Gemini model for captioning")
     models.add_argument(
         "--generator-model",
-        default="gemini-2.0-flash-preview-image-generation",
+        default="gemini-3.1-flash-image-preview",
         help="Gemini model for image generation",
     )
-    models.add_argument("--claude-model", default="claude-sonnet-4-20250514", help="Claude model for reasoning")
+    models.add_argument("--claude-model", default="claude-opus-4-6", help="Claude model for reasoning")
 
     # Concurrency
     conc = parser.add_argument_group("Concurrency")
