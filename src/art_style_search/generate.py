@@ -56,13 +56,14 @@ async def _generate_single(
                         output_path.write_bytes(part.image.image_bytes)
                         return output_path
 
-                part_types = [getattr(p, "type", type(p).__name__) for p in response.candidates[0].content.parts]
+                part_types = [type(p).__name__ for p in response.candidates[0].content.parts]
                 text_parts = [p.text for p in response.candidates[0].content.parts if hasattr(p, "text") and p.text]
+                text_summary = "; ".join(t[:200] for t in text_parts) if text_parts else "none"
                 logger.warning(
                     "Image %d: response parts=%s, text=%s",
                     index,
                     part_types,
-                    text_parts[:200] if text_parts else "none",
+                    text_summary,
                 )
                 msg = f"Image {index}: no image data found in response parts"
                 raise RuntimeError(msg)

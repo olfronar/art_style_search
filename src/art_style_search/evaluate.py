@@ -8,22 +8,13 @@ import random
 from pathlib import Path
 
 from google import genai
-from google.genai import types as genai_types
 from PIL import Image
 
 from art_style_search.models import ModelRegistry
 from art_style_search.types import AggregatedMetrics, MetricScores
+from art_style_search.utils import image_to_gemini_part
 
 logger = logging.getLogger(__name__)
-
-_MIME_MAP = {
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".webp": "image/webp",
-    ".gif": "image/gif",
-    ".bmp": "image/bmp",
-}
 
 _VISION_COMPARE_PROMPT = (
     "You are an expert art analyst. You are shown reference images (the target art style) "
@@ -53,17 +44,15 @@ async def compare_vision(
     gen_sample = random.sample(generated_paths, min(max_images, len(generated_paths)))
     ref_sample = random.sample(reference_paths, min(max_images, len(reference_paths)))
 
-    contents: list[genai_types.Part | str] = []
+    contents: list[object] = []
 
     contents.append("## Reference images (target style):\n")
     for path in ref_sample:
-        mime_type = _MIME_MAP.get(path.suffix.lower(), "image/png")
-        contents.append(genai_types.Part.from_bytes(data=path.read_bytes(), mime_type=mime_type))
+        contents.append(image_to_gemini_part(path))
 
     contents.append("\n## Generated images (to evaluate):\n")
     for path in gen_sample:
-        mime_type = _MIME_MAP.get(path.suffix.lower(), "image/png")
-        contents.append(genai_types.Part.from_bytes(data=path.read_bytes(), mime_type=mime_type))
+        contents.append(image_to_gemini_part(path))
 
     contents.append(f"\n{_VISION_COMPARE_PROMPT}")
 

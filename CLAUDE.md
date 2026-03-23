@@ -47,7 +47,8 @@ uv run python -m art_style_search --help # Show all CLI options
 - `prompt.py` - Claude meta-prompt proposal/refinement (template structure + values)
 - `generate.py` - Gemini Flash image generation with semaphore + retry
 - `models.py` - ModelRegistry: lazy-load DINO/LPIPS/HPS/Aesthetics with per-model locks
-- `evaluate.py` - Dispatches 4 metrics per image via asyncio.to_thread
+- `evaluate.py` - Dispatches 4 metrics per image via asyncio.to_thread + Gemini vision comparison
+- `utils.py` - Shared helpers: Anthropic streaming/text extraction, Gemini image part builder, MIME map
 - `state.py` - JSON persistence (state.json + per-iteration logs)
 - `loop.py` - BSP orchestration loop (zero-step → population branches → convergence)
 - `__main__.py` - Entry point
@@ -67,6 +68,11 @@ All metrics compare generated images against reference images:
 - **LPIPS**: Perceptual distance. Lower = better.
 - **HPS v2**: Human preference score for text-to-image quality. Higher = better.
 - **LAION Aesthetics**: Aesthetic quality predictor (1-10 scale). Higher = better.
+
+## Code Conventions
+
+- Helpers used by 2+ modules belong in `utils.py` — do not duplicate locally (e.g. MIME maps, API call wrappers, response extractors)
+- Data fed to Claude in `refine_template` must appear via exactly one path — if the history formatter includes a field, don't also add a dedicated section for it (or vice versa)
 
 ## Code Style
 

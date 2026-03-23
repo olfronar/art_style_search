@@ -9,26 +9,10 @@ import re
 from pathlib import Path
 
 import anthropic
-from anthropic.types import Message
 from google import genai
-from google.genai import types as genai_types
 
 from art_style_search.types import Caption, PromptSection, PromptTemplate, StyleProfile
-
-
-def _extract_text(response: Message) -> str:
-    """Extract text content from a response that may contain thinking blocks."""
-    for block in response.content:
-        if block.type == "text":
-            return block.text
-    return ""
-
-
-async def _stream_message(client: anthropic.AsyncAnthropic, **kwargs: object) -> Message:
-    """Call messages.create with streaming and return the final Message."""
-    async with client.messages.stream(**kwargs) as stream:
-        return await stream.get_final_message()
-
+from art_style_search.utils import extract_text, image_to_gemini_part, stream_message
 
 logger = logging.getLogger(__name__)
 
@@ -152,21 +136,10 @@ async def _gemini_analyze(
     model: str,
 ) -> str:
     """Send all reference images to Gemini and get a style analysis."""
-    contents: list[genai_types.Part | str] = []
+    contents: list[object] = []
 
     for img_path in reference_paths:
-        image_bytes = img_path.read_bytes()
-        suffix = img_path.suffix.lower()
-        mime_map = {
-            ".png": "image/png",
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".webp": "image/webp",
-            ".gif": "image/gif",
-            ".bmp": "image/bmp",
-        }
-        mime_type = mime_map.get(suffix, "image/png")
-        contents.append(genai_types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
+        contents.append(image_to_gemini_part(img_path))
 
     contents.append(_GEMINI_ANALYSIS_PROMPT)
 
@@ -186,7 +159,7 @@ async def _claude_analyze(
     prompt = _CLAUDE_ANALYSIS_PROMPT.format(captions=captions_text)
 
     logger.info("Sending %d captions to Claude (%s) for style analysis", len(captions), model)
-    response = await _stream_message(
+    response = await stream_message(
         client,
         model=model,
         max_tokens=80000,
@@ -194,7 +167,7 @@ async def _claude_analyze(
         system=_ANALYSIS_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
     )
-    return _extract_text(response)
+    return extract_text(response)
 
 
 async def _claude_compile(
@@ -211,7 +184,7 @@ async def _claude_compile(
     )
 
     logger.info("Compiling style profile via Claude (%s)", model)
-    response = await _stream_message(
+    response = await stream_message(
         client,
         model=model,
         max_tokens=80000,
@@ -219,7 +192,7 @@ async def _claude_compile(
         system=_ANALYSIS_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
     )
-    raw_text = _extract_text(response)
+    raw_text = extract_text(response)
     return _parse_compilation(raw_text, gemini_raw=gemini_analysis, claude_raw=claude_analysis)
 
 

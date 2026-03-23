@@ -11,7 +11,6 @@ import logging
 import re
 
 import anthropic
-from anthropic.types import Message
 
 from art_style_search.types import (
     AggregatedMetrics,
@@ -20,22 +19,9 @@ from art_style_search.types import (
     PromptTemplate,
     StyleProfile,
 )
+from art_style_search.utils import extract_text, stream_message
 
 logger = logging.getLogger(__name__)
-
-
-def _extract_text(response: Message) -> str:
-    """Extract text content from a response that may contain thinking blocks."""
-    for block in response.content:
-        if block.type == "text":
-            return block.text
-    return ""
-
-
-async def _stream_message(client: anthropic.AsyncAnthropic, **kwargs: object) -> Message:
-    """Call messages.create with streaming and return the final Message."""
-    async with client.messages.stream(**kwargs) as stream:
-        return await stream.get_final_message()
 
 
 # ---------------------------------------------------------------------------
@@ -86,16 +72,13 @@ def _format_history_tail(branch: BranchState, max_entries: int = 5) -> str:
     parts: list[str] = []
     for r in recent:
         kept_tag = "KEPT" if r.kept else "DISCARDED"
-        entry = (
+        parts.append(
             f"### Iteration {r.iteration} [{kept_tag}]\n"
             f"Rendered prompt: {r.rendered_prompt}\n"
             f"Metrics:\n{_format_metrics(r.aggregated)}\n"
             f"Analysis: {r.claude_analysis}\n"
             f"Template changes: {r.template_changes}"
         )
-        if r.vision_feedback:
-            entry += f"\nVision feedback: {r.vision_feedback}"
-        parts.append(entry)
     return "\n\n".join(parts)
 
 
@@ -217,7 +200,7 @@ async def propose_initial_templates(
 
     logger.info("Requesting %d initial templates from Claude (%s)", num_branches, model)
 
-    response = await _stream_message(
+    response = await stream_message(
         client,
         model=model,
         max_tokens=80000,
@@ -225,7 +208,7 @@ async def propose_initial_templates(
         system=system,
         messages=[{"role": "user", "content": user}],
     )
-    text = _extract_text(response)
+    text = extract_text(response)
 
     templates = _parse_initial_templates(text, num_branches)
 
@@ -320,16 +303,17 @@ async def refine_template(
         for r in recent_with_vision:
             user_parts.append(f"### Iteration {r.iteration}\n{r.vision_feedback}\n")
 
-    user_parts.append(
-        "\n\nPropose an improved template.  Focus on the weakest metrics while maintaining strengths. "
-        "Pay special attention to the vision comparison feedback for concrete style differences."
-    )
+    has_vision = vision_feedback or recent_with_vision
+    instruction = "\n\nPropose an improved template.  Focus on the weakest metrics while maintaining strengths."
+    if has_vision:
+        instruction += " Pay special attention to the vision comparison feedback for concrete style differences."
+    user_parts.append(instruction)
 
     user = "".join(user_parts)
 
     logger.info("Requesting template refinement for branch %d from Claude (%s)", branch.branch_id, model)
 
-    response = await _stream_message(
+    response = await stream_message(
         client,
         model=model,
         max_tokens=80000,
@@ -337,7 +321,7 @@ async def refine_template(
         system=system,
         messages=[{"role": "user", "content": user}],
     )
-    text = _extract_text(response)
+    text = extract_text(response)
 
     new_template = _parse_template(text)
     analysis_text = _parse_analysis(text)

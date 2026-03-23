@@ -8,9 +8,9 @@ import logging
 from pathlib import Path
 
 from google import genai
-from google.genai import types as genai_types
 
 from art_style_search.types import Caption
+from art_style_search.utils import image_to_gemini_part
 
 logger = logging.getLogger(__name__)
 
@@ -53,24 +53,12 @@ async def _caption_single(
 
     # Cache miss — call Gemini
     logger.info("Captioning %s via %s", image_path.name, model)
-    image_bytes = image_path.read_bytes()
-
-    suffix = image_path.suffix.lower()
-    mime_map = {
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".webp": "image/webp",
-        ".gif": "image/gif",
-        ".bmp": "image/bmp",
-    }
-    mime_type = mime_map.get(suffix, "image/png")
 
     async with semaphore:
         response = await client.aio.models.generate_content(
             model=model,
             contents=[
-                genai_types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                image_to_gemini_part(image_path),
                 CAPTION_PROMPT,
             ],
         )

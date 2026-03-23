@@ -14,7 +14,7 @@ from google import genai
 from art_style_search.analyze import analyze_style
 from art_style_search.caption import caption_references
 from art_style_search.config import Config
-from art_style_search.evaluate import evaluate_images
+from art_style_search.evaluate import compare_vision, evaluate_images
 from art_style_search.generate import generate_images
 from art_style_search.models import ModelRegistry
 from art_style_search.prompt import propose_initial_templates, refine_template
@@ -26,6 +26,7 @@ from art_style_search.types import (
     IterationResult,
     LoopState,
     PromptTemplate,
+    StyleProfile,
     composite_score,
 )
 
@@ -78,15 +79,11 @@ async def _run_branch_iteration(
     registry: ModelRegistry,
     gen_semaphore: asyncio.Semaphore,
     eval_semaphore: asyncio.Semaphore,
-    style_profile: object,
+    style_profile: StyleProfile,
     global_best_template: PromptTemplate | None,
     global_best_metrics: AggregatedMetrics | None,
 ) -> IterationResult:
     """Execute one full iteration for a single branch: generate → evaluate → refine."""
-    from art_style_search.types import StyleProfile
-
-    assert isinstance(style_profile, StyleProfile)
-
     rendered = branch.current_template.render()
     logger.info("Branch %d iter %d — prompt: %.80s...", branch.branch_id, iteration, rendered)
 
@@ -111,7 +108,6 @@ async def _run_branch_iteration(
     eval_refs = _sample(all_ref_paths, config.max_eval_images)
 
     # Run metric evaluation and vision comparison in parallel
-    from art_style_search.evaluate import compare_vision
 
     eval_task = evaluate_images(
         image_paths,
