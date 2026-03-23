@@ -15,7 +15,9 @@
       "Bash(uv sync:*)",
       "Bash(uv run:*)",
       "Skill(commit-commands:commit)",
-      "Bash(git:*)"
+      "Bash(git:*)",
+      "Bash(python3 -c \"import anthropic; help\\(anthropic.AsyncAnthropic.messages\\)\")",
+      "Bash(python3 -c \"from google import genai; help\\(genai.Client\\)\")"
     ]
   }
 }
