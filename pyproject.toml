@@ -19,6 +19,7 @@ dependencies = [
     "simple-aesthetics-predictor>=0.1.2",
     "numpy>=1.26.0",
     "tqdm>=4.66.0",
+    "python-dotenv>=1.2.2",
 ]
 
 [dependency-groups]
