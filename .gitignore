@@ -28,6 +28,7 @@ env/
 reference_images/
 outputs/
 logs/
+state.json
 
 # ML model caches
 *.pt
