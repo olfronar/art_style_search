@@ -17,6 +17,7 @@ import concurrent.futures
 import logging
 import random
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import anthropic
@@ -28,9 +29,10 @@ from art_style_search.config import Config
 from art_style_search.evaluate import check_caption_compliance, compare_vision, evaluate_images
 from art_style_search.generate import _generate_single
 from art_style_search.models import ModelRegistry
-from art_style_search.prompt import propose_initial_templates, refine_template
+from art_style_search.prompt import Lessons, propose_initial_templates, refine_template
 from art_style_search.state import load_state, save_iteration_log, save_state
 from art_style_search.types import (
+    AggregatedMetrics,
     Caption,
     ConvergenceReason,
     IterationResult,
@@ -48,6 +50,11 @@ logger = logging.getLogger(__name__)
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 
 
+# ---------------------------------------------------------------------------
+# Small helpers
+# ---------------------------------------------------------------------------
+
+
 def _discover_images(directory: Path) -> list[Path]:
     """Find all image files in a directory, sorted for determinism."""
     paths = [p for p in directory.iterdir() if p.suffix.lower() in IMAGE_EXTENSIONS]
@@ -62,39 +69,70 @@ def _sample(items: list[Path], max_count: int) -> list[Path]:
     return random.sample(items, max_count)
 
 
-def _get_previous_per_image_scores(last_results: list[IterationResult]) -> dict[Path, float]:
-    """Get per-image DINO scores from the best previous experiment."""
-    if not last_results:
-        return {}
-    # Use the kept result if one exists, else the first
-    prev = next((r for r in last_results if r.kept), last_results[0])
-    result: dict[Path, float] = {}
-    for cap, sc in zip(prev.iteration_captions, prev.per_image_scores, strict=False):
-        result[cap.image_path] = sc.dino_similarity
-    return result
+def _best_kept_result(results: list[IterationResult]) -> IterationResult | None:
+    """Return the kept result from a list, or the first result, or None."""
+    if not results:
+        return None
+    return next((r for r in results if r.kept), results[0])
 
 
-def _build_caption_diffs(last_results: list[IterationResult], worst_captions: list[Caption]) -> str:
-    """Show how captions changed for worst-performing images vs previous iteration."""
-    if not last_results or not worst_captions:
-        return ""
-    prev = next((r for r in last_results if r.kept), last_results[0])
-    prev_by_path = {c.image_path: c.text for c in prev.iteration_captions}
-
-    diffs: list[str] = []
-    for cap in worst_captions:
-        prev_text = prev_by_path.get(cap.image_path)
-        if prev_text is None:
-            continue
-        if prev_text == cap.text:
-            diffs.append(
-                f"**{cap.image_path.name}**: Caption UNCHANGED (meta-prompt change had no effect on this image)"
-            )
+def _collect_experiment_results(raw: list[IterationResult | BaseException], label: str) -> list[IterationResult]:
+    """Filter successful results from asyncio.gather output, logging failures."""
+    results: list[IterationResult] = []
+    for r in raw:
+        if isinstance(r, BaseException):
+            logger.error("%s failed: %s", label, r)
         else:
-            diffs.append(f"**{cap.image_path.name}**:\n  PREV: {prev_text[:200]}...\n  NOW:  {cap.text[:200]}...")
-    if not diffs:
-        return ""
-    return "## Caption Changes (worst 3 images, prev → current)\n" + "\n".join(diffs)
+            results.append(r)
+    return results
+
+
+def _apply_best_result(state: LoopState, result: IterationResult) -> None:
+    """Update state with a new best experiment result."""
+    result.kept = True
+    state.current_template = result.template
+    state.best_template = result.template
+    state.best_metrics = result.aggregated
+    state.global_best_prompt = result.rendered_prompt
+    state.global_best_metrics = result.aggregated
+
+
+def _log_experiment_results(results: list[IterationResult], log_dir: Path) -> None:
+    """Save and log each experiment result."""
+    for r in results:
+        save_iteration_log(r, log_dir)
+        m = r.aggregated
+        logger.info(
+            "Exp %d — DINO=%.4f LPIPS=%.4f HPS=%.4f Aes=%.2f %s",
+            r.branch_id,
+            m.dino_similarity_mean,
+            m.lpips_distance_mean,
+            m.hps_score_mean,
+            m.aesthetics_score_mean,
+            "KEPT" if r.kept else "discarded",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Experiment proposal dataclass (replaces 8-element tuple)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _ExperimentProposal:
+    """Holds Claude's proposed experiment before it's executed."""
+
+    template: PromptTemplate
+    hypothesis: str
+    experiment_desc: str
+    builds_on: str | None
+    open_problems: list[str]
+    lessons: Lessons
+
+
+# ---------------------------------------------------------------------------
+# Captioning + generation + evaluation
+# ---------------------------------------------------------------------------
 
 
 async def _caption_and_generate(
@@ -170,7 +208,6 @@ async def _run_experiment(
     meta_prompt = template.render()
     logger.info("Exp %d iter %d — meta-prompt: %.100s...", experiment_id, iteration, meta_prompt)
 
-    # Phase 1: Caption + generate
     captions, generated_paths, pairs = await _caption_and_generate(
         fixed_refs,
         meta_prompt,
@@ -188,7 +225,7 @@ async def _run_experiment(
         "Exp %d iter %d — %d/%d images generated", experiment_id, iteration, len(generated_paths), len(fixed_refs)
     )
 
-    # Phase 2: Evaluate — per-image paired comparison
+    # Evaluate — per-image paired comparison
     gen_paths_for_eval = [gen for _, gen in pairs]
     ref_paths_for_eval = [orig for orig, _ in pairs]
     caption_by_path = {c.image_path: c.text for c in captions}
@@ -228,9 +265,14 @@ async def _run_experiment(
 
     # Build roundtrip feedback — full captions for worst 3
     roundtrip_details: list[str] = []
-    prev_scores = _get_previous_per_image_scores(last_results)
+    prev = _best_kept_result(last_results)
+    prev_scores: dict[Path, float] = {}
+    if prev:
+        for cap, sc in zip(prev.iteration_captions, prev.per_image_scores, strict=False):
+            prev_scores[cap.image_path] = sc.dino_similarity
+
     for idx, ((_orig, _gen), sc, cap) in enumerate(scored_items):
-        prev_dino = prev_scores.get(cap.image_path, None)
+        prev_dino = prev_scores.get(cap.image_path)
         trend = ""
         if prev_dino is not None:
             arrow = "↑" if sc.dino_similarity > prev_dino else "↓" if sc.dino_similarity < prev_dino else "="
@@ -255,7 +297,7 @@ async def _run_experiment(
         aggregated=aggregated,
         claude_analysis="",
         template_changes="",
-        kept=False,  # determined later by caller
+        kept=False,
         hypothesis=hypothesis,
         experiment=experiment_desc,
         vision_feedback=vision_feedback,
@@ -264,43 +306,40 @@ async def _run_experiment(
     )
 
 
+# ---------------------------------------------------------------------------
+# Knowledge Base maintenance
+# ---------------------------------------------------------------------------
+
+
 def _update_knowledge_base(
     kb: KnowledgeBase,
     result: IterationResult,
     template: PromptTemplate,
-    best_metrics: object | None,
-    lessons_confirmed: str,
-    lessons_rejected: str,
-    lessons_new_insight: str,
-    builds_on: str | None,
-    raw_open_problems: list[str],
+    best_metrics: AggregatedMetrics | None,
+    proposal: _ExperimentProposal,
     iteration: int,
 ) -> None:
     """Update the shared KB with one experiment's results."""
-    # Parse parent hypothesis
     parent_id: str | None = None
-    if builds_on:
-        parent_match = re.match(r"H(\d+)", builds_on)
+    if proposal.builds_on:
+        parent_match = re.match(r"H(\d+)", proposal.builds_on)
         if parent_match:
             parent_id = f"H{parent_match.group(1)}"
 
     category_names = get_category_names(template)
     category = classify_hypothesis(result.hypothesis, category_names) if result.hypothesis else "general"
 
-    # Metric deltas
     metric_delta: dict[str, float] = {}
     if best_metrics is not None:
-        from art_style_search.types import AggregatedMetrics
+        metric_delta = {
+            "dino": result.aggregated.dino_similarity_mean - best_metrics.dino_similarity_mean,
+            "lpips": result.aggregated.lpips_distance_mean - best_metrics.lpips_distance_mean,
+            "hps": result.aggregated.hps_score_mean - best_metrics.hps_score_mean,
+            "aesthetics": result.aggregated.aesthetics_score_mean - best_metrics.aesthetics_score_mean,
+        }
 
-        if isinstance(best_metrics, AggregatedMetrics):
-            metric_delta = {
-                "dino": result.aggregated.dino_similarity_mean - best_metrics.dino_similarity_mean,
-                "lpips": result.aggregated.lpips_distance_mean - best_metrics.lpips_distance_mean,
-                "hps": result.aggregated.hps_score_mean - best_metrics.hps_score_mean,
-                "aesthetics": result.aggregated.aesthetics_score_mean - best_metrics.aesthetics_score_mean,
-            }
-
-    lesson_text = lessons_confirmed or lessons_new_insight or lessons_rejected or ""
+    lessons = proposal.lessons
+    lesson_text = lessons.confirmed or lessons.new_insight or lessons.rejected or ""
 
     if result.hypothesis:
         kb.add_hypothesis(
@@ -312,12 +351,11 @@ def _update_knowledge_base(
             kept=result.kept,
             metric_delta=metric_delta,
             lesson=lesson_text,
-            confirmed=lessons_confirmed,
-            rejected=lessons_rejected,
+            confirmed=lessons.confirmed,
+            rejected=lessons.rejected,
         )
 
-    # Update open problems
-    if raw_open_problems:
+    if proposal.open_problems:
         scores = result.per_image_scores
         cat_dinos: dict[str, list[float]] = {}
         for sc in scores:
@@ -327,7 +365,7 @@ def _update_knowledge_base(
         prev_problem_texts = {p.text: p.since_iteration for p in kb.open_problems}
 
         new_problems: list[OpenProblem] = []
-        for prob_text in raw_open_problems:
+        for prob_text in proposal.open_problems:
             prob_cat = classify_hypothesis(prob_text, category_names)
             cat_progress = kb.categories.get(prob_cat)
 
@@ -349,6 +387,39 @@ def _update_knowledge_base(
                 OpenProblem(text=prob_text, category=prob_cat, priority=priority, metric_gap=gap, since_iteration=since)
             )
         kb.open_problems = new_problems
+
+
+def _build_caption_diffs(last_results: list[IterationResult], worst_captions: list[Caption]) -> str:
+    """Show how captions changed for worst-performing images vs previous iteration."""
+    if not last_results or not worst_captions:
+        return ""
+    prev = _best_kept_result(last_results)
+    if not prev:
+        return ""
+    prev_by_path = {c.image_path: c.text for c in prev.iteration_captions}
+
+    diffs: list[str] = []
+    for cap in worst_captions:
+        prev_text = prev_by_path.get(cap.image_path)
+        if prev_text is None:
+            continue
+        if prev_text == cap.text:
+            diffs.append(
+                f"**{cap.image_path.name}**: Caption UNCHANGED (meta-prompt change had no effect on this image)"
+            )
+        else:
+            diffs.append(f"**{cap.image_path.name}**:\n  PREV: {prev_text[:200]}...\n  NOW:  {cap.text[:200]}...")
+    if not diffs:
+        return ""
+    return "## Caption Changes (worst 3 images, prev → current)\n" + "\n".join(diffs)
+
+
+# ---------------------------------------------------------------------------
+# Main loop
+# ---------------------------------------------------------------------------
+
+# Max experiment results to persist in state.json (older ones are in iteration logs)
+_MAX_PERSISTED_HISTORY = 30
 
 
 async def run(config: Config) -> LoopState:
@@ -375,17 +446,24 @@ async def run(config: Config) -> LoopState:
         raise FileNotFoundError(msg)
     logger.info("Found %d reference images", len(all_ref_paths))
 
+    # Shared kwargs for _run_experiment
+    exp_kwargs = {
+        "config": config,
+        "gemini_client": gemini_client,
+        "registry": registry,
+        "gemini_semaphore": gemini_semaphore,
+        "eval_semaphore": eval_semaphore,
+    }
+
     # Try to resume from state
     state = load_state(config.state_file)
     if state is not None:
         logger.info("Resumed from iteration %d with %d fixed references", state.iteration, len(state.fixed_references))
         fixed_refs = state.fixed_references
     else:
-        # Fix reference images
         fixed_refs = _sample(all_ref_paths, 10)
         logger.info("Fixed %d reference images for optimization", len(fixed_refs))
 
-        # Zero-step: caption + analyze style
         logger.info("Zero-step: captioning %d reference images...", len(fixed_refs))
         captions = await caption_references(
             fixed_refs,
@@ -407,7 +485,6 @@ async def run(config: Config) -> LoopState:
             cache_path=config.log_dir / "style_profile.json",
         )
 
-        # Propose initial diverse templates (used as first iteration's experiments)
         logger.info("Zero-step: proposing %d initial meta-prompts...", config.num_branches)
         initial_templates = await propose_initial_templates(
             style_profile,
@@ -420,7 +497,6 @@ async def run(config: Config) -> LoopState:
             if not t.sections:
                 initial_templates[i] = initial_template
 
-        # Pick the first template as starting point
         state = LoopState(
             iteration=0,
             current_template=initial_templates[0],
@@ -432,7 +508,7 @@ async def run(config: Config) -> LoopState:
             fixed_references=fixed_refs,
         )
 
-        # Run initial templates as experiment 0
+        # Evaluate initial templates as iteration 0
         logger.info("=== Iteration 0 — evaluating %d initial templates ===", len(initial_templates))
         init_tasks = [
             _run_experiment(
@@ -440,50 +516,24 @@ async def run(config: Config) -> LoopState:
                 template=t,
                 iteration=0,
                 fixed_refs=fixed_refs,
-                config=config,
-                gemini_client=gemini_client,
-                registry=registry,
-                gemini_semaphore=gemini_semaphore,
-                eval_semaphore=eval_semaphore,
                 last_results=[],
                 hypothesis=f"Initial template {i}",
                 experiment_desc="Zero-step diverse template",
+                **exp_kwargs,
             )
             for i, t in enumerate(initial_templates)
         ]
 
-        init_results_raw = await asyncio.gather(*init_tasks, return_exceptions=True)
-        init_results: list[IterationResult] = []
-        for r in init_results_raw:
-            if isinstance(r, BaseException):
-                logger.error("Initial experiment failed: %s", r)
-            else:
-                init_results.append(r)
+        init_results = _collect_experiment_results(
+            await asyncio.gather(*init_tasks, return_exceptions=True), "Initial experiment"
+        )
 
-        # Find best initial template
         if init_results:
             best_init = max(init_results, key=lambda r: composite_score(r.aggregated))
-            best_init.kept = True
-            state.current_template = best_init.template
-            state.best_template = best_init.template
-            state.best_metrics = best_init.aggregated
-            state.global_best_prompt = best_init.rendered_prompt
-            state.global_best_metrics = best_init.aggregated
+            _apply_best_result(state, best_init)
             state.last_iteration_results = init_results
             state.experiment_history = list(init_results)
-
-            for r in init_results:
-                save_iteration_log(r, config.log_dir)
-                m = r.aggregated
-                logger.info(
-                    "Exp %d — DINO=%.4f LPIPS=%.4f HPS=%.4f Aes=%.2f %s",
-                    r.branch_id,
-                    m.dino_similarity_mean,
-                    m.lpips_distance_mean,
-                    m.hps_score_mean,
-                    m.aesthetics_score_mean,
-                    "KEPT" if r.kept else "discarded",
-                )
+            _log_experiment_results(init_results, config.log_dir)
 
         state.iteration = 1
         save_state(state, config.state_file)
@@ -494,15 +544,11 @@ async def run(config: Config) -> LoopState:
 
         logger.info("=== Iteration %d/%d ===", iteration + 1, config.max_iterations)
 
-        # Phase 1: Claude proposes N experiments sequentially (for dedup)
-        # Use the best experiment's feedback from last iteration for context
-        best_last = (
-            next((r for r in state.last_iteration_results if r.kept), None) if state.last_iteration_results else None
-        )
+        # Use the best experiment's feedback from last iteration
+        best_last = _best_kept_result(state.last_iteration_results)
         vision_fb = best_last.vision_feedback if best_last else ""
         roundtrip_fb = best_last.roundtrip_feedback if best_last else ""
 
-        # Caption diffs from best last result
         caption_diffs = ""
         if best_last and best_last.iteration_captions:
             sorted_caps = sorted(
@@ -512,8 +558,9 @@ async def run(config: Config) -> LoopState:
             worst_caps = [c for c, _ in sorted_caps[:3]]
             caption_diffs = _build_caption_diffs(state.last_iteration_results, worst_caps)
 
+        # Phase 1: Claude proposes N experiments sequentially (for dedup)
+        proposals: list[_ExperimentProposal] = []
         proposed_hypotheses: list[str] = []
-        experiment_templates: list[tuple[PromptTemplate, str, str, str | None, list[str], str, str, str]] = []
 
         for exp_idx in range(config.num_branches):
             (
@@ -547,23 +594,21 @@ async def run(config: Config) -> LoopState:
                 break
 
             proposed_hypotheses.append(hypothesis)
-            experiment_templates.append(
-                (
-                    new_template,
-                    hypothesis,
-                    experiment_desc,
-                    builds_on,
-                    open_problems,
-                    lessons.confirmed,
-                    lessons.rejected,
-                    lessons.new_insight,
+            proposals.append(
+                _ExperimentProposal(
+                    template=new_template,
+                    hypothesis=hypothesis,
+                    experiment_desc=experiment_desc,
+                    builds_on=builds_on,
+                    open_problems=open_problems,
+                    lessons=lessons,
                 )
             )
 
         if state.converged:
             break
 
-        if not experiment_templates:
+        if not proposals:
             logger.warning("No experiments proposed — stopping")
             state.converged = True
             state.convergence_reason = ConvergenceReason.CLAUDE_STOP
@@ -573,28 +618,20 @@ async def run(config: Config) -> LoopState:
         exp_tasks = [
             _run_experiment(
                 experiment_id=i,
-                template=tpl,
+                template=p.template,
                 iteration=iteration,
                 fixed_refs=fixed_refs,
-                config=config,
-                gemini_client=gemini_client,
-                registry=registry,
-                gemini_semaphore=gemini_semaphore,
-                eval_semaphore=eval_semaphore,
                 last_results=state.last_iteration_results,
-                hypothesis=hyp,
-                experiment_desc=exp_desc,
+                hypothesis=p.hypothesis,
+                experiment_desc=p.experiment_desc,
+                **exp_kwargs,
             )
-            for i, (tpl, hyp, exp_desc, _bo, _op, _c, _r, _n) in enumerate(experiment_templates)
+            for i, p in enumerate(proposals)
         ]
 
-        exp_results_raw = await asyncio.gather(*exp_tasks, return_exceptions=True)
-        exp_results: list[IterationResult] = []
-        for r in exp_results_raw:
-            if isinstance(r, BaseException):
-                logger.error("Experiment failed: %s", r)
-            else:
-                exp_results.append(r)
+        exp_results = _collect_experiment_results(
+            await asyncio.gather(*exp_tasks, return_exceptions=True), "Experiment"
+        )
 
         if not exp_results:
             logger.warning("All experiments failed this iteration")
@@ -611,52 +648,31 @@ async def run(config: Config) -> LoopState:
         improved = state.best_metrics is None or best_score > composite_score(state.best_metrics)
 
         if improved:
-            best_exp.kept = True
-            state.current_template = best_exp.template
-            state.best_template = best_exp.template
-            state.best_metrics = best_exp.aggregated
-            state.global_best_prompt = best_exp.rendered_prompt
-            state.global_best_metrics = best_exp.aggregated
+            _apply_best_result(state, best_exp)
             state.plateau_counter = 0
         else:
             state.plateau_counter += 1
 
         state.last_iteration_results = exp_results
         state.experiment_history.extend(exp_results)
+        # Cap persisted history to avoid unbounded state.json growth
+        if len(state.experiment_history) > _MAX_PERSISTED_HISTORY:
+            state.experiment_history = state.experiment_history[-_MAX_PERSISTED_HISTORY:]
 
         # Phase 4: Update shared KB with ALL experiment results
-        for exp_result, exp_data in zip(exp_results, experiment_templates, strict=False):
-            _, _, _, builds_on, open_probs, confirmed, rejected, new_insight = exp_data
+        for exp_result, proposal in zip(exp_results, proposals, strict=False):
             _update_knowledge_base(
                 state.knowledge_base,
                 exp_result,
                 exp_result.template,
                 state.best_metrics,
-                confirmed,
-                rejected,
-                new_insight,
-                builds_on,
-                open_probs,
+                proposal,
                 iteration,
             )
 
-        # Log and save
-        for r in exp_results:
-            save_iteration_log(r, config.log_dir)
-            m = r.aggregated
-            logger.info(
-                "Exp %d — DINO=%.4f LPIPS=%.4f HPS=%.4f Aes=%.2f %s",
-                r.branch_id,
-                m.dino_similarity_mean,
-                m.lpips_distance_mean,
-                m.hps_score_mean,
-                m.aesthetics_score_mean,
-                "KEPT" if r.kept else "discarded",
-            )
-
+        _log_experiment_results(exp_results, config.log_dir)
         save_state(state, config.state_file)
 
-        # Convergence check
         if state.plateau_counter >= config.plateau_window:
             logger.info("Plateau detected (%d iterations without improvement)", state.plateau_counter)
             state.converged = True
@@ -669,7 +685,6 @@ async def run(config: Config) -> LoopState:
 
     save_state(state, config.state_file)
 
-    # Final summary
     logger.info("=" * 60)
     if state.global_best_metrics:
         m = state.global_best_metrics
