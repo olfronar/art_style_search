@@ -1,13 +1,13 @@
-"""Main orchestration loop using Bulk Synchronous Parallel (BSP) rounds.
+"""Main orchestration loop with experiment-based optimization.
 
 The loop optimizes a **meta-prompt** — instructions for how to caption images
 so that the captions can recreate the originals via image generation.
 
 Each iteration:
-1. Use meta-prompt + Gemini Pro to caption each fixed reference image
-2. Generate images from those captions via Gemini Flash
-3. Compare each (original, generated) pair — metrics + vision feedback
-4. Claude analyzes gaps and refines the meta-prompt
+1. Claude proposes N diverse experiments (hypothesis-driven template variants)
+2. Each experiment: caption + generate + evaluate in parallel
+3. Best experiment updates the shared state; all results feed into the Knowledge Base
+4. Check convergence (plateau / Claude stop / max iterations)
 """
 
 from __future__ import annotations
@@ -25,21 +25,19 @@ from google import genai
 from art_style_search.analyze import analyze_style
 from art_style_search.caption import caption_references
 from art_style_search.config import Config
-from art_style_search.evaluate import compare_vision, evaluate_images
+from art_style_search.evaluate import check_caption_compliance, compare_vision, evaluate_images
 from art_style_search.generate import _generate_single
 from art_style_search.models import ModelRegistry
 from art_style_search.prompt import propose_initial_templates, refine_template
 from art_style_search.state import load_state, save_iteration_log, save_state
 from art_style_search.types import (
-    AggregatedMetrics,
-    BranchState,
     Caption,
     ConvergenceReason,
     IterationResult,
+    KnowledgeBase,
     LoopState,
     OpenProblem,
     PromptTemplate,
-    StyleProfile,
     classify_hypothesis,
     composite_score,
     get_category_names,
@@ -64,41 +62,23 @@ def _sample(items: list[Path], max_count: int) -> list[Path]:
     return random.sample(items, max_count)
 
 
-def _find_global_best(
-    branches: list[BranchState],
-) -> tuple[PromptTemplate | None, AggregatedMetrics | None]:
-    """Find the best-performing template across all branches."""
-    best_template: PromptTemplate | None = None
-    best_metrics: AggregatedMetrics | None = None
-    best_score = float("-inf")
-
-    for branch in branches:
-        if branch.best_metrics is not None:
-            score = composite_score(branch.best_metrics)
-            if score > best_score:
-                best_score = score
-                best_template = branch.best_template
-                best_metrics = branch.best_metrics
-
-    return best_template, best_metrics
-
-
-def _get_previous_per_image_scores(branch: BranchState) -> dict[Path, float]:
-    """Get per-image DINO scores from the previous iteration, keyed by image path."""
-    if not branch.history:
+def _get_previous_per_image_scores(last_results: list[IterationResult]) -> dict[Path, float]:
+    """Get per-image DINO scores from the best previous experiment."""
+    if not last_results:
         return {}
-    prev = branch.history[-1]
+    # Use the kept result if one exists, else the first
+    prev = next((r for r in last_results if r.kept), last_results[0])
     result: dict[Path, float] = {}
     for cap, sc in zip(prev.iteration_captions, prev.per_image_scores, strict=False):
         result[cap.image_path] = sc.dino_similarity
     return result
 
 
-def _build_caption_diffs(branch: BranchState, worst_captions: list[Caption]) -> str:
-    """Show how captions changed for worst-performing images between last iteration and current."""
-    if not branch.history or not worst_captions:
+def _build_caption_diffs(last_results: list[IterationResult], worst_captions: list[Caption]) -> str:
+    """Show how captions changed for worst-performing images vs previous iteration."""
+    if not last_results or not worst_captions:
         return ""
-    prev = branch.history[-1]
+    prev = next((r for r in last_results if r.kept), last_results[0])
     prev_by_path = {c.image_path: c.text for c in prev.iteration_captions}
 
     diffs: list[str] = []
@@ -125,25 +105,23 @@ async def _caption_and_generate(
     gemini_client: genai.Client,
     gemini_semaphore: asyncio.Semaphore,
     iteration: int,
-    branch_id: int,
+    experiment_id: int,
 ) -> tuple[list[Caption], list[Path], list[tuple[Path, Path]]]:
     """Caption reference images with the meta-prompt, then generate images from captions.
 
     Returns (captions, generated_paths, pairs) where pairs maps (original, generated).
     """
-    # Step 1: Caption all reference images using the meta-prompt
     captions = await caption_references(
         ref_paths,
         model=config.caption_model,
         client=gemini_client,
-        cache_dir=config.log_dir / f"iter_{iteration:03d}" / f"branch_{branch_id}" / "captions",
+        cache_dir=config.log_dir / f"iter_{iteration:03d}" / f"exp_{experiment_id}" / "captions",
         semaphore=gemini_semaphore,
         prompt=meta_prompt,
-        cache_key=f"iter{iteration}_b{branch_id}",
+        cache_key=f"iter{iteration}_e{experiment_id}",
     )
 
-    # Step 2: Generate images from captions
-    gen_dir = config.output_dir / f"iter_{iteration:03d}" / f"branch_{branch_id}"
+    gen_dir = config.output_dir / f"iter_{iteration:03d}" / f"exp_{experiment_id}"
     gen_dir.mkdir(parents=True, exist_ok=True)
 
     gen_tasks = [
@@ -161,12 +139,11 @@ async def _caption_and_generate(
 
     gen_results = await asyncio.gather(*gen_tasks, return_exceptions=True)
 
-    # Build successful pairs
     generated_paths: list[Path] = []
     pairs: list[tuple[Path, Path]] = []
     for i, (caption, gen_result) in enumerate(zip(captions, gen_results, strict=True)):
         if isinstance(gen_result, BaseException):
-            logger.warning("Branch %d: generation from caption %d failed: %s", branch_id, i, gen_result)
+            logger.warning("Exp %d: generation from caption %d failed: %s", experiment_id, i, gen_result)
         else:
             generated_paths.append(gen_result)
             pairs.append((caption.image_path, gen_result))
@@ -174,26 +151,26 @@ async def _caption_and_generate(
     return captions, generated_paths, pairs
 
 
-async def _run_branch_iteration(
-    branch: BranchState,
+async def _run_experiment(
+    experiment_id: int,
+    template: PromptTemplate,
     iteration: int,
     fixed_refs: list[Path],
     config: Config,
     *,
     gemini_client: genai.Client,
-    anthropic_client: anthropic.AsyncAnthropic,
     registry: ModelRegistry,
     gemini_semaphore: asyncio.Semaphore,
     eval_semaphore: asyncio.Semaphore,
-    style_profile: StyleProfile,
-    global_best_template: PromptTemplate | None,
-    global_best_metrics: AggregatedMetrics | None,
+    last_results: list[IterationResult],
+    hypothesis: str = "",
+    experiment_desc: str = "",
 ) -> IterationResult:
-    """Execute one iteration: meta-prompt → caption → generate → compare → refine."""
-    meta_prompt = branch.current_template.render()
-    logger.info("Branch %d iter %d — meta-prompt: %.100s...", branch.branch_id, iteration, meta_prompt)
+    """Execute one experiment: caption → generate → evaluate (no Claude call here)."""
+    meta_prompt = template.render()
+    logger.info("Exp %d iter %d — meta-prompt: %.100s...", experiment_id, iteration, meta_prompt)
 
-    # Phase 1: Caption references with meta-prompt, then generate from captions
+    # Phase 1: Caption + generate
     captions, generated_paths, pairs = await _caption_and_generate(
         fixed_refs,
         meta_prompt,
@@ -201,166 +178,159 @@ async def _run_branch_iteration(
         gemini_client=gemini_client,
         gemini_semaphore=gemini_semaphore,
         iteration=iteration,
-        branch_id=branch.branch_id,
+        experiment_id=experiment_id,
     )
 
     if not generated_paths:
-        logger.warning("Branch %d iter %d — no images generated", branch.branch_id, iteration)
-        raise RuntimeError(f"Branch {branch.branch_id}: no images generated")
+        raise RuntimeError(f"Experiment {experiment_id}: no images generated")
 
     logger.info(
-        "Branch %d iter %d — %d/%d images generated successfully",
-        branch.branch_id,
-        iteration,
-        len(generated_paths),
-        len(fixed_refs),
+        "Exp %d iter %d — %d/%d images generated", experiment_id, iteration, len(generated_paths), len(fixed_refs)
     )
 
-    # Phase 2: Evaluate — compare each generated image against its specific original
+    # Phase 2: Evaluate — per-image paired comparison
     gen_paths_for_eval = [gen for _, gen in pairs]
     ref_paths_for_eval = [orig for orig, _ in pairs]
+    caption_by_path = {c.image_path: c.text for c in captions}
+    eval_captions = [caption_by_path[orig] for orig, _ in pairs]
 
     eval_task = evaluate_images(
         gen_paths_for_eval,
         ref_paths_for_eval,
-        meta_prompt,
+        eval_captions,
         registry=registry,
         semaphore=eval_semaphore,
     )
 
-    # Caption compliance check
-    from art_style_search.evaluate import check_caption_compliance
-
-    section_names = [s.name for s in branch.current_template.sections]
+    section_names = [s.name for s in template.sections]
     compliance = check_caption_compliance(section_names, captions)
 
-    (scores, aggregated) = await eval_task
+    scores, aggregated = await eval_task
 
-    # Sort pairs by DINO score (worst first) for vision comparison
+    # Sort by DINO worst first
     scored_items = list(zip(pairs, scores, captions, strict=False))
     scored_items.sort(key=lambda x: x[1].dino_similarity)
 
     sorted_pairs = [item[0] for item in scored_items]
     sorted_captions = [item[2] for item in scored_items]
 
-    # Vision comparison — show worst 5 pairs deterministically
+    # Vision comparison with per-pair captions
+    sorted_caption_texts = [c.text for c in sorted_captions]
     vision_feedback = await compare_vision(
         sorted_pairs,
+        sorted_caption_texts,
         meta_prompt,
         client=gemini_client,
         model=config.caption_model,
         semaphore=gemini_semaphore,
         max_pairs=5,
     )
-    logger.info("Branch %d iter %d — vision feedback: %.120s...", branch.branch_id, iteration, vision_feedback)
 
-    # Build per-image roundtrip summary sorted worst→best
+    # Build roundtrip feedback — full captions for worst 3
     roundtrip_details: list[str] = []
-    prev_scores = _get_previous_per_image_scores(branch)
-    for (_orig, _gen), sc, cap in scored_items:
+    prev_scores = _get_previous_per_image_scores(last_results)
+    for idx, ((_orig, _gen), sc, cap) in enumerate(scored_items):
         prev_dino = prev_scores.get(cap.image_path, None)
         trend = ""
         if prev_dino is not None:
             arrow = "↑" if sc.dino_similarity > prev_dino else "↓" if sc.dino_similarity < prev_dino else "="
             trend = f" [prev DINO={prev_dino:.3f} → {sc.dino_similarity:.3f} {arrow}]"
+        caption_text = cap.text if idx < 3 else f"{cap.text[:300]}..."
         roundtrip_details.append(
             f"Image ({_orig.name}): DINO={sc.dino_similarity:.3f} LPIPS={sc.lpips_distance:.3f} "
             f"HPS={sc.hps_score:.3f} Aes={sc.aesthetics_score:.1f}{trend}\n"
-            f"  Caption: {cap.text[:300]}..."
+            f"  Caption: {caption_text}"
         )
     roundtrip_feedback = "\n".join(roundtrip_details)
     if compliance:
         roundtrip_feedback = compliance + "\n\n" + roundtrip_feedback
 
-    # Show caption diffs for worst 3 images if we have previous iteration
-    caption_diffs = _build_caption_diffs(branch, sorted_captions[:3])
-
-    # Phase 3: Refine meta-prompt
-    (
-        new_template,
-        analysis,
-        template_changes,
-        should_stop,
-        hypothesis,
-        experiment,
-        lessons,
-        builds_on,
-        raw_open_problems,
-    ) = await refine_template(
-        style_profile,
-        branch,
-        global_best_template,
-        global_best_metrics,
-        client=anthropic_client,
-        model=config.claude_model,
+    return IterationResult(
+        branch_id=experiment_id,
+        iteration=iteration,
+        template=template,
+        rendered_prompt=meta_prompt,
+        image_paths=generated_paths,
+        per_image_scores=scores,
+        aggregated=aggregated,
+        claude_analysis="",
+        template_changes="",
+        kept=False,  # determined later by caller
+        hypothesis=hypothesis,
+        experiment=experiment_desc,
         vision_feedback=vision_feedback,
         roundtrip_feedback=roundtrip_feedback,
-        caption_diffs=caption_diffs,
+        iteration_captions=captions,
     )
 
-    # Determine if this iteration improved
-    current_score = composite_score(aggregated)
-    kept = branch.best_metrics is None or current_score > composite_score(branch.best_metrics)
 
-    # --- Knowledge Base maintenance ---
-
-    # Parse parent hypothesis ID from builds_on
+def _update_knowledge_base(
+    kb: KnowledgeBase,
+    result: IterationResult,
+    template: PromptTemplate,
+    best_metrics: object | None,
+    lessons_confirmed: str,
+    lessons_rejected: str,
+    lessons_new_insight: str,
+    builds_on: str | None,
+    raw_open_problems: list[str],
+    iteration: int,
+) -> None:
+    """Update the shared KB with one experiment's results."""
+    # Parse parent hypothesis
     parent_id: str | None = None
     if builds_on:
         parent_match = re.match(r"H(\d+)", builds_on)
         if parent_match:
             parent_id = f"H{parent_match.group(1)}"
 
-    # Classify hypothesis into a style category
-    category_names = get_category_names(branch.current_template)
-    category = classify_hypothesis(hypothesis, category_names) if hypothesis else "general"
+    category_names = get_category_names(template)
+    category = classify_hypothesis(result.hypothesis, category_names) if result.hypothesis else "general"
 
-    # Compute metric deltas
-    prev_metrics = branch.best_metrics or (branch.history[-1].aggregated if branch.history else None)
+    # Metric deltas
     metric_delta: dict[str, float] = {}
-    if prev_metrics:
-        metric_delta = {
-            "dino": aggregated.dino_similarity_mean - prev_metrics.dino_similarity_mean,
-            "lpips": aggregated.lpips_distance_mean - prev_metrics.lpips_distance_mean,
-            "hps": aggregated.hps_score_mean - prev_metrics.hps_score_mean,
-            "aesthetics": aggregated.aesthetics_score_mean - prev_metrics.aesthetics_score_mean,
-        }
+    if best_metrics is not None:
+        from art_style_search.types import AggregatedMetrics
 
-    # Build lesson text from the most relevant signal
-    lesson_text = lessons.confirmed or lessons.new_insight or lessons.rejected or ""
+        if isinstance(best_metrics, AggregatedMetrics):
+            metric_delta = {
+                "dino": result.aggregated.dino_similarity_mean - best_metrics.dino_similarity_mean,
+                "lpips": result.aggregated.lpips_distance_mean - best_metrics.lpips_distance_mean,
+                "hps": result.aggregated.hps_score_mean - best_metrics.hps_score_mean,
+                "aesthetics": result.aggregated.aesthetics_score_mean - best_metrics.aesthetics_score_mean,
+            }
 
-    # Add hypothesis to knowledge base
-    if hypothesis:
-        branch.knowledge_base.add_hypothesis(
+    lesson_text = lessons_confirmed or lessons_new_insight or lessons_rejected or ""
+
+    if result.hypothesis:
+        kb.add_hypothesis(
             iteration=iteration,
             parent_id=parent_id,
-            statement=hypothesis,
-            experiment=experiment,
+            statement=result.hypothesis,
+            experiment=result.experiment,
             category=category,
-            kept=kept,
+            kept=result.kept,
             metric_delta=metric_delta,
             lesson=lesson_text,
-            confirmed=lessons.confirmed,
-            rejected=lessons.rejected,
+            confirmed=lessons_confirmed,
+            rejected=lessons_rejected,
         )
 
-    # Update open problems — Claude proposes, code validates with priority
+    # Update open problems
     if raw_open_problems:
-        # Compute per-category mean DINO for priority assignment
+        scores = result.per_image_scores
         cat_dinos: dict[str, list[float]] = {}
         for sc in scores:
             cat_dinos.setdefault("all", []).append(sc.dino_similarity)
         best_cat_dino = max((sum(v) / len(v) for v in cat_dinos.values()), default=0.0)
 
-        # Track which problems persist from previous iteration
-        prev_problem_texts = {p.text: p.since_iteration for p in branch.knowledge_base.open_problems}
+        prev_problem_texts = {p.text: p.since_iteration for p in kb.open_problems}
 
         new_problems: list[OpenProblem] = []
         for prob_text in raw_open_problems:
             prob_cat = classify_hypothesis(prob_text, category_names)
-            cat_progress = branch.knowledge_base.categories.get(prob_cat)
+            cat_progress = kb.categories.get(prob_cat)
 
-            # Assign priority based on category state
             if cat_progress is None or not cat_progress.confirmed_insights:
                 priority = "HIGH"
             elif cat_progress.rejected_approaches and len(cat_progress.rejected_approaches) >= len(
@@ -370,88 +340,15 @@ async def _run_branch_iteration(
             else:
                 priority = "LOW"
 
-            # Compute metric gap
             gap = best_cat_dino - (
                 cat_progress.best_dino_delta if cat_progress and cat_progress.best_dino_delta else 0.0
             )
-
-            # Preserve since_iteration for persistent problems
             since = prev_problem_texts.get(prob_text, iteration)
 
             new_problems.append(
-                OpenProblem(
-                    text=prob_text,
-                    category=prob_cat,
-                    priority=priority,
-                    metric_gap=gap,
-                    since_iteration=since,
-                )
+                OpenProblem(text=prob_text, category=prob_cat, priority=priority, metric_gap=gap, since_iteration=since)
             )
-        branch.knowledge_base.open_problems = new_problems
-
-    # Legacy research_log for backward compat (not shown to Claude)
-    log_entry = f"\n## Iteration {iteration}"
-    if hypothesis:
-        log_entry += f"\nHypothesis: {hypothesis}"
-    if experiment:
-        log_entry += f"\nExperiment: {experiment}"
-    log_entry += f"\nResult: DINO={aggregated.dino_similarity_mean:.3f} LPIPS={aggregated.lpips_distance_mean:.3f}"
-    if prev_metrics:
-        log_entry += (
-            f" (prev DINO={prev_metrics.dino_similarity_mean:.3f} LPIPS={prev_metrics.lpips_distance_mean:.3f})"
-        )
-    log_entry += f" — {'KEPT' if kept else 'DISCARDED'}"
-    if lessons.confirmed:
-        log_entry += f"\nConfirmed: {lessons.confirmed}"
-    if lessons.rejected:
-        log_entry += f"\nRejected: {lessons.rejected}"
-    if lessons.new_insight:
-        log_entry += f"\nInsight: {lessons.new_insight}"
-    branch.research_log += log_entry
-
-    result = IterationResult(
-        branch_id=branch.branch_id,
-        iteration=iteration,
-        template=branch.current_template,
-        rendered_prompt=meta_prompt,
-        image_paths=generated_paths,
-        per_image_scores=scores,
-        aggregated=aggregated,
-        claude_analysis=analysis,
-        template_changes=template_changes,
-        kept=kept,
-        hypothesis=hypothesis,
-        experiment=experiment,
-        vision_feedback=vision_feedback,
-        roundtrip_feedback=roundtrip_feedback,
-        iteration_captions=captions,
-    )
-
-    # Update branch state
-    branch.history.append(result)
-    branch.current_template = new_template
-
-    if kept:
-        branch.best_template = branch.current_template
-        branch.best_metrics = aggregated
-        branch.plateau_counter = 0
-    else:
-        branch.plateau_counter += 1
-
-    if should_stop:
-        branch.stopped = True
-        branch.stop_reason = ConvergenceReason.CLAUDE_STOP
-        logger.info("Branch %d — Claude signaled convergence", branch.branch_id)
-    elif branch.plateau_counter >= config.plateau_window:
-        branch.stopped = True
-        branch.stop_reason = ConvergenceReason.PLATEAU
-        logger.info(
-            "Branch %d — plateau detected (%d iterations without improvement)",
-            branch.branch_id,
-            branch.plateau_counter,
-        )
-
-    return result
+        kb.open_problems = new_problems
 
 
 async def run(config: Config) -> LoopState:
@@ -460,23 +357,18 @@ async def run(config: Config) -> LoopState:
     logging.getLogger("google_genai").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
-    # Set thread pool size for torch evaluation
     loop = asyncio.get_running_loop()
     loop.set_default_executor(concurrent.futures.ThreadPoolExecutor(max_workers=config.eval_concurrency))
 
-    # Initialize API clients
     gemini_client = genai.Client(api_key=config.google_api_key)
     anthropic_client = anthropic.AsyncAnthropic(api_key=config.anthropic_api_key)
 
-    # Semaphores — one shared Gemini semaphore for captioning + generation + vision
     gemini_semaphore = asyncio.Semaphore(config.gemini_concurrency)
     eval_semaphore = asyncio.Semaphore(config.eval_concurrency)
 
-    # Load evaluation models
     logger.info("Loading evaluation models...")
     registry = await asyncio.to_thread(ModelRegistry.load_all)
 
-    # Discover reference images
     all_ref_paths = _discover_images(config.reference_dir)
     if not all_ref_paths:
         msg = f"No images found in {config.reference_dir}"
@@ -489,11 +381,11 @@ async def run(config: Config) -> LoopState:
         logger.info("Resumed from iteration %d with %d fixed references", state.iteration, len(state.fixed_references))
         fixed_refs = state.fixed_references
     else:
-        # Fix 10 reference images for the entire process
+        # Fix reference images
         fixed_refs = _sample(all_ref_paths, 10)
         logger.info("Fixed %d reference images for optimization", len(fixed_refs))
 
-        # Zero-step: caption with default prompt + analyze style
+        # Zero-step: caption + analyze style
         logger.info("Zero-step: captioning %d reference images...", len(fixed_refs))
         captions = await caption_references(
             fixed_refs,
@@ -515,6 +407,7 @@ async def run(config: Config) -> LoopState:
             cache_path=config.log_dir / "style_profile.json",
         )
 
+        # Propose initial diverse templates (used as first iteration's experiments)
         logger.info("Zero-step: proposing %d initial meta-prompts...", config.num_branches)
         initial_templates = await propose_initial_templates(
             style_profile,
@@ -523,96 +416,254 @@ async def run(config: Config) -> LoopState:
             model=config.claude_model,
         )
 
-        # Use analyzed template as fallback for any empty templates
         for i, t in enumerate(initial_templates):
             if not t.sections:
                 initial_templates[i] = initial_template
 
-        branches = [
-            BranchState(
-                branch_id=i,
-                current_template=t,
-                best_template=t,
-            )
-            for i, t in enumerate(initial_templates)
-        ]
-
+        # Pick the first template as starting point
         state = LoopState(
             iteration=0,
-            branches=branches,
+            current_template=initial_templates[0],
+            best_template=initial_templates[0],
+            best_metrics=None,
+            knowledge_base=KnowledgeBase(),
             captions=captions,
             style_profile=style_profile,
             fixed_references=fixed_refs,
         )
 
-    # Main loop
-    for iteration in range(state.iteration, config.max_iterations):
-        state.iteration = iteration
-        active_branches = [b for b in state.branches if not b.stopped]
-
-        if not active_branches:
-            logger.info("All branches stopped — loop complete")
-            state.converged = True
-            state.convergence_reason = ConvergenceReason.PLATEAU
-            break
-
-        logger.info(
-            "=== Iteration %d/%d — %d active branches ===", iteration + 1, config.max_iterations, len(active_branches)
-        )
-
-        global_best_template, global_best_metrics = _find_global_best(state.branches)
-
-        # Run all active branches in parallel (BSP round)
-        tasks = [
-            _run_branch_iteration(
-                branch,
-                iteration,
-                fixed_refs,
-                config,
+        # Run initial templates as experiment 0
+        logger.info("=== Iteration 0 — evaluating %d initial templates ===", len(initial_templates))
+        init_tasks = [
+            _run_experiment(
+                experiment_id=i,
+                template=t,
+                iteration=0,
+                fixed_refs=fixed_refs,
+                config=config,
                 gemini_client=gemini_client,
-                anthropic_client=anthropic_client,
                 registry=registry,
                 gemini_semaphore=gemini_semaphore,
                 eval_semaphore=eval_semaphore,
-                style_profile=state.style_profile,
-                global_best_template=global_best_template,
-                global_best_metrics=global_best_metrics,
+                last_results=[],
+                hypothesis=f"Initial template {i}",
+                experiment_desc="Zero-step diverse template",
             )
-            for branch in active_branches
+            for i, t in enumerate(initial_templates)
         ]
 
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Process results
-        for result in results:
-            if isinstance(result, BaseException):
-                logger.error("Branch iteration failed: %s", result)
+        init_results_raw = await asyncio.gather(*init_tasks, return_exceptions=True)
+        init_results: list[IterationResult] = []
+        for r in init_results_raw:
+            if isinstance(r, BaseException):
+                logger.error("Initial experiment failed: %s", r)
             else:
-                save_iteration_log(result, config.log_dir)
+                init_results.append(r)
 
-                # Log metrics
-                m = result.aggregated
+        # Find best initial template
+        if init_results:
+            best_init = max(init_results, key=lambda r: composite_score(r.aggregated))
+            best_init.kept = True
+            state.current_template = best_init.template
+            state.best_template = best_init.template
+            state.best_metrics = best_init.aggregated
+            state.global_best_prompt = best_init.rendered_prompt
+            state.global_best_metrics = best_init.aggregated
+            state.last_iteration_results = init_results
+            state.experiment_history = list(init_results)
+
+            for r in init_results:
+                save_iteration_log(r, config.log_dir)
+                m = r.aggregated
                 logger.info(
-                    "Branch %d — DINO=%.4f LPIPS=%.4f HPS=%.4f Aes=%.2f %s",
-                    result.branch_id,
+                    "Exp %d — DINO=%.4f LPIPS=%.4f HPS=%.4f Aes=%.2f %s",
+                    r.branch_id,
                     m.dino_similarity_mean,
                     m.lpips_distance_mean,
                     m.hps_score_mean,
                     m.aesthetics_score_mean,
-                    "KEPT" if result.kept else "discarded",
+                    "KEPT" if r.kept else "discarded",
                 )
 
-        # Update global best
-        global_best_template, global_best_metrics = _find_global_best(state.branches)
-        if global_best_template is not None:
-            state.global_best_prompt = global_best_template.render()
-            state.global_best_metrics = global_best_metrics
-
-        # Save state after each iteration
+        state.iteration = 1
         save_state(state, config.state_file)
 
+    # Main optimization loop
+    for iteration in range(state.iteration, config.max_iterations):
+        state.iteration = iteration
+
+        logger.info("=== Iteration %d/%d ===", iteration + 1, config.max_iterations)
+
+        # Phase 1: Claude proposes N experiments sequentially (for dedup)
+        # Use the best experiment's feedback from last iteration for context
+        best_last = (
+            next((r for r in state.last_iteration_results if r.kept), None) if state.last_iteration_results else None
+        )
+        vision_fb = best_last.vision_feedback if best_last else ""
+        roundtrip_fb = best_last.roundtrip_feedback if best_last else ""
+
+        # Caption diffs from best last result
+        caption_diffs = ""
+        if best_last and best_last.iteration_captions:
+            sorted_caps = sorted(
+                zip(best_last.iteration_captions, best_last.per_image_scores, strict=False),
+                key=lambda x: x[1].dino_similarity,
+            )
+            worst_caps = [c for c, _ in sorted_caps[:3]]
+            caption_diffs = _build_caption_diffs(state.last_iteration_results, worst_caps)
+
+        proposed_hypotheses: list[str] = []
+        experiment_templates: list[tuple[PromptTemplate, str, str, str | None, list[str], str, str, str]] = []
+
+        for exp_idx in range(config.num_branches):
+            (
+                new_template,
+                _analysis,
+                _template_changes,
+                should_stop,
+                hypothesis,
+                experiment_desc,
+                lessons,
+                builds_on,
+                open_problems,
+            ) = await refine_template(
+                state.style_profile,
+                state.current_template,
+                state.knowledge_base,
+                state.best_metrics,
+                state.last_iteration_results,
+                client=anthropic_client,
+                model=config.claude_model,
+                vision_feedback=vision_fb,
+                roundtrip_feedback=roundtrip_fb,
+                caption_diffs=caption_diffs,
+                already_proposed=proposed_hypotheses if proposed_hypotheses else None,
+            )
+
+            if should_stop:
+                logger.info("Claude signaled convergence at experiment %d", exp_idx)
+                state.converged = True
+                state.convergence_reason = ConvergenceReason.CLAUDE_STOP
+                break
+
+            proposed_hypotheses.append(hypothesis)
+            experiment_templates.append(
+                (
+                    new_template,
+                    hypothesis,
+                    experiment_desc,
+                    builds_on,
+                    open_problems,
+                    lessons.confirmed,
+                    lessons.rejected,
+                    lessons.new_insight,
+                )
+            )
+
+        if state.converged:
+            break
+
+        if not experiment_templates:
+            logger.warning("No experiments proposed — stopping")
+            state.converged = True
+            state.convergence_reason = ConvergenceReason.CLAUDE_STOP
+            break
+
+        # Phase 2: Run all experiments in parallel
+        exp_tasks = [
+            _run_experiment(
+                experiment_id=i,
+                template=tpl,
+                iteration=iteration,
+                fixed_refs=fixed_refs,
+                config=config,
+                gemini_client=gemini_client,
+                registry=registry,
+                gemini_semaphore=gemini_semaphore,
+                eval_semaphore=eval_semaphore,
+                last_results=state.last_iteration_results,
+                hypothesis=hyp,
+                experiment_desc=exp_desc,
+            )
+            for i, (tpl, hyp, exp_desc, _bo, _op, _c, _r, _n) in enumerate(experiment_templates)
+        ]
+
+        exp_results_raw = await asyncio.gather(*exp_tasks, return_exceptions=True)
+        exp_results: list[IterationResult] = []
+        for r in exp_results_raw:
+            if isinstance(r, BaseException):
+                logger.error("Experiment failed: %s", r)
+            else:
+                exp_results.append(r)
+
+        if not exp_results:
+            logger.warning("All experiments failed this iteration")
+            state.plateau_counter += 1
+            if state.plateau_counter >= config.plateau_window:
+                state.converged = True
+                state.convergence_reason = ConvergenceReason.PLATEAU
+                break
+            continue
+
+        # Phase 3: Find best experiment and update state
+        best_exp = max(exp_results, key=lambda r: composite_score(r.aggregated))
+        best_score = composite_score(best_exp.aggregated)
+        improved = state.best_metrics is None or best_score > composite_score(state.best_metrics)
+
+        if improved:
+            best_exp.kept = True
+            state.current_template = best_exp.template
+            state.best_template = best_exp.template
+            state.best_metrics = best_exp.aggregated
+            state.global_best_prompt = best_exp.rendered_prompt
+            state.global_best_metrics = best_exp.aggregated
+            state.plateau_counter = 0
+        else:
+            state.plateau_counter += 1
+
+        state.last_iteration_results = exp_results
+        state.experiment_history.extend(exp_results)
+
+        # Phase 4: Update shared KB with ALL experiment results
+        for exp_result, exp_data in zip(exp_results, experiment_templates, strict=False):
+            _, _, _, builds_on, open_probs, confirmed, rejected, new_insight = exp_data
+            _update_knowledge_base(
+                state.knowledge_base,
+                exp_result,
+                exp_result.template,
+                state.best_metrics,
+                confirmed,
+                rejected,
+                new_insight,
+                builds_on,
+                open_probs,
+                iteration,
+            )
+
+        # Log and save
+        for r in exp_results:
+            save_iteration_log(r, config.log_dir)
+            m = r.aggregated
+            logger.info(
+                "Exp %d — DINO=%.4f LPIPS=%.4f HPS=%.4f Aes=%.2f %s",
+                r.branch_id,
+                m.dino_similarity_mean,
+                m.lpips_distance_mean,
+                m.hps_score_mean,
+                m.aesthetics_score_mean,
+                "KEPT" if r.kept else "discarded",
+            )
+
+        save_state(state, config.state_file)
+
+        # Convergence check
+        if state.plateau_counter >= config.plateau_window:
+            logger.info("Plateau detected (%d iterations without improvement)", state.plateau_counter)
+            state.converged = True
+            state.convergence_reason = ConvergenceReason.PLATEAU
+            break
+
     else:
-        # max_iterations reached
         state.converged = True
         state.convergence_reason = ConvergenceReason.MAX_ITERATIONS
 
@@ -631,5 +682,7 @@ async def run(config: Config) -> LoopState:
         )
     logger.info("BEST META-PROMPT: %s", state.global_best_prompt)
     logger.info("Convergence: %s", state.convergence_reason)
+    logger.info("Total experiments: %d", len(state.experiment_history))
+    logger.info("KB: %d hypotheses", len(state.knowledge_base.hypotheses))
 
     return state

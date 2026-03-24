@@ -14,13 +14,12 @@ Self-improving loop that optimizes a meta-prompt for precise image recreation. T
 
 ## Loop Flow
 
-0. **Zero-step**: Fix 10 reference images. Caption them, analyze style → `StyleProfile` + initial meta-prompt (`PromptTemplate`).
-1. Meta-prompt + each reference image → Gemini Pro generates per-image captions
-2. Each caption → Gemini Flash generates an image
-3. Compare each (original, generated) pair: metrics (DINO, LPIPS, HPS, aesthetics) + Gemini vision comparison
-4. Claude analyzes per-image gaps + metrics via structured KnowledgeBase (hypothesis chains, per-category progress, open problems), refines the meta-prompt
-5. Cross-pollinate: share global best meta-prompt across population branches
-6. Repeat until convergence (max iterations / plateau / Claude stop)
+0. **Zero-step**: Fix 10 reference images. Caption them, analyze style → `StyleProfile` + N diverse initial meta-prompts. Evaluate all, pick best.
+1. Claude proposes N experiments (hypothesis-driven template variants) from shared KB, each with a different hypothesis
+2. Each experiment in parallel: meta-prompt + reference → caption → generate → evaluate
+3. Compare each (original, generated) pair: per-image paired metrics (DINO, LPIPS, HPS, aesthetics) + Gemini vision comparison (style + subject fidelity)
+4. Best experiment updates the current template; all results feed into shared KnowledgeBase
+5. Repeat until convergence (max iterations / plateau / Claude stop)
 
 ## Commands
 
@@ -40,7 +39,7 @@ uv run python -m art_style_search --help # Show all CLI options
 
 ## Module Map
 
-- `types.py` - Shared dataclasses (Caption, MetricScores, StyleProfile, PromptTemplate, BranchState, LoopState, KnowledgeBase, Hypothesis, etc.) + category classification helpers
+- `types.py` - Shared dataclasses (Caption, MetricScores, StyleProfile, PromptTemplate, LoopState, KnowledgeBase, Hypothesis, etc.) + category classification helpers
 - `config.py` - CLI argument parsing → Config dataclass
 - `analyze.py` - Zero-step: parallel Gemini+Claude style analysis → StyleProfile + initial PromptTemplate
 - `caption.py` - Gemini Pro captioning with disk cache
@@ -50,7 +49,7 @@ uv run python -m art_style_search --help # Show all CLI options
 - `evaluate.py` - Dispatches 4 metrics per image via asyncio.to_thread + Gemini vision comparison
 - `utils.py` - Shared helpers: Anthropic streaming/text extraction, Gemini image part builder, MIME map
 - `state.py` - JSON persistence (state.json + per-iteration logs)
-- `loop.py` - BSP orchestration loop (zero-step → population branches → convergence)
+- `loop.py` - Experiment-based orchestration loop (zero-step → N parallel experiments per iteration → shared KB → convergence)
 - `__main__.py` - Entry point
 
 ## Directory Conventions
@@ -63,17 +62,18 @@ uv run python -m art_style_search --help # Show all CLI options
 
 ## Evaluation Metrics
 
-All metrics compare generated images against reference images:
-- **DINO cosine similarity**: Semantic/structural similarity via DINOv2 embeddings. Higher = better.
-- **LPIPS**: Perceptual distance. Lower = better.
-- **HPS v2**: Human preference score for text-to-image quality. Higher = better.
+Each metric compares a generated image against its specific paired original (not all references):
+- **DINO cosine similarity**: Semantic/structural match per image pair. Higher = better.
+- **LPIPS**: Perceptual distance per image pair. Lower = better.
+- **HPS v2**: How well the generated image matches its caption. Higher = better.
 - **LAION Aesthetics**: Aesthetic quality predictor (1-10 scale). Higher = better.
 
 ## Code Conventions
 
 - Helpers used by 2+ modules belong in `utils.py` — do not duplicate locally (e.g. MIME maps, API call wrappers, response extractors)
 - Data fed to Claude in `refine_template` must appear via exactly one path — if the history formatter includes a field, don't also add a dedicated section for it (or vice versa)
-- Iteration-to-iteration learning uses `KnowledgeBase` (structured, on `BranchState`) not the legacy `research_log` string — the flat log is kept for backward compat but is not shown to Claude
+- Iteration-to-iteration learning uses a shared `KnowledgeBase` on `LoopState` — no persistent branches, just per-iteration experiments feeding one KB
+- `BranchState` is legacy (kept for backward compat deserialization of old state.json)
 - Hypothesis classification uses keyword matching in `classify_hypothesis()` with `_CATEGORY_SYNONYMS` — extend the synonym map when adding new categories
 
 ## Code Style

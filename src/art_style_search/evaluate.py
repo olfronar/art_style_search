@@ -17,25 +17,32 @@ from art_style_search.utils import image_to_gemini_part
 logger = logging.getLogger(__name__)
 
 _VISION_COMPARE_PROMPT = (
-    "You are an expert art analyst. You are shown reference images (the target art style) "
-    "and generated images (attempts to reproduce that style using the prompt below).\n\n"
-    "The generation prompt was:\n{rendered_prompt}\n\n"
-    "Compare the generated images against the reference images. "
-    "Focus on art STYLE reproduction, not subject matter. "
+    "You are an expert art analyst. You are shown reference images and generated images "
+    "(attempts to reproduce each reference from a text caption).\n\n"
+    "The META-PROMPT (captioner instruction) was:\n{rendered_prompt}\n\n"
+    "Each pair shows the caption used for generation. Compare the generated images against "
+    "the reference images. Evaluate BOTH:\n"
+    "- **Style reproduction**: art technique, colors, lighting, textures, mood\n"
+    "- **Subject/character fidelity**: character identity, proportions, poses, distinctive "
+    "features, scene elements, object placement\n\n"
     "Respond in this structured format:\n\n"
-    "<matched>List aspects the generated images capture correctly from the reference style</matched>\n"
+    "<matched>Aspects the generated images capture correctly (style AND subject)</matched>\n"
     "<gaps>\n"
-    '<gap priority="high">Most critical style difference — what\'s most wrong</gap>\n'
+    '<gap priority="high">Most critical difference — what\'s most wrong (style or subject)</gap>\n'
     '<gap priority="high">Second most critical difference</gap>\n'
     '<gap priority="medium">Notable but less critical difference</gap>\n'
     "</gaps>\n"
-    "<prompt_issues>Which parts of the generation prompt are working, which are being ignored, "
+    "<caption_diagnosis>For each pair: did the CAPTION adequately describe the reference, "
+    "or did it miss key details? Is the generator failing to follow the caption, "
+    "or is the caption itself insufficient?</caption_diagnosis>\n"
+    "<prompt_issues>Which parts of the meta-prompt are working, which are being ignored, "
     "and what specific wording changes would fix the gaps above</prompt_issues>"
 )
 
 
 async def compare_vision(
     pairs: list[tuple[Path, Path]],
+    captions: list[str],
     rendered_prompt: str,
     *,
     client: genai.Client,
@@ -47,14 +54,19 @@ async def compare_vision(
 
     Shows up to *max_pairs* pairs, deterministically picking the first N.
     Pairs should be pre-sorted worst-first for best feedback quality.
+    Each pair includes the caption used for generation so Gemini can diagnose
+    whether the caption or the generator is at fault.
     """
     show_pairs = pairs[:max_pairs]
+    show_captions = captions[:max_pairs]
 
     contents: list[object] = []
-    for i, (ref_path, gen_path) in enumerate(show_pairs):
-        contents.append(f"\n## Pair {i + 1} — {ref_path.name}:\n### ORIGINAL:")
+    for i, ((ref_path, gen_path), caption) in enumerate(zip(show_pairs, show_captions, strict=True)):
+        contents.append(f"\n## Pair {i + 1} — {ref_path.name}:")
+        contents.append(f"### Caption used for generation:\n{caption[:600]}")
+        contents.append("### ORIGINAL:")
         contents.append(image_to_gemini_part(ref_path))
-        contents.append("### GENERATED (from caption):")
+        contents.append("### GENERATED (from caption above):")
         contents.append(image_to_gemini_part(gen_path))
 
     contents.append(f"\n{_VISION_COMPARE_PROMPT.format(rendered_prompt=rendered_prompt)}")
@@ -256,26 +268,28 @@ def _compute_single_sync(
 async def evaluate_images(
     generated_paths: list[Path],
     reference_paths: list[Path],
-    prompt: str,
+    captions: list[str],
     *,
     registry: ModelRegistry,
     semaphore: asyncio.Semaphore,
 ) -> tuple[list[MetricScores], AggregatedMetrics]:
-    """Evaluate all generated images against references.
+    """Evaluate each generated image against its paired reference.
 
-    Each image's 4 metrics are computed in a thread via ``asyncio.to_thread``,
-    throttled by *semaphore* to prevent GPU/CPU oversubscription.
+    Each generated image is compared against ONLY its corresponding reference
+    (not the mean of all references).  HPS is scored against the per-image
+    caption (the actual generation prompt), not the meta-prompt.
 
     Returns per-image scores and aggregated statistics.
     """
-    ref_images = [Image.open(p).convert("RGB") for p in reference_paths]
 
-    async def _eval_one(gen_path: Path) -> MetricScores | None:
+    async def _eval_one(gen_path: Path, ref_path: Path, caption: str) -> MetricScores | None:
         async with semaphore:
             gen_image: Image.Image | None = None
+            ref_image: Image.Image | None = None
             try:
                 gen_image = Image.open(gen_path).convert("RGB")
-                scores = await asyncio.to_thread(_compute_single_sync, registry, gen_image, ref_images, prompt)
+                ref_image = Image.open(ref_path).convert("RGB")
+                scores = await asyncio.to_thread(_compute_single_sync, registry, gen_image, [ref_image], caption)
                 return scores
             except Exception as exc:
                 logger.warning("Evaluation failed for %s: %s", gen_path.name, exc)
@@ -283,13 +297,14 @@ async def evaluate_images(
             finally:
                 if gen_image is not None:
                     gen_image.close()
+                if ref_image is not None:
+                    ref_image.close()
 
-    results = await asyncio.gather(*[_eval_one(p) for p in generated_paths])
+    results = await asyncio.gather(
+        *[_eval_one(gp, rp, cap) for gp, rp, cap in zip(generated_paths, reference_paths, captions, strict=True)]
+    )
 
     scores = [r for r in results if r is not None]
     aggregated = _aggregate(scores)
-
-    for img in ref_images:
-        img.close()
 
     return scores, aggregated

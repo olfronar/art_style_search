@@ -1,11 +1,10 @@
-"""Unit tests for art_style_search.loop helpers: _discover_images, _sample, _find_global_best."""
+"""Unit tests for art_style_search.loop helpers: _discover_images, _sample."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from art_style_search.loop import _discover_images, _find_global_best, _sample
-from art_style_search.types import AggregatedMetrics, BranchState, PromptTemplate
+from art_style_search.loop import _discover_images, _sample
 
 # ---------------------------------------------------------------------------
 # _discover_images
@@ -85,86 +84,3 @@ class TestSample:
         items = self._make_paths(20)
         result = _sample(items, max_count=7)
         assert len(result) == len(set(result))
-
-
-# ---------------------------------------------------------------------------
-# _find_global_best
-# ---------------------------------------------------------------------------
-
-
-def _make_metrics(
-    dino: float = 0.5,
-    lpips: float = 0.5,
-    hps: float = 0.2,
-    aes: float = 5.0,
-) -> AggregatedMetrics:
-    """Helper to build AggregatedMetrics with convenient defaults."""
-    return AggregatedMetrics(
-        dino_similarity_mean=dino,
-        dino_similarity_std=0.0,
-        lpips_distance_mean=lpips,
-        lpips_distance_std=0.0,
-        hps_score_mean=hps,
-        hps_score_std=0.0,
-        aesthetics_score_mean=aes,
-        aesthetics_score_std=0.0,
-    )
-
-
-def _make_branch(
-    branch_id: int,
-    metrics: AggregatedMetrics | None = None,
-) -> BranchState:
-    """Helper to build a BranchState with a minimal template."""
-    template = PromptTemplate()
-    return BranchState(
-        branch_id=branch_id,
-        current_template=template,
-        best_template=template,
-        best_metrics=metrics,
-    )
-
-
-class TestFindGlobalBest:
-    """_find_global_best should pick the branch with the highest composite_score."""
-
-    def test_no_branches(self) -> None:
-        template, metrics = _find_global_best([])
-        assert template is None
-        assert metrics is None
-
-    def test_all_branches_without_metrics(self) -> None:
-        branches = [_make_branch(0), _make_branch(1)]
-        template, metrics = _find_global_best(branches)
-        assert template is None
-        assert metrics is None
-
-    def test_single_branch_with_metrics(self) -> None:
-        m = _make_metrics(dino=0.9, lpips=0.1, hps=0.3, aes=8.0)
-        branch = _make_branch(0, metrics=m)
-        template, metrics = _find_global_best([branch])
-        assert template is branch.best_template
-        assert metrics is m
-
-    def test_selects_best_composite(self) -> None:
-        # composite_score = 0.4*dino - 0.2*lpips + 0.2*hps + 0.2*(aes/10)
-        # Branch 0: 0.4*0.5 - 0.2*0.5 + 0.2*0.2 + 0.2*0.5 = 0.20 - 0.10 + 0.04 + 0.10 = 0.24
-        m_low = _make_metrics(dino=0.5, lpips=0.5, hps=0.2, aes=5.0)
-        # Branch 1: 0.4*0.9 - 0.2*0.1 + 0.2*0.3 + 0.2*0.8 = 0.36 - 0.02 + 0.06 + 0.16 = 0.56
-        m_high = _make_metrics(dino=0.9, lpips=0.1, hps=0.3, aes=8.0)
-
-        branch_low = _make_branch(0, metrics=m_low)
-        branch_high = _make_branch(1, metrics=m_high)
-
-        template, metrics = _find_global_best([branch_low, branch_high])
-        assert metrics is m_high
-        assert template is branch_high.best_template
-
-    def test_ignores_branches_without_metrics(self) -> None:
-        m = _make_metrics(dino=0.7, lpips=0.3, hps=0.25, aes=6.0)
-        branch_none = _make_branch(0)
-        branch_with = _make_branch(1, metrics=m)
-
-        template, metrics = _find_global_best([branch_none, branch_with])
-        assert metrics is m
-        assert template is branch_with.best_template

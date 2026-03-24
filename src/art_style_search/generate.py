@@ -36,7 +36,7 @@ async def _generate_single(
                     contents=prompt,
                     config=genai_types.GenerateContentConfig(
                         response_modalities=["IMAGE"],
-                        thinking_config=genai_types.ThinkingConfig(thinking_level="MINIMAL"),
+                        thinking_config=genai_types.ThinkingConfig(thinking_level="MEDIUM"),
                         image_config=genai_types.ImageConfig(
                             aspect_ratio=aspect_ratio,
                             image_size="1K",

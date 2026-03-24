@@ -15,7 +15,8 @@ import anthropic
 
 from art_style_search.types import (
     AggregatedMetrics,
-    BranchState,
+    IterationResult,
+    KnowledgeBase,
     PromptSection,
     PromptTemplate,
     StyleProfile,
@@ -287,17 +288,22 @@ async def propose_initial_templates(
 
 async def refine_template(
     style_profile: StyleProfile,
-    branch: BranchState,
-    global_best: PromptTemplate | None,
-    global_best_metrics: AggregatedMetrics | None,
+    current_template: PromptTemplate,
+    knowledge_base: KnowledgeBase,
+    best_metrics: AggregatedMetrics | None,
+    last_results: list[IterationResult] | None,
     *,
     client: anthropic.AsyncAnthropic,
     model: str,
     vision_feedback: str = "",
     roundtrip_feedback: str = "",
     caption_diffs: str = "",
+    already_proposed: list[str] | None = None,
 ) -> tuple[PromptTemplate, str, str, bool, str, str, Lessons, str | None, list[str]]:
-    """Refine a branch's template based on metric feedback.
+    """Propose a template refinement based on shared Knowledge Base.
+
+    No persistent branch identity — each call proposes one experiment.
+    Use *already_proposed* to prevent duplicate hypotheses within an iteration.
 
     Returns (new_template, analysis, template_changes, should_stop,
              hypothesis, experiment, lessons, builds_on, open_problems).
@@ -315,7 +321,7 @@ async def refine_template(
         "The meta-prompt must instruct the captioner to describe EVERY visual detail needed "
         "for faithful recreation:\n"
         "- Exact colors, technique, medium, brushwork\n"
-        "- Character/figure details: poses, expressions, clothing, proportions\n"
+        "- Character/figure details: poses, expressions, clothing, proportions, identity\n"
         "- Background/environment: setting, architecture, nature elements\n"
         "- Composition: layout, framing, depth, perspective\n"
         "- Lighting, shadows, atmospheric effects\n"
@@ -325,21 +331,26 @@ async def refine_template(
         "The meta-prompt should be 6-10 sections, each instructing the captioner what to describe "
         "and how detailed to be. Total rendered prompt should be 200-400 words.\n\n"
         "## Metric guidance (with typical ranges)\n"
-        "These compare generated images against the SPECIFIC originals they were captioned from:\n"
-        "- DINO similarity (higher=better): semantic/structural match. "
+        "Metrics compare each generated image against its SPECIFIC paired original (not all references):\n"
+        "- DINO similarity (higher=better): semantic/structural match per image pair. "
         "0.2=unrelated, 0.4=somewhat similar, 0.6=good match, 0.8+=very close.\n"
-        "- LPIPS distance (lower=better): perceptual distance. "
+        "- LPIPS distance (lower=better): perceptual distance per image pair. "
         "0.7=very different, 0.5=noticeable differences, 0.3=similar, 0.1=near identical.\n"
-        "- HPS v2 (higher=better): human preference for prompt-image alignment. "
+        "- HPS v2 (higher=better): how well the generated image matches the caption. "
         "Typical range 0.20-0.30.\n"
         "- LAION Aesthetics (higher=better, 1-10): aesthetic quality. "
         "5=mediocre, 7=good, 8+=excellent.\n\n"
         "## Iteration strategy\n"
+        "- You are proposing ONE of several parallel experiments this iteration. "
+        "Each experiment tests a different hypothesis.\n"
+        "- There are no fixed 'branches' — shift focus freely between categories "
+        "as the weakest area changes.\n"
         "- Make 1-2 targeted changes per iteration, not wholesale rewrites.\n"
         "- If DINO/LPIPS are weak: the captions miss structural or color details — "
         "add instructions for the captioner to be more specific about those.\n"
-        "- If per-image scores vary widely: some images are harder — add instructions "
-        "for handling complex scenes, multiple subjects, or unusual compositions.\n"
+        "- If per-image scores vary widely: some images are harder — consider "
+        "conditional captioning instructions (e.g. 'for character images describe X; "
+        "for backgrounds describe Y').\n"
         "- Use the vision comparison and per-image roundtrip feedback to identify "
         "what the captions consistently miss.\n"
         "- CRITICAL: Read the Knowledge Base carefully. The 'Do NOT Repeat' section lists "
@@ -374,41 +385,36 @@ async def refine_template(
     )
 
     # Build the user message with all context
-    # Use compact profile (no raw analyses) after first iteration to save tokens
-    has_history = len(branch.history) > 0
+    has_history = knowledge_base.hypotheses
     user_parts: list[str] = [
         "## Style Profile\n",
-        _format_style_profile(style_profile, compact=has_history),
-        "\n\n## Current Branch Template\n",
-        _format_template(branch.current_template),
-        f"\nRendered prompt: {branch.current_template.render()}",
+        _format_style_profile(style_profile, compact=bool(has_history)),
+        "\n\n## Current Template\n",
+        _format_template(current_template),
+        f"\nRendered prompt: {current_template.render()}",
     ]
 
-    if branch.best_metrics:
-        user_parts.append("\n\n## Branch Best Metrics\n")
-        user_parts.append(_format_metrics(branch.best_metrics))
+    if best_metrics:
+        user_parts.append("\n\n## Best Metrics So Far\n")
+        user_parts.append(_format_metrics(best_metrics))
 
-    # Knowledge base — structured lessons from all previous iterations
-    kb_text = branch.knowledge_base.render_for_claude()
+    # Knowledge base — structured lessons from all previous experiments
+    kb_text = knowledge_base.render_for_claude()
     if kb_text:
         user_parts.append("\n\n")
         user_parts.append(kb_text)
 
-    # Only show last iteration's details (not full history)
-    if branch.history:
-        last = branch.history[-1]
-        user_parts.append(f"\n\n## Last Iteration ({last.iteration}) [{('KEPT' if last.kept else 'DISCARDED')}]\n")
-        user_parts.append(f"Metrics:\n{_format_metrics(last.aggregated)}\n")
-        if last.hypothesis:
-            user_parts.append(f"Hypothesis tested: {last.hypothesis}\n")
-        if last.experiment:
-            user_parts.append(f"Experiment: {last.experiment}\n")
-
-    if global_best is not None and global_best_metrics is not None:
-        user_parts.append("\n\n## Global Best (across all branches — for cross-pollination)\n")
-        user_parts.append(_format_template(global_best))
-        user_parts.append(f"\nRendered prompt: {global_best.render()}")
-        user_parts.append(f"\nMetrics:\n{_format_metrics(global_best_metrics)}")
+    # Show last iteration's experiment results
+    if last_results:
+        user_parts.append("\n\n## Last Iteration Results\n")
+        for res in last_results:
+            kept_tag = "KEPT" if res.kept else "DISCARDED"
+            user_parts.append(f"Experiment {res.branch_id} [{kept_tag}]:\n")
+            user_parts.append(f"  Metrics: {_format_metrics(res.aggregated)}\n")
+            if res.hypothesis:
+                user_parts.append(f"  Hypothesis: {res.hypothesis}\n")
+            if res.experiment:
+                user_parts.append(f"  Experiment: {res.experiment}\n")
 
     if vision_feedback:
         user_parts.append("\n\n## Vision Comparison (Gemini analysis of generated vs reference images)\n")
@@ -420,6 +426,12 @@ async def refine_template(
 
     if caption_diffs:
         user_parts.append(f"\n\n{caption_diffs}")
+
+    # Dedup: show previously proposed hypotheses for this iteration
+    if already_proposed:
+        user_parts.append("\n\n## Already Proposed This Iteration (propose something DIFFERENT)\n")
+        for i, hyp in enumerate(already_proposed, 1):
+            user_parts.append(f"{i}. {hyp}\n")
 
     has_feedback = vision_feedback or roundtrip_feedback
     instruction = (
@@ -434,7 +446,7 @@ async def refine_template(
 
     user = "".join(user_parts)
 
-    logger.info("Requesting template refinement for branch %d from Claude (%s)", branch.branch_id, model)
+    logger.info("Requesting experiment proposal from Claude (%s)", model)
 
     response = await stream_message(
         client,
@@ -457,11 +469,8 @@ async def refine_template(
     open_problems = _parse_open_problems(text)
 
     if not new_template.sections:
-        logger.warning(
-            "Refined template for branch %d has no sections — falling back to current template",
-            branch.branch_id,
-        )
-        new_template = branch.current_template
+        logger.warning("Refined template has no sections — falling back to current template")
+        new_template = current_template
 
     return (
         new_template,

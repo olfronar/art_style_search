@@ -364,9 +364,13 @@ class KnowledgeBase:
 
 @dataclass
 class IterationResult:
-    """Complete record of one iteration for one branch."""
+    """Complete record of one experiment within an iteration.
 
-    branch_id: int
+    Previously called a "branch iteration" — now represents a single
+    hypothesis experiment (no persistent branch identity).
+    """
+
+    branch_id: int  # kept for backward compat; now used as experiment_id
     iteration: int
     template: PromptTemplate
     rendered_prompt: str
@@ -385,14 +389,14 @@ class IterationResult:
 
 @dataclass
 class BranchState:
-    """Mutable state for a single population branch."""
+    """Legacy branch state — kept for backward compat with old state.json."""
 
     branch_id: int
     current_template: PromptTemplate
     best_template: PromptTemplate
     best_metrics: AggregatedMetrics | None = None
     history: list[IterationResult] = field(default_factory=list)
-    research_log: str = ""  # kept for backward compat; no longer shown to Claude
+    research_log: str = ""
     knowledge_base: KnowledgeBase = field(default_factory=KnowledgeBase)
     plateau_counter: int = 0
     stopped: bool = False
@@ -401,13 +405,23 @@ class BranchState:
 
 @dataclass
 class LoopState:
-    """Top-level state that gets persisted to state.json."""
+    """Top-level state that gets persisted to state.json.
+
+    Uses a shared KnowledgeBase and per-iteration experiments instead of
+    persistent branches.  Old branch-based state is migrated on load.
+    """
 
     iteration: int
-    branches: list[BranchState]
+    current_template: PromptTemplate
+    best_template: PromptTemplate
+    best_metrics: AggregatedMetrics | None
+    knowledge_base: KnowledgeBase
     captions: list[Caption]
     style_profile: StyleProfile
     fixed_references: list[Path] = field(default_factory=list)
+    experiment_history: list[IterationResult] = field(default_factory=list)
+    last_iteration_results: list[IterationResult] = field(default_factory=list)
+    plateau_counter: int = 0
     global_best_prompt: str = ""
     global_best_metrics: AggregatedMetrics | None = None
     converged: bool = False

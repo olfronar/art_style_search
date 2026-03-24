@@ -203,12 +203,84 @@ def _branch_state_from_dict(d: dict[str, Any]) -> BranchState:
 
 
 def _loop_state_from_dict(d: dict[str, Any]) -> LoopState:
+    # Handle new experiment-based format
+    if "current_template" in d:
+        return LoopState(
+            iteration=d["iteration"],
+            current_template=_prompt_template_from_dict(d["current_template"]),
+            best_template=_prompt_template_from_dict(d["best_template"]),
+            best_metrics=(
+                _aggregated_metrics_from_dict(d["best_metrics"]) if d.get("best_metrics") is not None else None
+            ),
+            knowledge_base=_knowledge_base_from_dict(d["knowledge_base"])
+            if d.get("knowledge_base")
+            else KnowledgeBase(),
+            captions=[_caption_from_dict(c) for c in d["captions"]],
+            style_profile=_style_profile_from_dict(d["style_profile"]),
+            fixed_references=[Path(p) for p in d.get("fixed_references", [])],
+            experiment_history=[_iteration_result_from_dict(r) for r in d.get("experiment_history", [])],
+            last_iteration_results=[_iteration_result_from_dict(r) for r in d.get("last_iteration_results", [])],
+            plateau_counter=d.get("plateau_counter", 0),
+            global_best_prompt=d.get("global_best_prompt", ""),
+            global_best_metrics=(
+                _aggregated_metrics_from_dict(d["global_best_metrics"])
+                if d.get("global_best_metrics") is not None
+                else None
+            ),
+            converged=d.get("converged", False),
+            convergence_reason=(
+                ConvergenceReason(d["convergence_reason"]) if d.get("convergence_reason") is not None else None
+            ),
+        )
+
+    # Migrate from old branch-based format
+    branches = [_branch_state_from_dict(b) for b in d["branches"]]
+
+    # Find the best branch to use as current template
+    best_branch = branches[0]
+    from art_style_search.types import composite_score
+
+    for b in branches:
+        if b.best_metrics is not None and (
+            best_branch.best_metrics is None
+            or composite_score(b.best_metrics) > composite_score(best_branch.best_metrics)
+        ):
+            best_branch = b
+
+    # Merge all branch KBs into one shared KB
+    merged_kb = KnowledgeBase()
+    for b in branches:
+        for h in b.knowledge_base.hypotheses:
+            merged_kb.hypotheses.append(h)
+        for cat_name, cat in b.knowledge_base.categories.items():
+            if cat_name not in merged_kb.categories:
+                merged_kb.categories[cat_name] = cat
+            else:
+                existing = merged_kb.categories[cat_name]
+                for insight in cat.confirmed_insights:
+                    if insight not in existing.confirmed_insights:
+                        existing.confirmed_insights.append(insight)
+                for rej in cat.rejected_approaches:
+                    if rej not in existing.rejected_approaches:
+                        existing.rejected_approaches.append(rej)
+        merged_kb.next_id = max(merged_kb.next_id, b.knowledge_base.next_id)
+
+    # Collect all experiment history from branches
+    all_history: list[IterationResult] = []
+    for b in branches:
+        all_history.extend(b.history)
+
     return LoopState(
         iteration=d["iteration"],
-        branches=[_branch_state_from_dict(b) for b in d["branches"]],
+        current_template=best_branch.current_template,
+        best_template=best_branch.best_template,
+        best_metrics=best_branch.best_metrics,
+        knowledge_base=merged_kb,
         captions=[_caption_from_dict(c) for c in d["captions"]],
         style_profile=_style_profile_from_dict(d["style_profile"]),
         fixed_references=[Path(p) for p in d.get("fixed_references", [])],
+        experiment_history=all_history,
+        plateau_counter=0,
         global_best_prompt=d.get("global_best_prompt", ""),
         global_best_metrics=(
             _aggregated_metrics_from_dict(d["global_best_metrics"])

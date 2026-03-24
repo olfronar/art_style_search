@@ -137,16 +137,19 @@ def make_branch_state(
 def make_loop_state(
     *,
     iteration: int = 5,
-    n_branches: int = 2,
     converged: bool = False,
     convergence_reason: ConvergenceReason | None = None,
     global_best_metrics: AggregatedMetrics | None = None,
 ) -> LoopState:
     return LoopState(
         iteration=iteration,
-        branches=[make_branch_state(branch_id=i) for i in range(n_branches)],
+        current_template=make_prompt_template(),
+        best_template=make_prompt_template(n_sections=2),
+        best_metrics=make_aggregated_metrics(seed=1.0),
+        knowledge_base=KnowledgeBase(),
         captions=[make_caption(index=i) for i in range(3)],
         style_profile=make_style_profile(),
+        experiment_history=[make_iteration_result(branch_id=i, iteration=i + 1) for i in range(2)],
         global_best_prompt="Watercolor painting on rough cold-pressed paper, muted earth tones...",
         global_best_metrics=global_best_metrics,
         converged=converged,
@@ -299,7 +302,6 @@ class TestRoundTrip:
     def test_loop_state_round_trip(self) -> None:
         original = make_loop_state(
             iteration=10,
-            n_branches=2,
             converged=True,
             convergence_reason=ConvergenceReason.PLATEAU,
             global_best_metrics=make_aggregated_metrics(seed=5.0),
@@ -311,7 +313,7 @@ class TestRoundTrip:
         assert restored.convergence_reason == ConvergenceReason.PLATEAU
         assert restored.global_best_metrics == original.global_best_metrics
         assert restored.global_best_prompt == original.global_best_prompt
-        assert len(restored.branches) == 2
+        assert len(restored.experiment_history) == 2
         assert len(restored.captions) == 3
 
 
@@ -334,14 +336,13 @@ class TestSaveLoadState:
         assert loaded is not None
         assert loaded.iteration == state.iteration
         assert loaded.global_best_prompt == state.global_best_prompt
-        assert len(loaded.branches) == len(state.branches)
+        assert len(loaded.experiment_history) == len(state.experiment_history)
         assert len(loaded.captions) == len(state.captions)
 
     def test_full_fidelity_round_trip(self, tmp_path: Path) -> None:
         """Every field survives save -> load, including nested dataclasses."""
         state = make_loop_state(
             iteration=12,
-            n_branches=2,
             converged=True,
             convergence_reason=ConvergenceReason.MAX_ITERATIONS,
             global_best_metrics=make_aggregated_metrics(seed=4.0),
@@ -357,16 +358,14 @@ class TestSaveLoadState:
         assert loaded.convergence_reason == ConvergenceReason.MAX_ITERATIONS
         assert loaded.global_best_metrics == state.global_best_metrics
         assert loaded.style_profile == state.style_profile
+        assert loaded.best_metrics == state.best_metrics
+        assert loaded.plateau_counter == state.plateau_counter
 
-        # Verify branch-level fidelity
-        for orig_b, load_b in zip(state.branches, loaded.branches, strict=True):
-            assert load_b.branch_id == orig_b.branch_id
-            assert load_b.best_metrics == orig_b.best_metrics
-            assert load_b.plateau_counter == orig_b.plateau_counter
-            assert len(load_b.history) == len(orig_b.history)
-            for orig_h, load_h in zip(orig_b.history, load_b.history, strict=True):
-                assert load_h.per_image_scores == orig_h.per_image_scores
-                assert load_h.image_paths == orig_h.image_paths
+        # Verify experiment history fidelity
+        assert len(loaded.experiment_history) == len(state.experiment_history)
+        for orig_h, load_h in zip(state.experiment_history, loaded.experiment_history, strict=True):
+            assert load_h.per_image_scores == orig_h.per_image_scores
+            assert load_h.image_paths == orig_h.image_paths
 
     def test_creates_parent_dirs(self, tmp_path: Path) -> None:
         state = make_loop_state(global_best_metrics=make_aggregated_metrics())
@@ -383,15 +382,14 @@ class TestSaveLoadState:
         raw = json.loads(state_file.read_text(encoding="utf-8"))
         assert isinstance(raw, dict)
         assert "iteration" in raw
-        assert "branches" in raw
+        assert "current_template" in raw
 
     def test_load_nonexistent_returns_none(self, tmp_path: Path) -> None:
         assert load_state(tmp_path / "does_not_exist.json") is None
 
     def test_none_best_metrics_survives(self, tmp_path: Path) -> None:
         state = make_loop_state(global_best_metrics=None)
-        # Also set branch best_metrics to None for one branch
-        state.branches[0].best_metrics = None
+        state.best_metrics = None
         state_file = tmp_path / "state.json"
 
         save_state(state, state_file)
@@ -399,24 +397,10 @@ class TestSaveLoadState:
 
         assert loaded is not None
         assert loaded.global_best_metrics is None
-        assert loaded.branches[0].best_metrics is None
+        assert loaded.best_metrics is None
 
-    def test_none_stop_reason_survives(self, tmp_path: Path) -> None:
-        state = make_loop_state(convergence_reason=None)
-        state.branches[0].stop_reason = None
-        state_file = tmp_path / "state.json"
-
-        save_state(state, state_file)
-        loaded = load_state(state_file)
-
-        assert loaded is not None
-        assert loaded.convergence_reason is None
-        assert loaded.branches[0].stop_reason is None
-
-    def test_stop_reason_set_survives(self, tmp_path: Path) -> None:
+    def test_convergence_reason_survives(self, tmp_path: Path) -> None:
         state = make_loop_state(convergence_reason=ConvergenceReason.CLAUDE_STOP)
-        state.branches[0].stopped = True
-        state.branches[0].stop_reason = ConvergenceReason.PLATEAU
         state_file = tmp_path / "state.json"
 
         save_state(state, state_file)
@@ -424,8 +408,6 @@ class TestSaveLoadState:
 
         assert loaded is not None
         assert loaded.convergence_reason == ConvergenceReason.CLAUDE_STOP
-        assert loaded.branches[0].stop_reason == ConvergenceReason.PLATEAU
-        assert loaded.branches[0].stopped is True
 
 
 # ---------------------------------------------------------------------------
@@ -551,17 +533,16 @@ class TestKnowledgeBaseSerialization:
         assert restored.open_problems[0].priority == "HIGH"
         assert restored.open_problems[0].metric_gap == 0.12
 
-    def test_branch_state_with_kb_round_trip(self, tmp_path: Path) -> None:
+    def test_loop_state_with_kb_round_trip(self, tmp_path: Path) -> None:
         state = make_loop_state(global_best_metrics=make_aggregated_metrics())
-        # Populate KB on the first branch
-        state.branches[0].knowledge_base = _make_knowledge_base()
+        state.knowledge_base = _make_knowledge_base()
 
         state_file = tmp_path / "state.json"
         save_state(state, state_file)
         loaded = load_state(state_file)
 
         assert loaded is not None
-        kb = loaded.branches[0].knowledge_base
+        kb = loaded.knowledge_base
         assert len(kb.hypotheses) == 2
         assert kb.hypotheses[0].statement == "Color accuracy gap"
         assert len(kb.open_problems) == 1
