@@ -5,9 +5,13 @@ from __future__ import annotations
 from art_style_search.types import (
     AggregatedMetrics,
     ConvergenceReason,
+    KnowledgeBase,
+    OpenProblem,
     PromptSection,
     PromptTemplate,
+    classify_hypothesis,
     composite_score,
+    get_category_names,
 )
 
 # -- composite_score ----------------------------------------------------------
@@ -237,3 +241,256 @@ class TestConvergenceReason:
         assert ConvergenceReason("max_iterations") is ConvergenceReason.MAX_ITERATIONS
         assert ConvergenceReason("plateau") is ConvergenceReason.PLATEAU
         assert ConvergenceReason("claude_stop") is ConvergenceReason.CLAUDE_STOP
+
+
+# -- classify_hypothesis ------------------------------------------------------
+
+
+class TestClassifyHypothesis:
+    def test_color_keywords(self) -> None:
+        categories = ["color_palette", "composition", "technique"]
+        assert classify_hypothesis("The color palette is too desaturated", categories) == "color_palette"
+
+    def test_composition_keywords(self) -> None:
+        categories = ["color_palette", "composition", "technique"]
+        assert classify_hypothesis("The framing and layout need to be tighter", categories) == "composition"
+
+    def test_technique_keywords(self) -> None:
+        categories = ["color_palette", "composition", "technique"]
+        assert classify_hypothesis("The brushwork medium description is too generic", categories) == "technique"
+
+    def test_synonym_matching(self) -> None:
+        categories = ["color_palette", "lighting", "texture"]
+        assert classify_hypothesis("The shadow contrast is too harsh", categories) == "lighting"
+        assert classify_hypothesis("The surface grain detail is missing", categories) == "texture"
+
+    def test_fallback_to_general(self) -> None:
+        categories = ["color_palette", "composition"]
+        assert classify_hypothesis("Something completely unrelated xyz", categories) == "general"
+
+    def test_empty_text(self) -> None:
+        assert classify_hypothesis("", ["color_palette"]) == "general"
+
+    def test_custom_section_names(self) -> None:
+        categories = ["characters", "background"]
+        assert classify_hypothesis("The characters need more detail", categories) == "characters"
+
+
+# -- get_category_names -------------------------------------------------------
+
+
+class TestGetCategoryNames:
+    def test_includes_base_categories(self) -> None:
+        template = PromptTemplate(sections=[])
+        cats = get_category_names(template)
+        assert "color_palette" in cats
+        assert "composition" in cats
+        assert "technique" in cats
+
+    def test_includes_template_sections(self) -> None:
+        template = PromptTemplate(
+            sections=[
+                PromptSection(name="lighting", description="d", value="v"),
+                PromptSection(name="characters", description="d", value="v"),
+            ]
+        )
+        cats = get_category_names(template)
+        assert "lighting" in cats
+        assert "characters" in cats
+
+    def test_no_duplicates(self) -> None:
+        template = PromptTemplate(sections=[PromptSection(name="composition", description="d", value="v")])
+        cats = get_category_names(template)
+        assert cats.count("composition") == 1
+
+    def test_sorted(self) -> None:
+        template = PromptTemplate(sections=[])
+        cats = get_category_names(template)
+        assert cats == sorted(cats)
+
+
+# -- KnowledgeBase ------------------------------------------------------------
+
+
+class TestKnowledgeBase:
+    def test_add_hypothesis_increments_id(self) -> None:
+        kb = KnowledgeBase()
+        h1 = kb.add_hypothesis(
+            iteration=1,
+            parent_id=None,
+            statement="test color",
+            experiment="add hex",
+            category="color_palette",
+            kept=True,
+            metric_delta={"dino": 0.02},
+            lesson="hex codes work",
+            confirmed="hex codes work",
+            rejected="",
+        )
+        h2 = kb.add_hypothesis(
+            iteration=2,
+            parent_id="H1",
+            statement="test texture",
+            experiment="add grain",
+            category="texture",
+            kept=False,
+            metric_delta={"dino": -0.01},
+            lesson="grain too much",
+            confirmed="",
+            rejected="grain doesn't help",
+        )
+        assert h1.id == "H1"
+        assert h2.id == "H2"
+        assert kb.next_id == 3
+
+    def test_confirmed_hypothesis_updates_category(self) -> None:
+        kb = KnowledgeBase()
+        kb.add_hypothesis(
+            iteration=1,
+            parent_id=None,
+            statement="test color",
+            experiment="add hex",
+            category="color_palette",
+            kept=True,
+            metric_delta={"dino": 0.03},
+            lesson="hex codes work",
+            confirmed="hex codes work",
+            rejected="",
+        )
+        cat = kb.categories["color_palette"]
+        assert "hex codes work" in cat.confirmed_insights
+        assert cat.best_dino_delta == 0.03
+        assert "H1" in cat.hypothesis_ids
+
+    def test_rejected_hypothesis_updates_category(self) -> None:
+        kb = KnowledgeBase()
+        kb.add_hypothesis(
+            iteration=1,
+            parent_id=None,
+            statement="detailed brushstrokes won't help",
+            experiment="elaborate vocab",
+            category="technique",
+            kept=False,
+            metric_delta={"dino": -0.01},
+            lesson="too verbose",
+            confirmed="",
+            rejected="brushstrokes ignored",
+        )
+        cat = kb.categories["technique"]
+        assert any("brushstrokes" in r for r in cat.rejected_approaches)
+        assert cat.confirmed_insights == []
+
+    def test_outcome_determination(self) -> None:
+        kb = KnowledgeBase()
+        h = kb.add_hypothesis(
+            iteration=1,
+            parent_id=None,
+            statement="s",
+            experiment="e",
+            category="general",
+            kept=True,
+            metric_delta={},
+            lesson="l",
+            confirmed="yes",
+            rejected="also yes",
+        )
+        assert h.outcome == "partial"
+
+        h2 = kb.add_hypothesis(
+            iteration=2,
+            parent_id=None,
+            statement="s2",
+            experiment="e2",
+            category="general",
+            kept=False,
+            metric_delta={},
+            lesson="l",
+            confirmed="",
+            rejected="no",
+        )
+        assert h2.outcome == "rejected"
+
+    def test_render_empty_kb(self) -> None:
+        kb = KnowledgeBase()
+        assert kb.render_for_claude() == ""
+
+    def test_render_includes_hypothesis_chain(self) -> None:
+        kb = KnowledgeBase()
+        kb.add_hypothesis(
+            iteration=1,
+            parent_id=None,
+            statement="color accuracy gap",
+            experiment="add hex codes",
+            category="color_palette",
+            kept=True,
+            metric_delta={"dino": 0.02},
+            lesson="hex codes work",
+            confirmed="hex codes work",
+            rejected="",
+        )
+        kb.add_hypothesis(
+            iteration=2,
+            parent_id="H1",
+            statement="color temperature adds further",
+            experiment="add warm/cool descriptors",
+            category="color_palette",
+            kept=True,
+            metric_delta={"dino": 0.01},
+            lesson="temperature helps",
+            confirmed="temperature helps",
+            rejected="",
+        )
+        output = kb.render_for_claude()
+        assert "H1" in output
+        assert "H2" in output
+        assert "builds on H1" in output
+        assert "Hypothesis Chain" in output
+        assert "Per-Category Status" in output
+        assert "color_palette" in output
+
+    def test_render_includes_open_problems(self) -> None:
+        kb = KnowledgeBase()
+        kb.open_problems = [
+            OpenProblem(
+                text="Color matching on dark palettes",
+                category="color_palette",
+                priority="HIGH",
+                metric_gap=0.15,
+                since_iteration=3,
+            ),
+        ]
+        # Need at least one hypothesis for render to produce anything
+        kb.add_hypothesis(
+            iteration=1,
+            parent_id=None,
+            statement="s",
+            experiment="e",
+            category="general",
+            kept=True,
+            metric_delta={},
+            lesson="l",
+            confirmed="yes",
+            rejected="",
+        )
+        output = kb.render_for_claude()
+        assert "Open Problems" in output
+        assert "HIGH" in output
+        assert "Color matching on dark palettes" in output
+
+    def test_render_includes_do_not_repeat(self) -> None:
+        kb = KnowledgeBase()
+        kb.add_hypothesis(
+            iteration=1,
+            parent_id=None,
+            statement="detailed brushstrokes",
+            experiment="elaborate vocab",
+            category="technique",
+            kept=False,
+            metric_delta={"dino": -0.01},
+            lesson="too verbose",
+            confirmed="",
+            rejected="brushstrokes ignored",
+        )
+        output = kb.render_for_claude()
+        assert "Do NOT Repeat" in output
+        assert "detailed brushstrokes" in output

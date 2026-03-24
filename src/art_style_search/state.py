@@ -14,10 +14,14 @@ from art_style_search.types import (
     AggregatedMetrics,
     BranchState,
     Caption,
+    CategoryProgress,
     ConvergenceReason,
+    Hypothesis,
     IterationResult,
+    KnowledgeBase,
     LoopState,
     MetricScores,
+    OpenProblem,
     PromptSection,
     PromptTemplate,
     StyleProfile,
@@ -137,7 +141,53 @@ def _iteration_result_from_dict(d: dict[str, Any]) -> IterationResult:
     )
 
 
+def _hypothesis_from_dict(d: dict[str, Any]) -> Hypothesis:
+    return Hypothesis(
+        id=d["id"],
+        iteration=d["iteration"],
+        parent_id=d.get("parent_id"),
+        statement=d["statement"],
+        experiment=d["experiment"],
+        category=d["category"],
+        outcome=d["outcome"],
+        metric_delta=d.get("metric_delta", {}),
+        kept=d["kept"],
+        lesson=d.get("lesson", ""),
+    )
+
+
+def _open_problem_from_dict(d: dict[str, Any]) -> OpenProblem:
+    return OpenProblem(
+        text=d["text"],
+        category=d["category"],
+        priority=d["priority"],
+        metric_gap=d.get("metric_gap"),
+        since_iteration=d.get("since_iteration", 0),
+    )
+
+
+def _category_progress_from_dict(d: dict[str, Any]) -> CategoryProgress:
+    return CategoryProgress(
+        category=d["category"],
+        best_dino_delta=d.get("best_dino_delta"),
+        confirmed_insights=d.get("confirmed_insights", []),
+        rejected_approaches=d.get("rejected_approaches", []),
+        hypothesis_ids=d.get("hypothesis_ids", []),
+    )
+
+
+def _knowledge_base_from_dict(d: dict[str, Any]) -> KnowledgeBase:
+    return KnowledgeBase(
+        hypotheses=[_hypothesis_from_dict(h) for h in d.get("hypotheses", [])],
+        categories={k: _category_progress_from_dict(v) for k, v in d.get("categories", {}).items()},
+        open_problems=[_open_problem_from_dict(p) for p in d.get("open_problems", [])],
+        next_id=d.get("next_id", 1),
+    )
+
+
 def _branch_state_from_dict(d: dict[str, Any]) -> BranchState:
+    kb_raw = d.get("knowledge_base")
+    knowledge_base = _knowledge_base_from_dict(kb_raw) if kb_raw else KnowledgeBase()
     return BranchState(
         branch_id=d["branch_id"],
         current_template=_prompt_template_from_dict(d["current_template"]),
@@ -145,6 +195,7 @@ def _branch_state_from_dict(d: dict[str, Any]) -> BranchState:
         best_metrics=_aggregated_metrics_from_dict(d["best_metrics"]) if d.get("best_metrics") is not None else None,
         history=[_iteration_result_from_dict(h) for h in d.get("history", [])],
         research_log=d.get("research_log", ""),
+        knowledge_base=knowledge_base,
         plateau_counter=d.get("plateau_counter", 0),
         stopped=d.get("stopped", False),
         stop_reason=ConvergenceReason(d["stop_reason"]) if d.get("stop_reason") is not None else None,

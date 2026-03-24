@@ -18,7 +18,7 @@ Self-improving loop that optimizes a meta-prompt for precise image recreation. T
 1. Meta-prompt + each reference image → Gemini Pro generates per-image captions
 2. Each caption → Gemini Flash generates an image
 3. Compare each (original, generated) pair: metrics (DINO, LPIPS, HPS, aesthetics) + Gemini vision comparison
-4. Claude analyzes per-image gaps + metrics, refines the meta-prompt
+4. Claude analyzes per-image gaps + metrics via structured KnowledgeBase (hypothesis chains, per-category progress, open problems), refines the meta-prompt
 5. Cross-pollinate: share global best meta-prompt across population branches
 6. Repeat until convergence (max iterations / plateau / Claude stop)
 
@@ -40,7 +40,7 @@ uv run python -m art_style_search --help # Show all CLI options
 
 ## Module Map
 
-- `types.py` - Shared dataclasses (Caption, MetricScores, StyleProfile, PromptTemplate, BranchState, LoopState, etc.)
+- `types.py` - Shared dataclasses (Caption, MetricScores, StyleProfile, PromptTemplate, BranchState, LoopState, KnowledgeBase, Hypothesis, etc.) + category classification helpers
 - `config.py` - CLI argument parsing → Config dataclass
 - `analyze.py` - Zero-step: parallel Gemini+Claude style analysis → StyleProfile + initial PromptTemplate
 - `caption.py` - Gemini Pro captioning with disk cache
@@ -73,6 +73,8 @@ All metrics compare generated images against reference images:
 
 - Helpers used by 2+ modules belong in `utils.py` — do not duplicate locally (e.g. MIME maps, API call wrappers, response extractors)
 - Data fed to Claude in `refine_template` must appear via exactly one path — if the history formatter includes a field, don't also add a dedicated section for it (or vice versa)
+- Iteration-to-iteration learning uses `KnowledgeBase` (structured, on `BranchState`) not the legacy `research_log` string — the flat log is kept for backward compat but is not shown to Claude
+- Hypothesis classification uses keyword matching in `classify_hypothesis()` with `_CATEGORY_SYNONYMS` — extend the synonym map when adding new categories
 
 ## Code Style
 

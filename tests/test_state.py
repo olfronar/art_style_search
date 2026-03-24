@@ -10,6 +10,7 @@ from art_style_search.state import (
     _branch_state_from_dict,
     _caption_from_dict,
     _iteration_result_from_dict,
+    _knowledge_base_from_dict,
     _loop_state_from_dict,
     _metric_scores_from_dict,
     _prompt_section_from_dict,
@@ -25,8 +26,10 @@ from art_style_search.types import (
     Caption,
     ConvergenceReason,
     IterationResult,
+    KnowledgeBase,
     LoopState,
     MetricScores,
+    OpenProblem,
     PromptSection,
     PromptTemplate,
     StyleProfile,
@@ -478,3 +481,116 @@ class TestSaveIterationLog:
         assert data["template_changes"] == result.template_changes
         assert len(data["image_paths"]) == len(result.image_paths)
         assert len(data["per_image_scores"]) == len(result.per_image_scores)
+
+
+# ---------------------------------------------------------------------------
+# Tests for KnowledgeBase serialization
+# ---------------------------------------------------------------------------
+
+
+def _make_knowledge_base() -> KnowledgeBase:
+    """Build a KnowledgeBase with hypotheses, categories, and open problems."""
+    kb = KnowledgeBase()
+    kb.add_hypothesis(
+        iteration=1,
+        parent_id=None,
+        statement="Color accuracy gap",
+        experiment="Add hex codes",
+        category="color_palette",
+        kept=True,
+        metric_delta={"dino": 0.03, "lpips": -0.01},
+        lesson="Hex codes improve color matching",
+        confirmed="Hex codes improve color matching",
+        rejected="",
+    )
+    kb.add_hypothesis(
+        iteration=2,
+        parent_id="H1",
+        statement="Color temperature helps further",
+        experiment="Add warm/cool descriptors",
+        category="color_palette",
+        kept=False,
+        metric_delta={"dino": -0.005},
+        lesson="Temperature terms not followed",
+        confirmed="",
+        rejected="Temperature terms ignored by generator",
+    )
+    kb.open_problems = [
+        OpenProblem(
+            text="Texture detail in backgrounds",
+            category="texture",
+            priority="HIGH",
+            metric_gap=0.12,
+            since_iteration=1,
+        ),
+    ]
+    return kb
+
+
+class TestKnowledgeBaseSerialization:
+    """Test round-trip serialization for KnowledgeBase and its parts."""
+
+    def test_knowledge_base_round_trip(self) -> None:
+        kb = _make_knowledge_base()
+        d = json.loads(json.dumps(_to_dict(kb)))
+        restored = _knowledge_base_from_dict(d)
+
+        assert len(restored.hypotheses) == 2
+        assert restored.hypotheses[0].id == "H1"
+        assert restored.hypotheses[0].parent_id is None
+        assert restored.hypotheses[1].id == "H2"
+        assert restored.hypotheses[1].parent_id == "H1"
+        assert restored.next_id == 3
+
+        assert "color_palette" in restored.categories
+        cat = restored.categories["color_palette"]
+        assert "Hex codes improve color matching" in cat.confirmed_insights
+        assert len(cat.hypothesis_ids) == 2
+
+        assert len(restored.open_problems) == 1
+        assert restored.open_problems[0].priority == "HIGH"
+        assert restored.open_problems[0].metric_gap == 0.12
+
+    def test_branch_state_with_kb_round_trip(self, tmp_path: Path) -> None:
+        state = make_loop_state(global_best_metrics=make_aggregated_metrics())
+        # Populate KB on the first branch
+        state.branches[0].knowledge_base = _make_knowledge_base()
+
+        state_file = tmp_path / "state.json"
+        save_state(state, state_file)
+        loaded = load_state(state_file)
+
+        assert loaded is not None
+        kb = loaded.branches[0].knowledge_base
+        assert len(kb.hypotheses) == 2
+        assert kb.hypotheses[0].statement == "Color accuracy gap"
+        assert len(kb.open_problems) == 1
+
+    def test_backward_compat_no_kb_field(self) -> None:
+        """Old state.json without knowledge_base should load with empty KB."""
+        branch_dict = {
+            "branch_id": 0,
+            "current_template": {"sections": [], "negative_prompt": None},
+            "best_template": {"sections": [], "negative_prompt": None},
+            "best_metrics": None,
+            "history": [],
+            "research_log": "## Iteration 1\nOld format log",
+            "plateau_counter": 0,
+            "stopped": False,
+            "stop_reason": None,
+            # No "knowledge_base" key!
+        }
+        branch = _branch_state_from_dict(branch_dict)
+        assert branch.knowledge_base is not None
+        assert len(branch.knowledge_base.hypotheses) == 0
+        assert branch.knowledge_base.next_id == 1
+        assert branch.research_log == "## Iteration 1\nOld format log"
+
+    def test_empty_kb_round_trip(self) -> None:
+        kb = KnowledgeBase()
+        d = json.loads(json.dumps(_to_dict(kb)))
+        restored = _knowledge_base_from_dict(d)
+        assert restored.hypotheses == []
+        assert restored.categories == {}
+        assert restored.open_problems == []
+        assert restored.next_id == 1

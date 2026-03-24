@@ -6,8 +6,10 @@ from art_style_search.prompt import (
     _format_metrics,
     _format_template,
     _parse_analysis,
+    _parse_builds_on,
     _parse_converged,
     _parse_initial_templates,
+    _parse_open_problems,
     _parse_template,
     _parse_template_changes,
 )
@@ -308,3 +310,67 @@ class TestFormatMetrics:
         assert len(lines) == 8
         for line in lines:
             assert line.startswith("- ")
+
+
+# ---------------------------------------------------------------------------
+# _parse_builds_on
+# ---------------------------------------------------------------------------
+
+
+class TestParseBuildsOn:
+    def test_single_id(self) -> None:
+        text = "<builds_on>H3</builds_on>"
+        assert _parse_builds_on(text) == "H3"
+
+    def test_multiple_ids(self) -> None:
+        text = "<builds_on>H3, H5</builds_on>"
+        assert _parse_builds_on(text) == "H3, H5"
+
+    def test_none_value(self) -> None:
+        text = "<builds_on>none</builds_on>"
+        assert _parse_builds_on(text) is None
+
+    def test_none_case_insensitive(self) -> None:
+        text = "<builds_on>None</builds_on>"
+        assert _parse_builds_on(text) is None
+
+    def test_absent(self) -> None:
+        text = "Some text without builds_on tag"
+        assert _parse_builds_on(text) is None
+
+    def test_with_whitespace(self) -> None:
+        text = "<builds_on>  H7  </builds_on>"
+        assert _parse_builds_on(text) == "H7"
+
+
+# ---------------------------------------------------------------------------
+# _parse_open_problems
+# ---------------------------------------------------------------------------
+
+
+class TestParseOpenProblems:
+    def test_numbered_list(self) -> None:
+        text = (
+            "<open_problems>\n"
+            "1. Color matching on dark palettes\n"
+            "2. Fine texture detail\n"
+            "3. Mood consistency\n"
+            "</open_problems>"
+        )
+        result = _parse_open_problems(text)
+        assert len(result) == 3
+        assert result[0] == "Color matching on dark palettes"
+        assert result[1] == "Fine texture detail"
+        assert result[2] == "Mood consistency"
+
+    def test_absent(self) -> None:
+        assert _parse_open_problems("No tag here") == []
+
+    def test_empty(self) -> None:
+        assert _parse_open_problems("<open_problems>  </open_problems>") == []
+
+    def test_single_item(self) -> None:
+        text = "<open_problems>\n1. Only one problem\n</open_problems>"
+        result = _parse_open_problems(text)
+        assert len(result) == 1
+        assert result[0] == "Only one problem"

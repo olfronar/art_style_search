@@ -72,24 +72,6 @@ def _format_metrics(metrics: AggregatedMetrics) -> str:
     return "\n".join(lines)
 
 
-def _format_history_tail(branch: BranchState, max_entries: int = 5) -> str:
-    """Format the last *max_entries* iterations of a branch for context."""
-    recent = branch.history[-max_entries:]
-    if not recent:
-        return "(no history yet)"
-    parts: list[str] = []
-    for r in recent:
-        kept_tag = "KEPT" if r.kept else "DISCARDED"
-        parts.append(
-            f"### Iteration {r.iteration} [{kept_tag}]\n"
-            f"Rendered prompt: {r.rendered_prompt}\n"
-            f"Metrics:\n{_format_metrics(r.aggregated)}\n"
-            f"Analysis: {r.claude_analysis}\n"
-            f"Template changes: {r.template_changes}"
-        )
-    return "\n\n".join(parts)
-
-
 # ---------------------------------------------------------------------------
 # Response parsing
 # ---------------------------------------------------------------------------
@@ -109,6 +91,8 @@ _EXPERIMENT_RE = re.compile(r"<experiment>(.*?)</experiment>", re.DOTALL)
 _CONFIRMED_RE = re.compile(r"<confirmed>(.*?)</confirmed>", re.DOTALL)
 _REJECTED_RE = re.compile(r"<rejected>(.*?)</rejected>", re.DOTALL)
 _NEW_INSIGHT_RE = re.compile(r"<new_insight>(.*?)</new_insight>", re.DOTALL)
+_BUILDS_ON_RE = re.compile(r"<builds_on>(.*?)</builds_on>", re.DOTALL)
+_OPEN_PROBLEMS_RE = re.compile(r"<open_problems>(.*?)</open_problems>", re.DOTALL)
 
 
 def _parse_template(text: str) -> PromptTemplate:
@@ -171,6 +155,26 @@ def _parse_lessons(text: str) -> Lessons:
         rejected=rejected.group(1).strip() if rejected else "",
         new_insight=insight.group(1).strip() if insight else "",
     )
+
+
+def _parse_builds_on(text: str) -> str | None:
+    """Extract the <builds_on> tag — returns hypothesis IDs or None."""
+    m = _BUILDS_ON_RE.search(text)
+    if not m:
+        return None
+    val = m.group(1).strip()
+    return val if val.lower() != "none" else None
+
+
+def _parse_open_problems(text: str) -> list[str]:
+    """Extract numbered open problems from <open_problems> tag."""
+    m = _OPEN_PROBLEMS_RE.search(text)
+    if not m:
+        return []
+    raw = m.group(1).strip()
+    # Split on numbered lines: "1. ...", "2. ..." etc.
+    items = re.split(r"\n\s*\d+\.\s+", "\n" + raw)
+    return [item.strip() for item in items if item.strip()]
 
 
 # ---------------------------------------------------------------------------
@@ -292,11 +296,11 @@ async def refine_template(
     vision_feedback: str = "",
     roundtrip_feedback: str = "",
     caption_diffs: str = "",
-) -> tuple[PromptTemplate, str, str, bool, str, str, Lessons]:
+) -> tuple[PromptTemplate, str, str, bool, str, str, Lessons, str | None, list[str]]:
     """Refine a branch's template based on metric feedback.
 
     Returns (new_template, analysis, template_changes, should_stop,
-             hypothesis, experiment, lessons).
+             hypothesis, experiment, lessons, builds_on, open_problems).
     """
 
     system = (
@@ -338,8 +342,12 @@ async def refine_template(
         "for handling complex scenes, multiple subjects, or unusual compositions.\n"
         "- Use the vision comparison and per-image roundtrip feedback to identify "
         "what the captions consistently miss.\n"
-        "- CRITICAL: Read the Research Log carefully. Do NOT repeat experiments that were "
-        "already rejected. Build on confirmed insights. Reference specific log entries.\n\n"
+        "- CRITICAL: Read the Knowledge Base carefully. The 'Do NOT Repeat' section lists "
+        "failed experiments. Build on confirmed insights. Reference hypothesis IDs (e.g. 'builds on H3').\n"
+        "- Use Per-Category Status to identify which style dimensions need work.\n"
+        "- Target the weakest category or build on partially confirmed hypotheses.\n"
+        "- Use the Open Problems list to focus on the highest-priority gaps.\n"
+        "- Update <open_problems> each iteration: add new ones, remove solved ones, re-rank.\n\n"
         "If metrics have plateaued, append [CONVERGED] at the very end.\n\n"
         "Response format (ALL tags required):\n"
         "<lessons>\n"
@@ -347,9 +355,15 @@ async def refine_template(
         "  <rejected>Which previous hypotheses are rejected? What didn't work and why?</rejected>\n"
         "  <new_insight>Any new observation from the data not covered by existing hypotheses</new_insight>\n"
         "</lessons>\n"
-        "<hypothesis>Based on the research log and current results, what do you believe "
-        "is the PRIMARY remaining gap? Be specific — name the metric, the images, the visual element.</hypothesis>\n"
+        "<hypothesis>Based on the knowledge base and current results, what is the "
+        "PRIMARY remaining gap? Be specific — name the metric, the images, the visual element.</hypothesis>\n"
+        "<builds_on>H-ids this builds on, or 'none' for fresh direction</builds_on>\n"
         "<experiment>The specific 1-2 changes you're making to test this hypothesis</experiment>\n"
+        "<open_problems>\n"
+        "  1. Most critical remaining problem\n"
+        "  2. Second most critical\n"
+        "  3. Third (if any)\n"
+        "</open_problems>\n"
         "<template_changes>structural changes or 'none'</template_changes>\n"
         "<template>\n"
         '  <section name="..." description="...">value</section>\n'
@@ -374,10 +388,11 @@ async def refine_template(
         user_parts.append("\n\n## Branch Best Metrics\n")
         user_parts.append(_format_metrics(branch.best_metrics))
 
-    # Research log — accumulated lessons from all previous iterations
-    if branch.research_log:
-        user_parts.append("\n\n## Research Log (accumulated lessons — DO NOT repeat rejected experiments)\n")
-        user_parts.append(branch.research_log)
+    # Knowledge base — structured lessons from all previous iterations
+    kb_text = branch.knowledge_base.render_for_claude()
+    if kb_text:
+        user_parts.append("\n\n")
+        user_parts.append(kb_text)
 
     # Only show last iteration's details (not full history)
     if branch.history:
@@ -408,7 +423,8 @@ async def refine_template(
 
     has_feedback = vision_feedback or roundtrip_feedback
     instruction = (
-        "\n\nPropose an improved template. Review the Research Log, then formulate a hypothesis and experiment."
+        "\n\nPropose an improved template. Review the Knowledge Base, then formulate a hypothesis "
+        "that builds on previous insights (reference H-ids). Update open problems."
     )
     if has_feedback:
         instruction += (
@@ -437,6 +453,8 @@ async def refine_template(
     hypothesis = _parse_hypothesis(text)
     experiment = _parse_experiment(text)
     lessons = _parse_lessons(text)
+    builds_on = _parse_builds_on(text)
+    open_problems = _parse_open_problems(text)
 
     if not new_template.sections:
         logger.warning(
@@ -445,4 +463,14 @@ async def refine_template(
         )
         new_template = branch.current_template
 
-    return new_template, analysis_text, template_changes_description, should_stop, hypothesis, experiment, lessons
+    return (
+        new_template,
+        analysis_text,
+        template_changes_description,
+        should_stop,
+        hypothesis,
+        experiment,
+        lessons,
+        builds_on,
+        open_problems,
+    )

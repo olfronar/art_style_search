@@ -16,6 +16,7 @@ import asyncio
 import concurrent.futures
 import logging
 import random
+import re
 from pathlib import Path
 
 import anthropic
@@ -36,9 +37,12 @@ from art_style_search.types import (
     ConvergenceReason,
     IterationResult,
     LoopState,
+    OpenProblem,
     PromptTemplate,
     StyleProfile,
+    classify_hypothesis,
     composite_score,
+    get_category_names,
 )
 
 logger = logging.getLogger(__name__)
@@ -280,6 +284,8 @@ async def _run_branch_iteration(
         hypothesis,
         experiment,
         lessons,
+        builds_on,
+        raw_open_problems,
     ) = await refine_template(
         style_profile,
         branch,
@@ -296,8 +302,94 @@ async def _run_branch_iteration(
     current_score = composite_score(aggregated)
     kept = branch.best_metrics is None or current_score > composite_score(branch.best_metrics)
 
-    # Build research log entry
+    # --- Knowledge Base maintenance ---
+
+    # Parse parent hypothesis ID from builds_on
+    parent_id: str | None = None
+    if builds_on:
+        parent_match = re.match(r"H(\d+)", builds_on)
+        if parent_match:
+            parent_id = f"H{parent_match.group(1)}"
+
+    # Classify hypothesis into a style category
+    category_names = get_category_names(branch.current_template)
+    category = classify_hypothesis(hypothesis, category_names) if hypothesis else "general"
+
+    # Compute metric deltas
     prev_metrics = branch.best_metrics or (branch.history[-1].aggregated if branch.history else None)
+    metric_delta: dict[str, float] = {}
+    if prev_metrics:
+        metric_delta = {
+            "dino": aggregated.dino_similarity_mean - prev_metrics.dino_similarity_mean,
+            "lpips": aggregated.lpips_distance_mean - prev_metrics.lpips_distance_mean,
+            "hps": aggregated.hps_score_mean - prev_metrics.hps_score_mean,
+            "aesthetics": aggregated.aesthetics_score_mean - prev_metrics.aesthetics_score_mean,
+        }
+
+    # Build lesson text from the most relevant signal
+    lesson_text = lessons.confirmed or lessons.new_insight or lessons.rejected or ""
+
+    # Add hypothesis to knowledge base
+    if hypothesis:
+        branch.knowledge_base.add_hypothesis(
+            iteration=iteration,
+            parent_id=parent_id,
+            statement=hypothesis,
+            experiment=experiment,
+            category=category,
+            kept=kept,
+            metric_delta=metric_delta,
+            lesson=lesson_text,
+            confirmed=lessons.confirmed,
+            rejected=lessons.rejected,
+        )
+
+    # Update open problems — Claude proposes, code validates with priority
+    if raw_open_problems:
+        # Compute per-category mean DINO for priority assignment
+        cat_dinos: dict[str, list[float]] = {}
+        for sc in scores:
+            cat_dinos.setdefault("all", []).append(sc.dino_similarity)
+        best_cat_dino = max((sum(v) / len(v) for v in cat_dinos.values()), default=0.0)
+
+        # Track which problems persist from previous iteration
+        prev_problem_texts = {p.text: p.since_iteration for p in branch.knowledge_base.open_problems}
+
+        new_problems: list[OpenProblem] = []
+        for prob_text in raw_open_problems:
+            prob_cat = classify_hypothesis(prob_text, category_names)
+            cat_progress = branch.knowledge_base.categories.get(prob_cat)
+
+            # Assign priority based on category state
+            if cat_progress is None or not cat_progress.confirmed_insights:
+                priority = "HIGH"
+            elif cat_progress.rejected_approaches and len(cat_progress.rejected_approaches) >= len(
+                cat_progress.confirmed_insights
+            ):
+                priority = "MED"
+            else:
+                priority = "LOW"
+
+            # Compute metric gap
+            gap = best_cat_dino - (
+                cat_progress.best_dino_delta if cat_progress and cat_progress.best_dino_delta else 0.0
+            )
+
+            # Preserve since_iteration for persistent problems
+            since = prev_problem_texts.get(prob_text, iteration)
+
+            new_problems.append(
+                OpenProblem(
+                    text=prob_text,
+                    category=prob_cat,
+                    priority=priority,
+                    metric_gap=gap,
+                    since_iteration=since,
+                )
+            )
+        branch.knowledge_base.open_problems = new_problems
+
+    # Legacy research_log for backward compat (not shown to Claude)
     log_entry = f"\n## Iteration {iteration}"
     if hypothesis:
         log_entry += f"\nHypothesis: {hypothesis}"
