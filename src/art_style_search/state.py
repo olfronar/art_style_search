@@ -129,7 +129,11 @@ def _iteration_result_from_dict(d: dict[str, Any]) -> IterationResult:
         claude_analysis=d["claude_analysis"],
         template_changes=d["template_changes"],
         kept=d["kept"],
+        hypothesis=d.get("hypothesis", ""),
+        experiment=d.get("experiment", ""),
         vision_feedback=d.get("vision_feedback", ""),
+        roundtrip_feedback=d.get("roundtrip_feedback", ""),
+        iteration_captions=[_caption_from_dict(c) for c in d.get("iteration_captions", [])],
     )
 
 
@@ -140,6 +144,7 @@ def _branch_state_from_dict(d: dict[str, Any]) -> BranchState:
         best_template=_prompt_template_from_dict(d["best_template"]),
         best_metrics=_aggregated_metrics_from_dict(d["best_metrics"]) if d.get("best_metrics") is not None else None,
         history=[_iteration_result_from_dict(h) for h in d.get("history", [])],
+        research_log=d.get("research_log", ""),
         plateau_counter=d.get("plateau_counter", 0),
         stopped=d.get("stopped", False),
         stop_reason=ConvergenceReason(d["stop_reason"]) if d.get("stop_reason") is not None else None,
@@ -152,6 +157,7 @@ def _loop_state_from_dict(d: dict[str, Any]) -> LoopState:
         branches=[_branch_state_from_dict(b) for b in d["branches"]],
         captions=[_caption_from_dict(c) for c in d["captions"]],
         style_profile=_style_profile_from_dict(d["style_profile"]),
+        fixed_references=[Path(p) for p in d.get("fixed_references", [])],
         global_best_prompt=d.get("global_best_prompt", ""),
         global_best_metrics=(
             _aggregated_metrics_from_dict(d["global_best_metrics"])

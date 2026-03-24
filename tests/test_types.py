@@ -109,7 +109,7 @@ class TestPromptTemplateRender:
             ],
             negative_prompt="blurry, low quality",
         )
-        assert t.render() == "oil painting Avoid: blurry, low quality"
+        assert t.render() == "oil painting Do NOT include: blurry, low quality"
 
     def test_empty_sections(self) -> None:
         t = PromptTemplate(sections=[])
@@ -117,7 +117,7 @@ class TestPromptTemplateRender:
 
     def test_empty_template_with_negative_prompt(self) -> None:
         t = PromptTemplate(sections=[], negative_prompt="noise")
-        assert t.render() == "Avoid: noise"
+        assert t.render() == "Do NOT include: noise"
 
     def test_sections_with_empty_values_are_skipped(self) -> None:
         t = PromptTemplate(

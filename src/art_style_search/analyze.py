@@ -18,47 +18,70 @@ logger = logging.getLogger(__name__)
 
 _ANALYSIS_SYSTEM = (
     "You are an expert art analyst and prompt engineer. "
-    "Your goal is to deeply understand an art style from reference images so it can be reproduced via text-to-image generation."
+    "Your goal is to deeply understand an art style from reference images so it can be reproduced "
+    "via text-to-image generation. Your analysis will directly feed into crafting generation prompts, "
+    "so prioritize elements that are controllable via text prompts (color descriptions, technique keywords, "
+    "mood descriptors) over elements that are hard to specify textually (exact spatial layouts, precise proportions)."
 )
 
 _GEMINI_ANALYSIS_PROMPT = (
     "Analyze the art style across ALL the provided reference images. "
-    "Focus on what makes this style UNIQUE and REPRODUCIBLE. Cover:\n"
-    "1. **Color palette**: Dominant colors, relationships, temperature, saturation patterns.\n"
-    "2. **Composition**: Recurring layout patterns, use of space, perspective, framing conventions.\n"
-    "3. **Technique**: Medium, brushwork/rendering style, level of detail, abstraction level.\n"
-    "4. **Mood & atmosphere**: Emotional tone, lighting patterns, sense of time/place.\n"
-    "5. **Subject matter**: Common themes, recurring elements, how subjects are treated.\n"
-    "6. **Influences**: Art movements, historical periods, or artists this style evokes.\n\n"
-    "Be specific and concrete. Identify patterns that appear across MULTIPLE images, not just one. "
-    "This analysis will be used to craft a text prompt that reproduces this exact style."
+    "You are the VISUAL specialist — focus on concrete visual specifics that you can see directly:\n\n"
+    "1. **Exact colors**: Name specific colors (e.g. 'burnt sienna', 'cadmium yellow'), dominant palette, "
+    "color temperature, saturation levels, gradient patterns.\n"
+    "2. **Rendering technique**: Visible brushstrokes or rendering artifacts, line quality, edge treatment, "
+    "level of detail vs abstraction, texture of the medium.\n"
+    "3. **Spatial composition**: How elements are arranged, recurring framing patterns, use of negative space, "
+    "depth and perspective conventions.\n"
+    "4. **Light and color relationships**: How light behaves, shadow treatment, color harmonies, "
+    "contrast levels, atmospheric effects.\n"
+    "5. **Surface textures**: Visual texture patterns, how materials are rendered, grain or noise characteristics.\n"
+    "6. **Distinctive visual signatures**: Anything visually unique that would distinguish this style — "
+    "unusual color combinations, characteristic marks, recurring visual motifs.\n\n"
+    "Be extremely specific about what you SEE. Use precise color names, describe exact visual qualities. "
+    "Identify patterns across MULTIPLE images. This feeds into crafting a text-to-image prompt."
 )
 
 _CLAUDE_ANALYSIS_PROMPT = (
     "Below are detailed text descriptions of reference images that share a common art style. "
-    "Analyze these descriptions to identify the DEFINING characteristics of the style.\n\n"
+    "You are the REASONING specialist — focus on abstract patterns, underlying principles, and stylistic rules.\n\n"
     "{captions}\n\n"
-    "Focus on what makes this style UNIQUE and REPRODUCIBLE. Cover:\n"
-    "1. **Color palette**: Dominant colors, relationships, temperature, saturation patterns.\n"
-    "2. **Composition**: Recurring layout patterns, use of space, perspective, framing conventions.\n"
-    "3. **Technique**: Medium, brushwork/rendering style, level of detail, abstraction level.\n"
-    "4. **Mood & atmosphere**: Emotional tone, lighting patterns, sense of time/place.\n"
-    "5. **Subject matter**: Common themes, recurring elements, how subjects are treated.\n"
-    "6. **Influences**: Art movements, historical periods, or artists this style evokes.\n\n"
-    "Be specific and concrete. Identify patterns that appear across MULTIPLE descriptions, not just one. "
-    "This analysis will be used to craft a text prompt that reproduces this exact style."
+    "Analyze the descriptions to identify:\n"
+    "1. **Stylistic rules**: What consistent principles govern this style? What would an artist following "
+    "this style always do or never do?\n"
+    "2. **Technique classification**: What medium, art movement, or historical period does this most closely "
+    "resemble? What specific techniques define it?\n"
+    "3. **Mood and emotional logic**: What emotional tone unifies the works? How do color/composition choices "
+    "serve the mood?\n"
+    "4. **What makes it distinctive**: How would you distinguish this from similar styles? What's the 'signature'?\n"
+    "5. **Prompt-critical elements**: Which aspects are most important to specify in a text-to-image prompt "
+    "to reproduce this style? Rank by importance.\n"
+    "6. **Common pitfalls**: What would a generic AI image generator likely get WRONG about this style "
+    "without specific guidance?\n\n"
+    "Focus on insights that help write better generation prompts. Identify cross-image patterns, not one-offs. "
+    "Think about what text descriptions would be most effective at reproducing this style."
 )
 
 _COMPILATION_PROMPT = (
     "You received two independent analyses of the same set of reference images.\n\n"
     "## Analysis from visual model (Gemini — saw the actual images):\n{gemini_analysis}\n\n"
-    "## Analysis from text model (Claude — read detailed captions):\n{claude_analysis}\n\n"
+    "## Analysis from reasoning model (Claude — read detailed captions):\n{claude_analysis}\n\n"
     "Synthesize BOTH analyses into:\n"
     "1. A structured **StyleProfile** with 6 sections.\n"
     "2. An initial **PromptTemplate** — a set of prompt sections that, when concatenated, "
-    "would instruct an image generation model to reproduce this style.\n\n"
-    "The prompt template should have 3-6 sections, each with a short name, a description of what the section controls, "
-    "and the actual prompt text as its value. Also include a negative prompt of things to avoid.\n\n"
+    "would instruct Gemini Flash (an image generation model) to reproduce this style.\n\n"
+    "Where the two analyses disagree, prefer the visual model's observations for concrete visual details "
+    "(colors, textures) and the reasoning model's insights for abstract principles (style rules, mood logic).\n\n"
+    "**Prompt engineering guidance for Gemini Flash:**\n"
+    "- Use specific, descriptive language — concrete color names, technique terms, art-movement references.\n"
+    "- Front-load the most distinctive style elements.\n"
+    "- Create a COMPREHENSIVE template with 6-10 sections covering ALL visual aspects.\n"
+    "- Each section value should be detailed (2-4 sentences).\n"
+    "- The negative prompt should target common failure modes the reasoning model identified.\n\n"
+    "The prompt template should have 6-10 sections covering: technique/medium, color palette, composition, "
+    "character/figure treatment, background/environment, details/textures, lighting, mood/atmosphere. "
+    "Each section should have a short name, a description of what it controls, "
+    "and detailed prompt text as its value. Include a thorough negative prompt.\n\n"
     "Respond in EXACTLY this XML format (no markdown fences, no extra text outside the XML):\n"
     "<style_profile>\n"
     "  <color_palette>detailed description of the color palette</color_palette>\n"
@@ -69,9 +92,23 @@ _COMPILATION_PROMPT = (
     "  <influences>detailed description of influences</influences>\n"
     "</style_profile>\n"
     "<initial_template>\n"
-    '  <section name="section_name" description="what this section controls">prompt text for this section</section>\n'
-    '  <section name="another_section" description="what this controls">prompt text</section>\n'
-    "  <negative>things to avoid in generation</negative>\n"
+    '  <section name="medium_and_technique" description="art medium, rendering style, brushwork">'
+    "detailed technique description (2-4 sentences)</section>\n"
+    '  <section name="color_palette" description="dominant colors and color relationships">'
+    "detailed color description (2-4 sentences)</section>\n"
+    '  <section name="composition" description="layout, framing, spatial arrangement">'
+    "detailed composition description</section>\n"
+    '  <section name="characters" description="how figures and characters are rendered">'
+    "detailed character treatment</section>\n"
+    '  <section name="background" description="environment and setting treatment">'
+    "detailed background description</section>\n"
+    '  <section name="details" description="textures, patterns, fine elements">'
+    "detailed texture and detail description</section>\n"
+    '  <section name="lighting" description="light source, quality, shadows">'
+    "detailed lighting description</section>\n"
+    '  <section name="mood" description="emotional tone, atmosphere">'
+    "detailed mood description</section>\n"
+    "  <negative>thorough list of things to avoid in generation</negative>\n"
     "</initial_template>"
 )
 

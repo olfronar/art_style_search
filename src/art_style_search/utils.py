@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import anthropic
 from anthropic.types import Message
 from google.genai import types as genai_types
+
+logger = logging.getLogger(__name__)
+
+_STREAM_MAX_RETRIES = 3
+_STREAM_BASE_DELAY = 5.0
 
 MIME_MAP: dict[str, str] = {
     ".png": "image/png",
@@ -33,6 +39,42 @@ def extract_text(response: Message) -> str:
 
 
 async def stream_message(client: anthropic.AsyncAnthropic, **kwargs: object) -> Message:
-    """Call messages.create with streaming and return the final Message."""
-    async with client.messages.stream(**kwargs) as stream:
-        return await stream.get_final_message()
+    """Call messages.create with streaming and return the final Message.
+
+    Retries on transient connection errors (dropped connections, incomplete reads).
+    """
+    import asyncio
+
+    last_exc: Exception | None = None
+    for attempt in range(_STREAM_MAX_RETRIES):
+        try:
+            async with client.messages.stream(**kwargs) as stream:
+                return await stream.get_final_message()
+        except (anthropic.APIConnectionError, anthropic.APITimeoutError) as exc:
+            last_exc = exc
+            delay = _STREAM_BASE_DELAY * (2**attempt)
+            logger.warning(
+                "Claude stream attempt %d/%d failed: %s — retrying in %.0fs",
+                attempt + 1,
+                _STREAM_MAX_RETRIES,
+                exc,
+                delay,
+            )
+            await asyncio.sleep(delay)
+        except Exception as exc:
+            if "incomplete chunked read" in str(exc) or "peer closed connection" in str(exc):
+                last_exc = exc
+                delay = _STREAM_BASE_DELAY * (2**attempt)
+                logger.warning(
+                    "Claude stream attempt %d/%d failed: %s — retrying in %.0fs",
+                    attempt + 1,
+                    _STREAM_MAX_RETRIES,
+                    exc,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+            else:
+                raise
+
+    msg = f"Claude stream failed after {_STREAM_MAX_RETRIES} retries"
+    raise RuntimeError(msg) from last_exc

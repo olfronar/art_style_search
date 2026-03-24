@@ -158,7 +158,7 @@ class TestDefaults:
         assert cfg.plateau_window == 5
 
     def test_num_branches(self, cfg: Config) -> None:
-        assert cfg.num_branches == 3
+        assert cfg.num_branches == 5
 
     def test_num_images(self, cfg: Config) -> None:
         assert cfg.num_images == 4
@@ -173,16 +173,16 @@ class TestDefaults:
         assert cfg.max_eval_images == 10
 
     def test_caption_model(self, cfg: Config) -> None:
-        assert cfg.caption_model == "gemini-2.5-pro-preview-06-05"
+        assert cfg.caption_model == "gemini-3.1-pro-preview"
 
     def test_generator_model(self, cfg: Config) -> None:
-        assert cfg.generator_model == "gemini-2.0-flash-preview-image-generation"
+        assert cfg.generator_model == "gemini-3.1-flash-image-preview"
 
     def test_claude_model(self, cfg: Config) -> None:
-        assert cfg.claude_model == "claude-sonnet-4-20250514"
+        assert cfg.claude_model == "claude-opus-4-6"
 
     def test_gemini_concurrency(self, cfg: Config) -> None:
-        assert cfg.gemini_concurrency == 5
+        assert cfg.gemini_concurrency == 50
 
     def test_eval_concurrency(self, cfg: Config) -> None:
         assert cfg.eval_concurrency == 4

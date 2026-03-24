@@ -18,47 +18,181 @@ logger = logging.getLogger(__name__)
 
 _VISION_COMPARE_PROMPT = (
     "You are an expert art analyst. You are shown reference images (the target art style) "
-    "and generated images (attempts to reproduce that style).\n\n"
-    "Compare the generated images against the reference images and describe:\n"
-    "1. **Style differences**: Color palette, brushwork/technique, level of detail, abstraction level\n"
-    "2. **Composition differences**: Layout, spacing, framing, perspective\n"
-    "3. **Mood/atmosphere differences**: Lighting, emotional tone, energy\n"
-    "4. **What's working well**: Aspects the generated images capture correctly\n"
-    "5. **Specific improvements needed**: Concrete, actionable changes to make the generated images "
-    "match the reference style more closely\n\n"
-    "Be precise and specific. Focus on art style reproduction, not subject matter."
+    "and generated images (attempts to reproduce that style using the prompt below).\n\n"
+    "The generation prompt was:\n{rendered_prompt}\n\n"
+    "Compare the generated images against the reference images. "
+    "Focus on art STYLE reproduction, not subject matter. "
+    "Respond in this structured format:\n\n"
+    "<matched>List aspects the generated images capture correctly from the reference style</matched>\n"
+    "<gaps>\n"
+    '<gap priority="high">Most critical style difference — what\'s most wrong</gap>\n'
+    '<gap priority="high">Second most critical difference</gap>\n'
+    '<gap priority="medium">Notable but less critical difference</gap>\n'
+    "</gaps>\n"
+    "<prompt_issues>Which parts of the generation prompt are working, which are being ignored, "
+    "and what specific wording changes would fix the gaps above</prompt_issues>"
 )
 
 
 async def compare_vision(
-    generated_paths: list[Path],
-    reference_paths: list[Path],
+    pairs: list[tuple[Path, Path]],
+    rendered_prompt: str,
     *,
     client: genai.Client,
     model: str,
     semaphore: asyncio.Semaphore,
-    max_images: int = 3,
+    max_pairs: int = 5,
 ) -> str:
-    """Use Gemini vision to compare generated vs reference images and describe differences."""
-    # Sample a subset to keep the request manageable
-    gen_sample = random.sample(generated_paths, min(max_images, len(generated_paths)))
-    ref_sample = random.sample(reference_paths, min(max_images, len(reference_paths)))
+    """Compare (original, generated) pairs via Gemini vision.
+
+    Shows up to *max_pairs* pairs, deterministically picking the first N.
+    Pairs should be pre-sorted worst-first for best feedback quality.
+    """
+    show_pairs = pairs[:max_pairs]
 
     contents: list[object] = []
+    for i, (ref_path, gen_path) in enumerate(show_pairs):
+        contents.append(f"\n## Pair {i + 1} — {ref_path.name}:\n### ORIGINAL:")
+        contents.append(image_to_gemini_part(ref_path))
+        contents.append("### GENERATED (from caption):")
+        contents.append(image_to_gemini_part(gen_path))
 
-    contents.append("## Reference images (target style):\n")
-    for path in ref_sample:
-        contents.append(image_to_gemini_part(path))
-
-    contents.append("\n## Generated images (to evaluate):\n")
-    for path in gen_sample:
-        contents.append(image_to_gemini_part(path))
-
-    contents.append(f"\n{_VISION_COMPARE_PROMPT}")
+    contents.append(f"\n{_VISION_COMPARE_PROMPT.format(rendered_prompt=rendered_prompt)}")
 
     async with semaphore:
         response = await client.aio.models.generate_content(
             model=model,
+            contents=contents,
+        )
+
+    return response.text
+
+
+def check_caption_compliance(
+    section_names: list[str],
+    captions: object,
+) -> str:
+    """Check whether captions address the topics from the meta-prompt sections.
+
+    Returns a summary of which sections are well-covered vs missed.
+    """
+    from art_style_search.types import Caption
+
+    typed = [c for c in captions if isinstance(c, Caption)]
+    if not typed or not section_names:
+        return ""
+
+    # Simple keyword presence check per section
+    section_hits: dict[str, int] = {name: 0 for name in section_names}
+    for caption in typed:
+        text_lower = caption.text.lower()
+        for name in section_names:
+            # Check if section topic keywords appear in caption
+            keywords = name.replace("_", " ").split()
+            if any(kw in text_lower for kw in keywords):
+                section_hits[name] += 1
+
+    total = len(typed)
+    lines: list[str] = []
+    for name, hits in section_hits.items():
+        pct = hits / total * 100
+        status = "OK" if pct >= 70 else "WEAK" if pct >= 30 else "MISSING"
+        lines.append(f"  {name}: {status} ({hits}/{total} captions address this)")
+
+    return "Caption compliance with meta-prompt sections:\n" + "\n".join(lines)
+
+
+_ROUNDTRIP_COMPARE_PROMPT = (
+    "You are an expert art analyst. For each pair below, the ORIGINAL is a reference artwork "
+    "and the GENERATED image was created from a text caption of that original.\n\n"
+    "For each pair, describe:\n"
+    "<pair>\n"
+    "<captured>What aspects of the original the generated image reproduces well</captured>\n"
+    "<lost>What aspects were lost or changed — focus on style, color, technique, mood, details</lost>\n"
+    "<caption_gap>What the caption likely failed to describe that would be needed to reproduce the original</caption_gap>\n"
+    "</pair>\n\n"
+    "After all pairs, provide:\n"
+    "<summary>Overall patterns: what do captions consistently miss? "
+    "What style elements are hardest to capture in text? "
+    "What specific descriptors should be added to prompts to close these gaps?</summary>"
+)
+
+
+async def caption_roundtrip_test(
+    reference_paths: list[Path],
+    captions: list[object],
+    *,
+    gemini_client: object,
+    caption_model: str,
+    generator_model: str,
+    gen_semaphore: asyncio.Semaphore,
+    output_dir: Path,
+    iteration: int,
+    aspect_ratio: str,
+    num_test_images: int = 4,
+) -> str:
+    """Generate images from reference captions and compare with originals via Gemini vision.
+
+    Picks *num_test_images* reference images, generates an image from each caption,
+    then asks Gemini to compare original vs generated to identify what captions miss.
+    """
+    from art_style_search.generate import _generate_single
+    from art_style_search.types import Caption
+
+    typed_captions: list[Caption] = [c for c in captions if isinstance(c, Caption)]
+
+    # Match captions to paths
+    caption_by_path = {c.image_path: c for c in typed_captions}
+    available = [p for p in reference_paths if p in caption_by_path]
+    if not available:
+        return ""
+
+    sample = random.sample(available, min(num_test_images, len(available)))
+
+    # Generate images from captions
+    roundtrip_dir = output_dir / f"iter_{iteration:03d}" / "roundtrip"
+    roundtrip_dir.mkdir(parents=True, exist_ok=True)
+
+    gen_tasks = []
+    for i, ref_path in enumerate(sample):
+        caption_text = caption_by_path[ref_path].text
+        gen_tasks.append(
+            _generate_single(
+                caption_text,
+                index=i,
+                aspect_ratio=aspect_ratio,
+                output_path=roundtrip_dir / f"rt_{i:02d}.png",
+                client=gemini_client,
+                model=generator_model,
+                semaphore=gen_semaphore,
+            )
+        )
+
+    gen_results = await asyncio.gather(*gen_tasks, return_exceptions=True)
+
+    # Build comparison contents for Gemini vision
+    pairs: list[tuple[Path, Path]] = []
+    for i, (ref_path, gen_result) in enumerate(zip(sample, gen_results, strict=True)):
+        if isinstance(gen_result, BaseException):
+            logger.warning("Roundtrip generation %d failed: %s", i, gen_result)
+            continue
+        pairs.append((ref_path, gen_result))
+
+    if not pairs:
+        return ""
+
+    contents: list[object] = []
+    for i, (ref_path, gen_path) in enumerate(pairs):
+        contents.append(f"\n## Pair {i + 1}:\n### ORIGINAL:")
+        contents.append(image_to_gemini_part(ref_path))
+        contents.append("### GENERATED (from caption):")
+        contents.append(image_to_gemini_part(gen_path))
+
+    contents.append(f"\n{_ROUNDTRIP_COMPARE_PROMPT}")
+
+    async with gen_semaphore:
+        response = await gemini_client.aio.models.generate_content(
+            model=caption_model,
             contents=contents,
         )
 

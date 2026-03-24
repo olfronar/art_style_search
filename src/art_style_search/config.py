@@ -69,7 +69,7 @@ def parse_args(argv: list[str] | None = None) -> Config:
     loop.add_argument(
         "--plateau-window", type=int, default=5, help="Iterations without improvement before branch stops"
     )
-    loop.add_argument("--num-branches", type=int, default=3, help="Number of parallel population branches")
+    loop.add_argument("--num-branches", type=int, default=5, help="Number of parallel population branches")
 
     # Generation
     gen = parser.add_argument_group("Generation")
@@ -93,7 +93,7 @@ def parse_args(argv: list[str] | None = None) -> Config:
 
     # Concurrency
     conc = parser.add_argument_group("Concurrency")
-    conc.add_argument("--gemini-concurrency", type=int, default=5, help="Max concurrent Gemini API calls")
+    conc.add_argument("--gemini-concurrency", type=int, default=50, help="Max concurrent Gemini API calls")
     conc.add_argument("--eval-concurrency", type=int, default=4, help="Max concurrent eval threads")
 
     # API keys

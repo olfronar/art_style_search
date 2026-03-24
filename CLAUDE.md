@@ -4,22 +4,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Self-improving loop that finds the optimal prompt to define and reproduce an art style from reference images. Inspired by karpathy/autoresearch.
+Self-improving loop that optimizes a meta-prompt for precise image recreation. The meta-prompt instructs a captioner (Gemini Pro) how to describe images so a generator (Gemini Flash) can recreate them from the captions. Inspired by karpathy/autoresearch.
 
 ## Architecture
 
-- **Claude (Anthropic)**: Brain/analyzer. Evaluates metrics, reasons about style, proposes prompt improvements.
-- **Gemini 3.1 Pro Preview**: Captioner. Describes reference images in detail (superior vision).
-- **Gemini 3.1 Flash Image Preview**: Generator. Produces images from style prompts.
+- **Claude (Anthropic)**: Brain/optimizer. Analyzes reproduction quality, refines the meta-prompt.
+- **Gemini 3.1 Pro Preview**: Captioner. Describes reference images using the meta-prompt instructions.
+- **Gemini 3.1 Flash Image Preview**: Generator. Produces images from per-image captions.
 
 ## Loop Flow
 
-0. **Zero-step**: Caption reference images (cached), then run Gemini (vision) and Claude (reasoning) analyses in parallel. Claude compiles both into a structured `StyleProfile` + initial `PromptTemplate`.
-1. Claude proposes/refines prompt templates (meta-prompt: structure + values evolve independently)
-2. Gemini Flash generates images from the rendered template
-3. Evaluate generated vs reference images (DINO, LPIPS, HPS, aesthetics)
-4. Claude analyzes results, decides to keep/discard, proposes next iteration
-5. Cross-pollinate: share global best template across population branches
+0. **Zero-step**: Fix 10 reference images. Caption them, analyze style → `StyleProfile` + initial meta-prompt (`PromptTemplate`).
+1. Meta-prompt + each reference image → Gemini Pro generates per-image captions
+2. Each caption → Gemini Flash generates an image
+3. Compare each (original, generated) pair: metrics (DINO, LPIPS, HPS, aesthetics) + Gemini vision comparison
+4. Claude analyzes per-image gaps + metrics, refines the meta-prompt
+5. Cross-pollinate: share global best meta-prompt across population branches
 6. Repeat until convergence (max iterations / plateau / Claude stop)
 
 ## Commands

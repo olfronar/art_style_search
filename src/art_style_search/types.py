@@ -101,7 +101,7 @@ class PromptTemplate:
         """Combine all section values into the final image generation prompt."""
         parts = [s.value for s in self.sections if s.value]
         if self.negative_prompt:
-            parts.append(f"Avoid: {self.negative_prompt}")
+            parts.append(f"Do NOT include: {self.negative_prompt}")
         return " ".join(parts)
 
 
@@ -125,7 +125,11 @@ class IterationResult:
     claude_analysis: str
     template_changes: str
     kept: bool
+    hypothesis: str = ""
+    experiment: str = ""
     vision_feedback: str = ""
+    roundtrip_feedback: str = ""
+    iteration_captions: list[Caption] = field(default_factory=list)
 
 
 @dataclass
@@ -137,6 +141,7 @@ class BranchState:
     best_template: PromptTemplate
     best_metrics: AggregatedMetrics | None = None
     history: list[IterationResult] = field(default_factory=list)
+    research_log: str = ""
     plateau_counter: int = 0
     stopped: bool = False
     stop_reason: ConvergenceReason | None = None
@@ -150,6 +155,7 @@ class LoopState:
     branches: list[BranchState]
     captions: list[Caption]
     style_profile: StyleProfile
+    fixed_references: list[Path] = field(default_factory=list)
     global_best_prompt: str = ""
     global_best_metrics: AggregatedMetrics | None = None
     converged: bool = False
