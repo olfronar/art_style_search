@@ -29,7 +29,7 @@ from art_style_search.config import Config
 from art_style_search.evaluate import check_caption_compliance, compare_vision, evaluate_images
 from art_style_search.generate import _generate_single
 from art_style_search.models import ModelRegistry
-from art_style_search.prompt import Lessons, propose_initial_templates, refine_template
+from art_style_search.prompt import Lessons, propose_initial_templates, refine_template, synthesize_templates
 from art_style_search.state import load_state, save_iteration_log, save_state
 from art_style_search.types import (
     AggregatedMetrics,
@@ -81,7 +81,7 @@ def _collect_experiment_results(raw: list[IterationResult | BaseException], labe
     results: list[IterationResult] = []
     for r in raw:
         if isinstance(r, BaseException):
-            logger.error("%s failed: %s", label, r)
+            logger.error("%s failed: %s: %s", label, type(r).__name__, r, exc_info=r)
         else:
             results.append(r)
     return results
@@ -642,10 +642,52 @@ async def run(config: Config) -> LoopState:
                 break
             continue
 
-        # Phase 3: Find best experiment and update state
+        # Phase 3: Find best experiment
         best_exp = max(exp_results, key=lambda r: composite_score(r.aggregated))
         best_score = composite_score(best_exp.aggregated)
-        improved = state.best_metrics is None or best_score > composite_score(state.best_metrics)
+        baseline_score = composite_score(state.best_metrics) if state.best_metrics else float("-inf")
+
+        # Phase 3.5: Synthesis — merge top experiments if multiple improved
+        improved_exps = [r for r in exp_results if composite_score(r.aggregated) > baseline_score]
+        if len(improved_exps) >= 2:
+            logger.info("Synthesizing %d improved experiments into merged template", len(improved_exps))
+            # Sort by score descending, take top 3
+            improved_exps.sort(key=lambda r: composite_score(r.aggregated), reverse=True)
+            top_exps = improved_exps[:3]
+
+            merged_template, merged_hypothesis = await synthesize_templates(
+                top_exps,
+                state.style_profile,
+                client=anthropic_client,
+                model=config.claude_model,
+            )
+
+            # Validate the merged template
+            merged_result = await _run_experiment(
+                experiment_id=len(exp_results),
+                template=merged_template,
+                iteration=iteration,
+                fixed_refs=fixed_refs,
+                last_results=state.last_iteration_results,
+                hypothesis=merged_hypothesis,
+                experiment_desc="Synthesis of top experiments",
+                **exp_kwargs,
+            )
+            merged_score = composite_score(merged_result.aggregated)
+            logger.info(
+                "Synthesis result: DINO=%.4f (best individual: %.4f)",
+                merged_result.aggregated.dino_similarity_mean,
+                best_exp.aggregated.dino_similarity_mean,
+            )
+
+            exp_results.append(merged_result)
+            if merged_score > best_score:
+                best_exp = merged_result
+                best_score = merged_score
+                logger.info("Synthesis beat best individual — adopting merged template")
+
+        # Update state with best result
+        improved = best_score > baseline_score
 
         if improved:
             _apply_best_result(state, best_exp)

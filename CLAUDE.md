@@ -29,7 +29,8 @@ uv run ruff check .                      # Lint
 uv run ruff format .                     # Format
 uv run pytest tests/                     # Run tests
 uv run python -m art_style_search        # Run the optimization loop
-uv run python -m art_style_search --help # Show all CLI options
+uv run python -m art_style_search --help  # Show all CLI options
+uv run python -m art_style_search clean  # Remove outputs, logs, and state
 ```
 
 ## Environment Variables
@@ -56,7 +57,7 @@ uv run python -m art_style_search --help # Show all CLI options
 
 - `src/art_style_search/` - All source code
 - `reference_images/` - User-provided reference art (not committed)
-- `outputs/` - Generated images by iteration/branch (not committed)
+- `outputs/` - Generated images by iteration/experiment (not committed)
 - `logs/` - Iteration logs, captions cache, style profile (not committed)
 - `state.json` - Resume state (not committed)
 
