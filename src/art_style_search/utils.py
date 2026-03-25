@@ -62,12 +62,15 @@ async def stream_message(client: anthropic.AsyncAnthropic, **kwargs: object) -> 
             )
             await asyncio.sleep(delay)
         except Exception as exc:
+            exc_name = type(exc).__name__.lower()
             exc_str = str(exc).lower()
             is_transient = (
                 "incomplete chunked read" in exc_str
                 or "peer closed connection" in exc_str
-                or "readtimeout" in type(exc).__name__.lower()
-                or "read timed out" in exc_str
+                or "readerror" in exc_name
+                or "readtimeout" in exc_name
+                or "remotedisconnected" in exc_name
+                or "connectionerror" in exc_name
             )
             if is_transient:
                 last_exc = exc
