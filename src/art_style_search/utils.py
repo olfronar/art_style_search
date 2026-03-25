@@ -62,13 +62,21 @@ async def stream_message(client: anthropic.AsyncAnthropic, **kwargs: object) -> 
             )
             await asyncio.sleep(delay)
         except Exception as exc:
-            if "incomplete chunked read" in str(exc) or "peer closed connection" in str(exc):
+            exc_str = str(exc).lower()
+            is_transient = (
+                "incomplete chunked read" in exc_str
+                or "peer closed connection" in exc_str
+                or "readtimeout" in type(exc).__name__.lower()
+                or "read timed out" in exc_str
+            )
+            if is_transient:
                 last_exc = exc
                 delay = _STREAM_BASE_DELAY * (2**attempt)
                 logger.warning(
-                    "Claude stream attempt %d/%d failed: %s — retrying in %.0fs",
+                    "Claude stream attempt %d/%d failed: %s: %s — retrying in %.0fs",
                     attempt + 1,
                     _STREAM_MAX_RETRIES,
+                    type(exc).__name__,
                     exc,
                     delay,
                 )

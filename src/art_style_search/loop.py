@@ -432,7 +432,10 @@ async def run(config: Config) -> LoopState:
     loop.set_default_executor(concurrent.futures.ThreadPoolExecutor(max_workers=config.eval_concurrency))
 
     gemini_client = genai.Client(api_key=config.google_api_key)
-    anthropic_client = anthropic.AsyncAnthropic(api_key=config.anthropic_api_key)
+    anthropic_client = anthropic.AsyncAnthropic(
+        api_key=config.anthropic_api_key,
+        timeout=anthropic.Timeout(600.0, connect=30.0),
+    )
 
     gemini_semaphore = asyncio.Semaphore(config.gemini_concurrency)
     eval_semaphore = asyncio.Semaphore(config.eval_concurrency)
