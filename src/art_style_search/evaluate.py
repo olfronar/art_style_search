@@ -71,13 +71,29 @@ async def compare_vision(
 
     contents.append(f"\n{_VISION_COMPARE_PROMPT.format(rendered_prompt=rendered_prompt)}")
 
-    async with semaphore:
-        response = await client.aio.models.generate_content(
-            model=model,
-            contents=contents,
-        )
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            async with semaphore:
+                response = await client.aio.models.generate_content(
+                    model=model,
+                    contents=contents,
+                )
+            return response.text
+        except Exception as exc:
+            last_exc = exc
+            delay = 3.0 * (2**attempt)
+            logger.warning(
+                "Vision comparison attempt %d/3 failed: %s: %s — retrying in %.0fs",
+                attempt + 1,
+                type(exc).__name__,
+                exc,
+                delay,
+            )
+            await asyncio.sleep(delay)
 
-    return response.text
+    msg = "Vision comparison failed after 3 retries"
+    raise RuntimeError(msg) from last_exc
 
 
 def check_caption_compliance(

@@ -59,17 +59,38 @@ async def _caption_single(
             except (json.JSONDecodeError, KeyError):
                 logger.warning("Corrupt cache file %s, will re-caption", cache_file)
 
-    # Cache miss — call Gemini
+    # Cache miss — call Gemini with retry on transient errors
     logger.info("Captioning %s via %s", image_path.name, model)
 
-    async with semaphore:
-        response = await client.aio.models.generate_content(
-            model=model,
-            contents=[
-                image_to_gemini_part(image_path),
-                prompt,
-            ],
-        )
+    import asyncio as _asyncio
+
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            async with semaphore:
+                response = await client.aio.models.generate_content(
+                    model=model,
+                    contents=[
+                        image_to_gemini_part(image_path),
+                        prompt,
+                    ],
+                )
+            break
+        except Exception as exc:
+            last_exc = exc
+            delay = 3.0 * (2**attempt)
+            logger.warning(
+                "Caption %s attempt %d/3 failed: %s: %s — retrying in %.0fs",
+                image_path.name,
+                attempt + 1,
+                type(exc).__name__,
+                exc,
+                delay,
+            )
+            await _asyncio.sleep(delay)
+    else:
+        msg = f"Captioning {image_path.name} failed after 3 retries"
+        raise RuntimeError(msg) from last_exc
 
     caption_text = response.text
 
