@@ -8,11 +8,10 @@ import logging
 import re
 from pathlib import Path
 
-import anthropic
 from google import genai
 
 from art_style_search.types import Caption, PromptSection, PromptTemplate, StyleProfile
-from art_style_search.utils import extract_text, image_to_gemini_part, stream_message
+from art_style_search.utils import ReasoningClient, image_to_gemini_part
 
 logger = logging.getLogger(__name__)
 
@@ -188,48 +187,32 @@ async def _gemini_analyze(
 async def _claude_analyze(
     captions: list[Caption],
     *,
-    client: anthropic.AsyncAnthropic,
+    client: ReasoningClient,
     model: str,
 ) -> str:
-    """Send all captions to Claude and get a style analysis."""
+    """Send all captions to the reasoning model for style analysis."""
     captions_text = "\n\n---\n\n".join(f"**Image: {cap.image_path.name}**\n{cap.text}" for cap in captions)
-    prompt = _CLAUDE_ANALYSIS_PROMPT.format(captions=captions_text)
+    user = _CLAUDE_ANALYSIS_PROMPT.format(captions=captions_text)
 
-    logger.info("Sending %d captions to Claude (%s) for style analysis", len(captions), model)
-    response = await stream_message(
-        client,
-        model=model,
-        max_tokens=80000,
-        thinking={"type": "adaptive"},
-        system=_ANALYSIS_SYSTEM,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return extract_text(response)
+    logger.info("Sending %d captions to %s for style analysis", len(captions), model)
+    return await client.call(model=model, system=_ANALYSIS_SYSTEM, user=user, max_tokens=80000)
 
 
 async def _claude_compile(
     gemini_analysis: str,
     claude_analysis: str,
     *,
-    client: anthropic.AsyncAnthropic,
+    client: ReasoningClient,
     model: str,
 ) -> tuple[StyleProfile, PromptTemplate]:
     """Synthesize both analyses into a StyleProfile and PromptTemplate."""
-    prompt = _COMPILATION_PROMPT.format(
+    user = _COMPILATION_PROMPT.format(
         gemini_analysis=gemini_analysis,
         claude_analysis=claude_analysis,
     )
 
-    logger.info("Compiling style profile via Claude (%s)", model)
-    response = await stream_message(
-        client,
-        model=model,
-        max_tokens=80000,
-        thinking={"type": "adaptive"},
-        system=_ANALYSIS_SYSTEM,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    raw_text = extract_text(response)
+    logger.info("Compiling style profile via %s", model)
+    raw_text = await client.call(model=model, system=_ANALYSIS_SYSTEM, user=user, max_tokens=80000)
     return _parse_compilation(raw_text, gemini_raw=gemini_analysis, claude_raw=claude_analysis)
 
 
@@ -293,9 +276,9 @@ async def analyze_style(
     captions: list[Caption],
     *,
     gemini_client: genai.Client,
-    anthropic_client: anthropic.AsyncAnthropic,
+    reasoning_client: ReasoningClient,
     caption_model: str,
-    claude_model: str,
+    reasoning_model: str,
     cache_path: Path,
 ) -> tuple[StyleProfile, PromptTemplate]:
     """Perform zero-step style analysis: build a StyleProfile and initial PromptTemplate.
@@ -312,15 +295,15 @@ async def analyze_style(
     # Run both analyses in parallel
     gemini_result, claude_result = await asyncio.gather(
         _gemini_analyze(reference_paths, client=gemini_client, model=caption_model),
-        _claude_analyze(captions, client=anthropic_client, model=claude_model),
+        _claude_analyze(captions, client=reasoning_client, model=reasoning_model),
     )
 
     # Compile into structured output
     profile, template = await _claude_compile(
         gemini_result,
         claude_result,
-        client=anthropic_client,
-        model=claude_model,
+        client=reasoning_client,
+        model=reasoning_model,
     )
 
     # Cache to disk

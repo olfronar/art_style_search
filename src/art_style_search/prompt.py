@@ -11,8 +11,6 @@ import logging
 import re
 from dataclasses import dataclass
 
-import anthropic
-
 from art_style_search.types import (
     AggregatedMetrics,
     IterationResult,
@@ -21,7 +19,7 @@ from art_style_search.types import (
     PromptTemplate,
     StyleProfile,
 )
-from art_style_search.utils import extract_text, stream_message
+from art_style_search.utils import ReasoningClient
 
 logger = logging.getLogger(__name__)
 
@@ -211,7 +209,7 @@ async def propose_initial_templates(
     style_profile: StyleProfile,
     num_branches: int,
     *,
-    client: anthropic.AsyncAnthropic,
+    client: ReasoningClient,
     model: str,
 ) -> list[PromptTemplate]:
     """Generate diverse initial prompt templates for population branches."""
@@ -265,17 +263,9 @@ async def propose_initial_templates(
         f"{_format_style_profile(style_profile)}"
     )
 
-    logger.info("Requesting %d initial templates from Claude (%s)", num_branches, model)
+    logger.info("Requesting %d initial templates (%s)", num_branches, model)
 
-    response = await stream_message(
-        client,
-        model=model,
-        max_tokens=80000,
-        thinking={"type": "adaptive"},
-        system=system,
-        messages=[{"role": "user", "content": user}],
-    )
-    text = extract_text(response)
+    text = await client.call(model=model, system=system, user=user, max_tokens=80000)
 
     templates = _parse_initial_templates(text, num_branches)
 
@@ -293,7 +283,7 @@ async def refine_template(
     best_metrics: AggregatedMetrics | None,
     last_results: list[IterationResult] | None,
     *,
-    client: anthropic.AsyncAnthropic,
+    client: ReasoningClient,
     model: str,
     vision_feedback: str = "",
     roundtrip_feedback: str = "",
@@ -446,17 +436,9 @@ async def refine_template(
 
     user = "".join(user_parts)
 
-    logger.info("Requesting experiment proposal from Claude (%s)", model)
+    logger.info("Requesting experiment proposal (%s)", model)
 
-    response = await stream_message(
-        client,
-        model=model,
-        max_tokens=80000,
-        thinking={"type": "adaptive"},
-        system=system,
-        messages=[{"role": "user", "content": user}],
-    )
-    text = extract_text(response)
+    text = await client.call(model=model, system=system, user=user, max_tokens=80000)
 
     new_template = _parse_template(text)
     analysis_text = _parse_analysis(text)
@@ -489,7 +471,7 @@ async def synthesize_templates(
     experiments: list[IterationResult],
     style_profile: StyleProfile,
     *,
-    client: anthropic.AsyncAnthropic,
+    client: ReasoningClient,
     model: str,
 ) -> tuple[PromptTemplate, str]:
     """Merge the best aspects of multiple experiments into one template.
@@ -537,17 +519,9 @@ async def synthesize_templates(
 
     user = "".join(user_parts)
 
-    logger.info("Requesting template synthesis from Claude (%s)", model)
+    logger.info("Requesting template synthesis (%s)", model)
 
-    response = await stream_message(
-        client,
-        model=model,
-        max_tokens=16000,
-        thinking={"type": "adaptive"},
-        system=system,
-        messages=[{"role": "user", "content": user}],
-    )
-    text = extract_text(response)
+    text = await client.call(model=model, system=system, user=user, max_tokens=16000)
 
     merged = _parse_template(text)
     rationale = ""

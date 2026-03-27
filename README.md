@@ -44,8 +44,10 @@ The meta-prompt is the only thing being optimized. It tells the captioner *how* 
 
 - Python >= 3.11
 - [uv](https://docs.astral.sh/uv/) package manager
-- [Anthropic API key](https://console.anthropic.com/) (for Claude)
-- [Google API key](https://aistudio.google.com/apikey) (for Gemini models)
+- [Google API key](https://aistudio.google.com/apikey) (for Gemini models — always required)
+- One of:
+  - [Anthropic API key](https://console.anthropic.com/) (for Claude — default)
+  - [Z.AI API key](https://z.ai/) (for GLM-5 — alternative)
 
 ## Quick Start
 
@@ -82,7 +84,8 @@ uv run python -m art_style_search --help
 | `--aspect-ratio` | `1:1` | Aspect ratio for generated images |
 | `--caption-model` | `gemini-3.1-pro-preview` | Gemini model for captioning |
 | `--generator-model` | `gemini-3.1-flash-image-preview` | Gemini model for generation |
-| `--claude-model` | `claude-opus-4-6` | Claude model for optimization |
+| `--reasoning-provider` | `anthropic` | Reasoning provider: `anthropic` or `zai` |
+| `--reasoning-model` | auto | Model name (default: `claude-opus-4-6` / `glm-5`) |
 
 ```bash
 # Clean all generated outputs, logs, and state

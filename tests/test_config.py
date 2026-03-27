@@ -178,8 +178,9 @@ class TestDefaults:
     def test_generator_model(self, cfg: Config) -> None:
         assert cfg.generator_model == "gemini-3.1-flash-image-preview"
 
-    def test_claude_model(self, cfg: Config) -> None:
-        assert cfg.claude_model == "claude-opus-4-6"
+    def test_reasoning_model(self, cfg: Config) -> None:
+        assert cfg.reasoning_model == "claude-opus-4-6"
+        assert cfg.reasoning_provider == "anthropic"
 
     def test_gemini_concurrency(self, cfg: Config) -> None:
         assert cfg.gemini_concurrency == 50

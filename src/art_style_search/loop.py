@@ -20,7 +20,6 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-import anthropic
 from google import genai
 
 from art_style_search.analyze import analyze_style
@@ -44,6 +43,7 @@ from art_style_search.types import (
     composite_score,
     get_category_names,
 )
+from art_style_search.utils import ReasoningClient
 
 logger = logging.getLogger(__name__)
 
@@ -432,9 +432,10 @@ async def run(config: Config) -> LoopState:
     loop.set_default_executor(concurrent.futures.ThreadPoolExecutor(max_workers=config.eval_concurrency))
 
     gemini_client = genai.Client(api_key=config.google_api_key)
-    anthropic_client = anthropic.AsyncAnthropic(
-        api_key=config.anthropic_api_key,
-        timeout=anthropic.Timeout(600.0, connect=30.0),
+    reasoning_client = ReasoningClient(
+        config.reasoning_provider,
+        anthropic_api_key=config.anthropic_api_key,
+        zai_api_key=config.zai_api_key,
     )
 
     gemini_semaphore = asyncio.Semaphore(config.gemini_concurrency)
@@ -482,9 +483,9 @@ async def run(config: Config) -> LoopState:
             fixed_refs,
             captions,
             gemini_client=gemini_client,
-            anthropic_client=anthropic_client,
+            reasoning_client=reasoning_client,
             caption_model=config.caption_model,
-            claude_model=config.claude_model,
+            reasoning_model=config.reasoning_model,
             cache_path=config.log_dir / "style_profile.json",
         )
 
@@ -492,8 +493,8 @@ async def run(config: Config) -> LoopState:
         initial_templates = await propose_initial_templates(
             style_profile,
             config.num_branches,
-            client=anthropic_client,
-            model=config.claude_model,
+            client=reasoning_client,
+            model=config.reasoning_model,
         )
 
         for i, t in enumerate(initial_templates):
@@ -582,8 +583,8 @@ async def run(config: Config) -> LoopState:
                 state.knowledge_base,
                 state.best_metrics,
                 state.last_iteration_results,
-                client=anthropic_client,
-                model=config.claude_model,
+                client=reasoning_client,
+                model=config.reasoning_model,
                 vision_feedback=vision_fb,
                 roundtrip_feedback=roundtrip_fb,
                 caption_diffs=caption_diffs,
@@ -661,8 +662,8 @@ async def run(config: Config) -> LoopState:
             merged_template, merged_hypothesis = await synthesize_templates(
                 top_exps,
                 state.style_profile,
-                client=anthropic_client,
-                model=config.claude_model,
+                client=reasoning_client,
+                model=config.reasoning_model,
             )
 
             # Validate the merged template

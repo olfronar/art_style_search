@@ -38,7 +38,8 @@ class Config:
     # Models
     caption_model: str
     generator_model: str
-    claude_model: str
+    reasoning_model: str
+    reasoning_provider: str  # "anthropic" or "zai"
 
     # Concurrency
     gemini_concurrency: int
@@ -47,6 +48,7 @@ class Config:
     # API keys
     anthropic_api_key: str
     google_api_key: str
+    zai_api_key: str
 
 
 def parse_args(argv: list[str] | None = None) -> Config:
@@ -89,7 +91,17 @@ def parse_args(argv: list[str] | None = None) -> Config:
         default="gemini-3.1-flash-image-preview",
         help="Gemini model for image generation",
     )
-    models.add_argument("--claude-model", default="claude-opus-4-6", help="Claude model for reasoning")
+    models.add_argument(
+        "--reasoning-provider",
+        choices=["anthropic", "zai"],
+        default="anthropic",
+        help="Reasoning model provider: anthropic (Claude) or zai (GLM-5)",
+    )
+    models.add_argument(
+        "--reasoning-model",
+        default=None,
+        help="Reasoning model name (default: claude-opus-4-6 for anthropic, glm-5 for zai)",
+    )
 
     # Concurrency
     conc = parser.add_argument_group("Concurrency")
@@ -100,16 +112,25 @@ def parse_args(argv: list[str] | None = None) -> Config:
     keys = parser.add_argument_group("API Keys")
     keys.add_argument("--anthropic-api-key", default=None, help="Anthropic API key (env: ANTHROPIC_API_KEY)")
     keys.add_argument("--google-api-key", default=None, help="Google API key (env: GOOGLE_API_KEY)")
+    keys.add_argument("--zai-api-key", default=None, help="Z.AI API key (env: ZAI_API_KEY)")
 
     args = parser.parse_args(argv)
 
     anthropic_key = args.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY", "")
     google_key = args.google_api_key or os.environ.get("GOOGLE_API_KEY", "")
+    zai_key = args.zai_api_key or os.environ.get("ZAI_API_KEY", "")
 
-    if not anthropic_key:
+    provider = args.reasoning_provider
+    if provider == "anthropic" and not anthropic_key:
         parser.error("ANTHROPIC_API_KEY must be set via --anthropic-api-key or environment variable")
+    if provider == "zai" and not zai_key:
+        parser.error("ZAI_API_KEY must be set via --zai-api-key or environment variable")
     if not google_key:
         parser.error("GOOGLE_API_KEY must be set via --google-api-key or environment variable")
+
+    # Default model based on provider
+    default_models = {"anthropic": "claude-opus-4-6", "zai": "glm-5"}
+    reasoning_model = args.reasoning_model or default_models[provider]
 
     if not args.reference_dir.is_dir():
         parser.error(f"Reference directory does not exist: {args.reference_dir}")
@@ -131,9 +152,11 @@ def parse_args(argv: list[str] | None = None) -> Config:
         max_eval_images=args.max_eval_images,
         caption_model=args.caption_model,
         generator_model=args.generator_model,
-        claude_model=args.claude_model,
+        reasoning_model=reasoning_model,
+        reasoning_provider=provider,
         gemini_concurrency=args.gemini_concurrency,
         eval_concurrency=args.eval_concurrency,
         anthropic_api_key=anthropic_key,
         google_api_key=google_key,
+        zai_api_key=zai_key,
     )

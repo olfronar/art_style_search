@@ -1,7 +1,8 @@
-"""Shared utilities for Anthropic and Gemini API interactions."""
+"""Shared utilities for Anthropic, Z.AI, and Gemini API interactions."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 
@@ -89,3 +90,81 @@ async def stream_message(client: anthropic.AsyncAnthropic, **kwargs: object) -> 
 
     msg = f"Claude stream failed after {_STREAM_MAX_RETRIES} retries"
     raise RuntimeError(msg) from last_exc
+
+
+# ---------------------------------------------------------------------------
+# Provider-agnostic reasoning client
+# ---------------------------------------------------------------------------
+
+
+class ReasoningClient:
+    """Wraps either Anthropic (Claude) or Z.AI (GLM) behind a unified async interface."""
+
+    def __init__(self, provider: str, *, anthropic_api_key: str = "", zai_api_key: str = "") -> None:
+        self.provider = provider
+        if provider == "anthropic":
+            self._anthropic = anthropic.AsyncAnthropic(
+                api_key=anthropic_api_key,
+                timeout=anthropic.Timeout(600.0, connect=30.0),
+            )
+        elif provider == "zai":
+            from zai import ZaiClient
+
+            self._zai = ZaiClient(api_key=zai_api_key)
+        else:
+            msg = f"Unknown reasoning provider: {provider}"
+            raise ValueError(msg)
+
+    async def call(
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        max_tokens: int = 16000,
+    ) -> str:
+        """Send a reasoning request and return the text response."""
+        if self.provider == "anthropic":
+            return await self._call_anthropic(model=model, system=system, user=user, max_tokens=max_tokens)
+        return await self._call_zai(model=model, system=system, user=user, max_tokens=max_tokens)
+
+    async def _call_anthropic(self, *, model: str, system: str, user: str, max_tokens: int) -> str:
+        response = await stream_message(
+            self._anthropic,
+            model=model,
+            max_tokens=max_tokens,
+            thinking={"type": "adaptive"},
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        return extract_text(response)
+
+    async def _call_zai(self, *, model: str, system: str, user: str, max_tokens: int) -> str:
+        """Call Z.AI async SDK with retry."""
+        last_exc: Exception | None = None
+        for attempt in range(_STREAM_MAX_RETRIES):
+            try:
+                response = await self._zai.chat.asyncCompletions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    max_tokens=max_tokens,
+                )
+                return response.choices[0].message.content
+            except Exception as exc:
+                last_exc = exc
+                delay = _STREAM_BASE_DELAY * (2**attempt)
+                logger.warning(
+                    "Z.AI call attempt %d/%d failed: %s: %s — retrying in %.0fs",
+                    attempt + 1,
+                    _STREAM_MAX_RETRIES,
+                    type(exc).__name__,
+                    exc,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+
+        msg = f"Z.AI call failed after {_STREAM_MAX_RETRIES} retries"
+        raise RuntimeError(msg) from last_exc
