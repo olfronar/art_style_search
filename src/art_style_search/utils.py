@@ -140,19 +140,23 @@ class ReasoningClient:
         return extract_text(response)
 
     async def _call_zai(self, *, model: str, system: str, user: str, max_tokens: int) -> str:
-        """Call Z.AI async SDK with retry."""
+        """Call Z.AI synchronous SDK via asyncio.to_thread with retry."""
+
+        def _sync_call() -> str:
+            response = self._zai.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                max_tokens=max_tokens,
+            )
+            return response.choices[0].message.content
+
         last_exc: Exception | None = None
         for attempt in range(_STREAM_MAX_RETRIES):
             try:
-                response = await self._zai.chat.asyncCompletions.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
-                    ],
-                    max_tokens=max_tokens,
-                )
-                return response.choices[0].message.content
+                return await asyncio.to_thread(_sync_call)
             except Exception as exc:
                 last_exc = exc
                 delay = _STREAM_BASE_DELAY * (2**attempt)
