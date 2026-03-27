@@ -277,7 +277,7 @@ async def _run_experiment(
         if prev_dino is not None:
             arrow = "↑" if sc.dino_similarity > prev_dino else "↓" if sc.dino_similarity < prev_dino else "="
             trend = f" [prev DINO={prev_dino:.3f} → {sc.dino_similarity:.3f} {arrow}]"
-        caption_text = cap.text if idx < 3 else f"{cap.text[:300]}..."
+        caption_text = cap.text if idx == 0 else f"{cap.text[:200]}..."
         roundtrip_details.append(
             f"Image ({_orig.name}): DINO={sc.dino_similarity:.3f} LPIPS={sc.lpips_distance:.3f} "
             f"HPS={sc.hps_score:.3f} Aes={sc.aesthetics_score:.1f}{trend}\n"
