@@ -195,7 +195,7 @@ async def _claude_analyze(
     user = _CLAUDE_ANALYSIS_PROMPT.format(captions=captions_text)
 
     logger.info("Sending %d captions to %s for style analysis", len(captions), model)
-    return await client.call(model=model, system=_ANALYSIS_SYSTEM, user=user, max_tokens=80000)
+    return await client.call(model=model, system=_ANALYSIS_SYSTEM, user=user, max_tokens=32000)
 
 
 async def _claude_compile(
@@ -212,7 +212,7 @@ async def _claude_compile(
     )
 
     logger.info("Compiling style profile via %s", model)
-    raw_text = await client.call(model=model, system=_ANALYSIS_SYSTEM, user=user, max_tokens=80000)
+    raw_text = await client.call(model=model, system=_ANALYSIS_SYSTEM, user=user, max_tokens=32000)
     return _parse_compilation(raw_text, gemini_raw=gemini_analysis, claude_raw=claude_analysis)
 
 

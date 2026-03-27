@@ -254,112 +254,128 @@ class KnowledgeBase:
             self.categories[category] = cat
         cat.hypothesis_ids.append(hid)
 
+        max_insights = 5
+
         dino_delta = metric_delta.get("dino", 0.0)
         if outcome == "confirmed" or outcome == "partial":
             if lesson and lesson not in cat.confirmed_insights:
                 cat.confirmed_insights.append(lesson)
+                # Cap: drop oldest when exceeding limit (newer insights subsume older)
+                if len(cat.confirmed_insights) > max_insights:
+                    cat.confirmed_insights = cat.confirmed_insights[-max_insights:]
             if cat.best_dino_delta is None or dino_delta > cat.best_dino_delta:
                 cat.best_dino_delta = dino_delta
         if outcome == "rejected":
             short = statement[:120]
             if short not in cat.rejected_approaches:
                 cat.rejected_approaches.append(short)
+                if len(cat.rejected_approaches) > max_insights:
+                    cat.rejected_approaches = cat.rejected_approaches[-max_insights:]
 
         return hyp
 
     def render_for_claude(self, max_words: int = 1500) -> str:
-        """Produce a structured, token-efficient prompt section for Claude."""
+        """Produce a structured, budget-enforced prompt section for the reasoning model.
+
+        Priority order (fill until budget exhausted):
+        1. Open Problems (~60 words)
+        2. Per-Category Status — count + latest insight only (not all insights)
+        3. Hypothesis Chain — last 5 full, rest as one-liners
+        Rejected hypotheses are already marked REJECTED in the tree — no standalone section.
+        """
         if not self.hypotheses:
             return ""
 
-        parts: list[str] = []
         num_cats = len(self.categories)
-        parts.append(f"## Knowledge Base ({len(self.hypotheses)} hypotheses across {num_cats} categories)\n")
+        header = f"## Knowledge Base ({len(self.hypotheses)} hypotheses across {num_cats} categories)\n"
 
-        # --- Hypothesis chain (tree view) ---
-        parts.append("### Hypothesis Chain")
+        # --- Section 1: Open Problems (always included) ---
+        problems_text = ""
+        if self.open_problems:
+            lines = ["### Open Problems"]
+            for i, prob in enumerate(self.open_problems, 1):
+                gap_str = f" \u2014 gap: {prob.metric_gap:.3f}" if prob.metric_gap is not None else ""
+                lines.append(f"{i}. [{prob.priority}] {prob.text}{gap_str}")
+            problems_text = "\n".join(lines)
+
+        # --- Section 2: Per-Category Status (compact: count + latest insight) ---
+        cat_lines = ["### Per-Category Status"]
+        for cat_name in sorted(self.categories):
+            cat = self.categories[cat_name]
+            delta_str = f", best DINO: {cat.best_dino_delta:+.3f}" if cat.best_dino_delta is not None else ""
+            n_conf = len(cat.confirmed_insights)
+            n_rej = len(cat.rejected_approaches)
+            cat_lines.append(
+                f"**{cat_name}** [{len(cat.hypothesis_ids)} hyp, {n_conf} confirmed, {n_rej} rejected{delta_str}]"
+            )
+            if cat.confirmed_insights:
+                cat_lines.append(f"  Latest: {cat.confirmed_insights[-1][:120]}")
+            if cat.rejected_approaches:
+                cat_lines.append(f"  Last rejected: {cat.rejected_approaches[-1][:80]}")
+        cat_text = "\n".join(cat_lines)
+
+        # --- Section 3: Hypothesis Chain (last 5 full, rest collapsed) ---
+        recent_ids = {h.id for h in self.hypotheses[-5:]}
+
+        def _render_hyp(h: Hypothesis, indent: int, full: bool) -> str:
+            prefix = "  " * indent + ("\u2514\u2500 " if indent > 0 else "")
+            builds = f", builds on {h.parent_id}" if h.parent_id else ""
+            if full:
+                stmt = h.statement[:80] + ("..." if len(h.statement) > 80 else "")
+                return f'{prefix}{h.id} (iter {h.iteration}, {h.category}{builds}) \u2192 {h.outcome.upper()}: "{stmt}"'
+            return f"{prefix}{h.id} (iter {h.iteration}, {h.category}) \u2192 {h.outcome.upper()}"
+
         roots: list[Hypothesis] = []
-        children: dict[str, list[Hypothesis]] = {}
+        children_map: dict[str, list[Hypothesis]] = {}
         for h in self.hypotheses:
             if h.parent_id is None:
                 roots.append(h)
             else:
-                children.setdefault(h.parent_id, []).append(h)
+                children_map.setdefault(h.parent_id, []).append(h)
 
-        def _render_hyp(h: Hypothesis, indent: int) -> str:
-            prefix = "  " * indent + ("\u2514\u2500 " if indent > 0 else "")
-            builds = f", builds on {h.parent_id}" if h.parent_id else ""
-            truncated = h.statement[:80] + ("..." if len(h.statement) > 80 else "")
-            return (
-                f'{prefix}{h.id} (iter {h.iteration}, {h.category}{builds}) \u2192 {h.outcome.upper()}: "{truncated}"'
-            )
+        tree_lines: list[str] = ["### Hypothesis Chain"]
 
-        def _render_tree(h: Hypothesis, indent: int, lines: list[str]) -> None:
-            lines.append(_render_hyp(h, indent))
-            for child in children.get(h.id, []):
-                _render_tree(child, indent + 1, lines)
+        def _walk(h: Hypothesis, indent: int) -> None:
+            tree_lines.append(_render_hyp(h, indent, full=(h.id in recent_ids)))
+            for child in children_map.get(h.id, []):
+                _walk(child, indent + 1)
 
-        tree_lines: list[str] = []
         for root in roots:
-            _render_tree(root, 0, tree_lines)
-        # Also render orphans (parent_id set but parent not found — e.g. from cross-branch reference)
+            _walk(root, 0)
+        # Orphans
         known_ids = {h.id for h in self.hypotheses}
         for h in self.hypotheses:
             if h.parent_id and h.parent_id not in known_ids and h not in roots:
-                tree_lines.append(_render_hyp(h, 0))
+                tree_lines.append(_render_hyp(h, 0, full=(h.id in recent_ids)))
 
-        parts.append("\n".join(tree_lines))
+        tree_text = "\n".join(tree_lines)
 
-        # --- Per-category status ---
-        parts.append("\n### Per-Category Status")
-        for cat_name in sorted(self.categories):
-            cat = self.categories[cat_name]
-            delta_str = f", best DINO delta: {cat.best_dino_delta:+.3f}" if cat.best_dino_delta is not None else ""
-            parts.append(f"**{cat_name}** [{len(cat.hypothesis_ids)} hypotheses{delta_str}]")
-            if cat.confirmed_insights:
-                for insight in cat.confirmed_insights:
-                    parts.append(f"  \u2713 {insight}")
-            if cat.rejected_approaches:
-                for rej in cat.rejected_approaches:
-                    parts.append(f"  \u2717 {rej}")
-            if not cat.confirmed_insights and not cat.rejected_approaches:
-                parts.append("  No insights yet.")
+        # --- Assemble with budget enforcement ---
+        # Priority: header + problems + categories + tree
+        result_parts = [header]
+        budget_remaining = max_words
 
-        # --- Open problems ---
-        if self.open_problems:
-            parts.append("\n### Open Problems (Claude-proposed, code-validated)")
-            for i, prob in enumerate(self.open_problems, 1):
-                gap_str = f" \u2014 DINO gap: {prob.metric_gap:.3f}" if prob.metric_gap is not None else ""
-                parts.append(f"{i}. [{prob.priority}] {prob.text}{gap_str} (since iter {prob.since_iteration})")
+        if problems_text:
+            pw = len(problems_text.split())
+            result_parts.append(problems_text)
+            budget_remaining -= pw
 
-        # --- Do NOT repeat ---
-        rejected = [(h.id, h.iteration, h.statement[:80]) for h in self.hypotheses if h.outcome == "rejected"]
-        if rejected:
-            parts.append("\n### Do NOT Repeat")
-            for hid, it, stmt in rejected:
-                parts.append(f"- {stmt} ({hid}, iter {it})")
+        cw = len(cat_text.split())
+        if cw <= budget_remaining:
+            result_parts.append("\n" + cat_text)
+            budget_remaining -= cw
 
-        result = "\n".join(parts)
+        tw = len(tree_text.split())
+        if tw <= budget_remaining:
+            result_parts.append("\n" + tree_text)
+        elif budget_remaining > 100:
+            # Truncate tree: only show last 5 hypotheses
+            short_lines = ["### Hypothesis Chain (recent)"]
+            for h in self.hypotheses[-5:]:
+                short_lines.append(_render_hyp(h, 0, full=True))
+            result_parts.append("\n" + "\n".join(short_lines))
 
-        # Token budget: truncate if too long
-        word_count = len(result.split())
-        if word_count > max_words and len(tree_lines) > 5:
-            # Keep only 5 most recent hypotheses in full detail, summarize rest
-            recent_ids = {h.id for h in self.hypotheses[-5:]}
-            summary_lines: list[str] = []
-            for line in tree_lines:
-                # Check if this line is for a recent hypothesis
-                if any(rid in line for rid in recent_ids):
-                    summary_lines.append(line)
-                else:
-                    # One-line compact summary
-                    summary_lines.append(line.split("\u2192")[0].rstrip() + " [...]" if "\u2192" in line else line)
-            # Rebuild with summarized tree
-            parts_truncated = [parts[0], "### Hypothesis Chain", "\n".join(summary_lines)]
-            parts_truncated.extend(parts[2 + len(tree_lines) :] if len(parts) > 2 + len(tree_lines) else [])
-            result = "\n".join(p for p in parts_truncated if p)
-
-        return result
+        return "\n".join(result_parts)
 
 
 @dataclass

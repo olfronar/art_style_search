@@ -265,7 +265,7 @@ async def propose_initial_templates(
 
     logger.info("Requesting %d initial templates (%s)", num_branches, model)
 
-    text = await client.call(model=model, system=system, user=user, max_tokens=80000)
+    text = await client.call(model=model, system=system, user=user, max_tokens=32000)
 
     templates = _parse_initial_templates(text, num_branches)
 
@@ -394,17 +394,20 @@ async def refine_template(
         user_parts.append("\n\n")
         user_parts.append(kb_text)
 
-    # Show last iteration's experiment results
+    # Show last iteration results — only the kept experiment in detail
     if last_results:
         user_parts.append("\n\n## Last Iteration Results\n")
-        for res in last_results:
-            kept_tag = "KEPT" if res.kept else "DISCARDED"
-            user_parts.append(f"Experiment {res.branch_id} [{kept_tag}]:\n")
+        kept = [r for r in last_results if r.kept]
+        discarded = [r for r in last_results if not r.kept]
+        for res in kept:
+            user_parts.append(f"BEST Experiment {res.branch_id}:\n")
             user_parts.append(f"  Metrics: {_format_metrics(res.aggregated)}\n")
             if res.hypothesis:
                 user_parts.append(f"  Hypothesis: {res.hypothesis}\n")
             if res.experiment:
                 user_parts.append(f"  Experiment: {res.experiment}\n")
+        if discarded:
+            user_parts.append(f"({len(discarded)} other experiments discarded)\n")
 
     if vision_feedback:
         user_parts.append("\n\n## Vision Comparison (Gemini analysis of generated vs reference images)\n")
@@ -436,9 +439,9 @@ async def refine_template(
 
     user = "".join(user_parts)
 
-    logger.info("Requesting experiment proposal (%s)", model)
+    logger.info("Requesting experiment proposal (%s) — context: ~%d words", model, len(user.split()))
 
-    text = await client.call(model=model, system=system, user=user, max_tokens=80000)
+    text = await client.call(model=model, system=system, user=user, max_tokens=16000)
 
     new_template = _parse_template(text)
     analysis_text = _parse_analysis(text)

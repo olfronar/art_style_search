@@ -477,7 +477,8 @@ class TestKnowledgeBase:
         assert "HIGH" in output
         assert "Color matching on dark palettes" in output
 
-    def test_render_includes_do_not_repeat(self) -> None:
+    def test_render_rejected_in_tree_not_standalone(self) -> None:
+        """Rejected hypotheses show REJECTED in the tree, no standalone 'Do NOT Repeat' section."""
         kb = KnowledgeBase()
         kb.add_hypothesis(
             iteration=1,
@@ -492,5 +493,6 @@ class TestKnowledgeBase:
             rejected="brushstrokes ignored",
         )
         output = kb.render_for_claude()
-        assert "Do NOT Repeat" in output
+        assert "REJECTED" in output
         assert "detailed brushstrokes" in output
+        assert "Do NOT Repeat" not in output  # merged into tree

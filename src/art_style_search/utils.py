@@ -108,9 +108,13 @@ class ReasoningClient:
                 timeout=anthropic.Timeout(600.0, connect=30.0),
             )
         elif provider == "zai":
+            import httpx
             from zai import ZaiClient
 
-            self._zai = ZaiClient(api_key=zai_api_key)
+            self._zai = ZaiClient(
+                api_key=zai_api_key,
+                timeout=httpx.Timeout(300.0, connect=15.0),
+            )
         else:
             msg = f"Unknown reasoning provider: {provider}"
             raise ValueError(msg)
