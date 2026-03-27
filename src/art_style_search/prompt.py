@@ -394,30 +394,25 @@ async def refine_template(
         user_parts.append("\n\n")
         user_parts.append(kb_text)
 
-    # Show last iteration results — only the kept experiment in detail, others as one-liners
+    # Show last iteration's experiment results
     if last_results:
         user_parts.append("\n\n## Last Iteration Results\n")
-        kept = [r for r in last_results if r.kept]
-        discarded = [r for r in last_results if not r.kept]
-        for res in kept:
-            user_parts.append(f"BEST Experiment {res.branch_id}:\n")
+        for res in last_results:
+            kept_tag = "KEPT" if res.kept else "DISCARDED"
+            user_parts.append(f"Experiment {res.branch_id} [{kept_tag}]:\n")
             user_parts.append(f"  Metrics: {_format_metrics(res.aggregated)}\n")
             if res.hypothesis:
                 user_parts.append(f"  Hypothesis: {res.hypothesis}\n")
             if res.experiment:
                 user_parts.append(f"  Experiment: {res.experiment}\n")
-        if discarded:
-            user_parts.append(f"({len(discarded)} other experiments discarded)\n")
 
     if vision_feedback:
-        user_parts.append("\n\n## Vision Comparison\n")
-        # Cap vision feedback to avoid huge context
-        user_parts.append(vision_feedback[:3000] + ("..." if len(vision_feedback) > 3000 else ""))
+        user_parts.append("\n\n## Vision Comparison (Gemini analysis of generated vs reference images)\n")
+        user_parts.append(vision_feedback)
 
     if roundtrip_feedback:
         user_parts.append("\n\n## Per-Image Results (sorted worst → best by DINO)\n")
-        # Cap roundtrip feedback — full captions already included for worst images
-        user_parts.append(roundtrip_feedback[:4000] + ("..." if len(roundtrip_feedback) > 4000 else ""))
+        user_parts.append(roundtrip_feedback)
 
     if caption_diffs:
         user_parts.append(f"\n\n{caption_diffs}")
@@ -441,11 +436,9 @@ async def refine_template(
 
     user = "".join(user_parts)
 
-    # Log context size for debugging latency
-    word_count = len(user.split())
-    logger.info("Requesting experiment proposal (%s) — context: ~%d words", model, word_count)
+    logger.info("Requesting experiment proposal (%s)", model)
 
-    text = await client.call(model=model, system=system, user=user, max_tokens=16000)
+    text = await client.call(model=model, system=system, user=user, max_tokens=80000)
 
     new_template = _parse_template(text)
     analysis_text = _parse_analysis(text)
