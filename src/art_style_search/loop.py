@@ -97,6 +97,15 @@ def _apply_best_result(state: LoopState, result: IterationResult) -> None:
     state.global_best_metrics = result.aggregated
 
 
+def _save_best_prompt(state: LoopState, log_dir: Path) -> None:
+    """Write the best meta-prompt to a standalone file for easy access."""
+    if not state.global_best_prompt:
+        return
+    prompt_file = log_dir / "best_prompt.txt"
+    prompt_file.write_text(state.global_best_prompt, encoding="utf-8")
+    logger.info("Best meta-prompt saved to %s", prompt_file)
+
+
 def _log_experiment_results(results: list[IterationResult], log_dir: Path) -> None:
     """Save and log each experiment result."""
     for r in results:
@@ -541,6 +550,7 @@ async def run(config: Config) -> LoopState:
 
         state.iteration = 1
         save_state(state, config.state_file)
+        _save_best_prompt(state, config.log_dir)
 
     # Main optimization loop
     for iteration in range(state.iteration, config.max_iterations):
@@ -718,6 +728,7 @@ async def run(config: Config) -> LoopState:
 
         _log_experiment_results(exp_results, config.log_dir)
         save_state(state, config.state_file)
+        _save_best_prompt(state, config.log_dir)
 
         if state.plateau_counter >= config.plateau_window:
             logger.info("Plateau detected (%d iterations without improvement)", state.plateau_counter)
@@ -730,6 +741,7 @@ async def run(config: Config) -> LoopState:
         state.convergence_reason = ConvergenceReason.MAX_ITERATIONS
 
     save_state(state, config.state_file)
+    _save_best_prompt(state, config.log_dir)
 
     logger.info("=" * 60)
     if state.global_best_metrics:
