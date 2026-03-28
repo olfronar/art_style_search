@@ -81,6 +81,8 @@ def _metric_scores_from_dict(d: dict[str, Any]) -> MetricScores:
         lpips_distance=d["lpips_distance"],
         hps_score=d["hps_score"],
         aesthetics_score=d["aesthetics_score"],
+        ssim=d.get("ssim", 0.0),
+        color_histogram=d.get("color_histogram", 0.0),
     )
 
 
@@ -94,6 +96,14 @@ def _aggregated_metrics_from_dict(d: dict[str, Any]) -> AggregatedMetrics:
         hps_score_std=d["hps_score_std"],
         aesthetics_score_mean=d["aesthetics_score_mean"],
         aesthetics_score_std=d["aesthetics_score_std"],
+        ssim_mean=d.get("ssim_mean", 0.0),
+        ssim_std=d.get("ssim_std", 0.0),
+        color_histogram_mean=d.get("color_histogram_mean", 0.0),
+        color_histogram_std=d.get("color_histogram_std", 0.0),
+        vision_style=d.get("vision_style", 5.0),
+        vision_subject=d.get("vision_subject", 5.0),
+        vision_color=d.get("vision_color", 5.0),
+        vision_composition=d.get("vision_composition", 5.0),
     )
 
 

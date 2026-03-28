@@ -29,7 +29,19 @@ class TestCompositeScore:
             aesthetics_score_mean=7.0,
             aesthetics_score_std=0.5,
         )
-        expected = 0.4 * 0.8 - 0.2 * 0.3 + 0.2 * 0.5 + 0.2 * (7.0 / 10.0)
+        # New 10-metric formula; ssim/color_histogram default to 0.0, vision_* default to 5.0
+        expected = (
+            0.25 * 0.8
+            - 0.15 * 0.3
+            + 0.10 * 0.5
+            + 0.10 * (7.0 / 10.0)
+            + 0.15 * 0.0
+            + 0.10 * 0.0
+            + 0.05 * (5.0 / 10.0)
+            + 0.05 * (5.0 / 10.0)
+            + 0.025 * (5.0 / 10.0)
+            + 0.025 * (5.0 / 10.0)
+        )
         assert composite_score(m) == expected
 
     def test_zero_metrics(self) -> None:
@@ -43,7 +55,9 @@ class TestCompositeScore:
             aesthetics_score_mean=0.0,
             aesthetics_score_std=0.0,
         )
-        assert composite_score(m) == 0.0
+        # vision_* fields default to 5.0, contributing 0.075 even when everything else is zero
+        expected = 0.05 * (5.0 / 10.0) + 0.05 * (5.0 / 10.0) + 0.025 * (5.0 / 10.0) + 0.025 * (5.0 / 10.0)
+        assert composite_score(m) == expected
 
     def test_higher_dino_yields_higher_score(self) -> None:
         base = dict(
@@ -74,8 +88,8 @@ class TestCompositeScore:
         assert composite_score(low_lpips) > composite_score(high_lpips)
 
     def test_weights_sum_to_one(self) -> None:
-        """Verify the coefficient magnitudes sum to 1.0 (0.4 + 0.2 + 0.2 + 0.2)."""
-        assert abs((0.4 + 0.2 + 0.2 + 0.2) - 1.0) < 1e-9
+        """Verify the coefficient magnitudes sum to 1.0 (10 metrics)."""
+        assert abs((0.25 + 0.15 + 0.10 + 0.10 + 0.15 + 0.10 + 0.05 + 0.05 + 0.025 + 0.025) - 1.0) < 1e-9
 
     def test_aesthetics_divided_by_ten(self) -> None:
         """Aesthetics is on a 1-10 scale and should be normalized to 0-1."""
@@ -89,8 +103,15 @@ class TestCompositeScore:
             aesthetics_score_mean=10.0,
             aesthetics_score_std=0.0,
         )
-        # Only the aesthetics term contributes: 0.2 * (10.0 / 10.0) = 0.2
-        assert composite_score(m) == 0.2
+        # Aesthetics: 0.10 * (10.0 / 10.0) = 0.10, plus vision defaults contribute 0.075
+        expected = (
+            0.10 * (10.0 / 10.0)
+            + 0.05 * (5.0 / 10.0)
+            + 0.05 * (5.0 / 10.0)
+            + 0.025 * (5.0 / 10.0)
+            + 0.025 * (5.0 / 10.0)
+        )
+        assert abs(composite_score(m) - expected) < 1e-9
 
 
 # -- PromptTemplate.render ---------------------------------------------------
@@ -174,6 +195,14 @@ class TestAggregatedMetricsSummaryDict:
             "hps_score_std",
             "aesthetics_score_mean",
             "aesthetics_score_std",
+            "ssim_mean",
+            "ssim_std",
+            "color_histogram_mean",
+            "color_histogram_std",
+            "vision_style",
+            "vision_subject",
+            "vision_color",
+            "vision_composition",
         }
         assert set(d.keys()) == expected_keys
 
@@ -211,7 +240,7 @@ class TestAggregatedMetricsSummaryDict:
         )
         assert isinstance(m.summary_dict(), dict)
 
-    def test_exactly_eight_entries(self) -> None:
+    def test_exactly_sixteen_entries(self) -> None:
         m = AggregatedMetrics(
             dino_similarity_mean=0.0,
             dino_similarity_std=0.0,
@@ -222,7 +251,7 @@ class TestAggregatedMetricsSummaryDict:
             aesthetics_score_mean=0.0,
             aesthetics_score_std=0.0,
         )
-        assert len(m.summary_dict()) == 8
+        assert len(m.summary_dict()) == 16
 
 
 # -- ConvergenceReason --------------------------------------------------------

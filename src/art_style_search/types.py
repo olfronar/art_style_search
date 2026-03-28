@@ -17,18 +17,50 @@ class Caption:
 
 @dataclass(frozen=True)
 class MetricScores:
-    """Evaluation scores for a single generated image against references."""
+    """Evaluation scores for a single generated image against its paired reference."""
 
     dino_similarity: float  # higher = better, cosine sim of DINOv2 embeddings
     lpips_distance: float  # lower = better, perceptual distance
-    hps_score: float  # higher = better, human preference
+    hps_score: float  # higher = better, human preference for caption-image alignment
     aesthetics_score: float  # higher = better, 1-10 scale
+    ssim: float = 0.0  # higher = better, structural similarity [0, 1]
+    color_histogram: float = 0.0  # higher = better, HSV histogram similarity [0, 1]
+
+
+@dataclass(frozen=True)
+class VisionDimensionScore:
+    """One dimension of the Gemini vision comparison — numeric + qualitative."""
+
+    dimension: str  # "style", "subject", "color", "composition"
+    score: float  # 1-10
+    assessment: str  # qualitative text explaining the score
+
+
+@dataclass(frozen=True)
+class VisionScores:
+    """Structured scores from Gemini vision comparison across 4 dimensions."""
+
+    style: VisionDimensionScore
+    subject: VisionDimensionScore
+    color: VisionDimensionScore
+    composition: VisionDimensionScore
+
+    @classmethod
+    def default(cls) -> VisionScores:
+        """Neutral scores when parsing fails."""
+        return cls(
+            style=VisionDimensionScore("style", 5.0, ""),
+            subject=VisionDimensionScore("subject", 5.0, ""),
+            color=VisionDimensionScore("color", 5.0, ""),
+            composition=VisionDimensionScore("composition", 5.0, ""),
+        )
 
 
 @dataclass(frozen=True)
 class AggregatedMetrics:
-    """Mean + std of MetricScores across all generated images for an iteration."""
+    """Mean + std of per-image MetricScores, plus experiment-level vision scores."""
 
+    # Per-image metric aggregates (6 metrics x 2 = 12 fields)
     dino_similarity_mean: float
     dino_similarity_std: float
     lpips_distance_mean: float
@@ -37,9 +69,19 @@ class AggregatedMetrics:
     hps_score_std: float
     aesthetics_score_mean: float
     aesthetics_score_std: float
+    ssim_mean: float = 0.0
+    ssim_std: float = 0.0
+    color_histogram_mean: float = 0.0
+    color_histogram_std: float = 0.0
+
+    # Experiment-level Gemini vision scores (1-10 scale, not per-image)
+    vision_style: float = 5.0
+    vision_subject: float = 5.0
+    vision_color: float = 5.0
+    vision_composition: float = 5.0
 
     def summary_dict(self) -> dict[str, float]:
-        """Flat dict for JSON serialization and Claude consumption."""
+        """Flat dict for JSON serialization and reasoning model consumption."""
         return {
             "dino_similarity_mean": self.dino_similarity_mean,
             "dino_similarity_std": self.dino_similarity_std,
@@ -49,17 +91,91 @@ class AggregatedMetrics:
             "hps_score_std": self.hps_score_std,
             "aesthetics_score_mean": self.aesthetics_score_mean,
             "aesthetics_score_std": self.aesthetics_score_std,
+            "ssim_mean": self.ssim_mean,
+            "ssim_std": self.ssim_std,
+            "color_histogram_mean": self.color_histogram_mean,
+            "color_histogram_std": self.color_histogram_std,
+            "vision_style": self.vision_style,
+            "vision_subject": self.vision_subject,
+            "vision_color": self.vision_color,
+            "vision_composition": self.vision_composition,
         }
 
 
 def composite_score(m: AggregatedMetrics) -> float:
-    """Weighted composite score for ranking branches. Higher = better."""
+    """Fixed-weight composite score. Used as fallback when adaptive scoring isn't available."""
     return (
-        0.4 * m.dino_similarity_mean
-        - 0.2 * m.lpips_distance_mean
-        + 0.2 * m.hps_score_mean
-        + 0.2 * (m.aesthetics_score_mean / 10.0)
+        0.25 * m.dino_similarity_mean
+        - 0.15 * m.lpips_distance_mean
+        + 0.10 * m.hps_score_mean
+        + 0.10 * (m.aesthetics_score_mean / 10.0)
+        + 0.15 * m.ssim_mean
+        + 0.10 * m.color_histogram_mean
+        + 0.05 * (m.vision_style / 10.0)
+        + 0.05 * (m.vision_subject / 10.0)
+        + 0.025 * (m.vision_color / 10.0)
+        + 0.025 * (m.vision_composition / 10.0)
     )
+
+
+def adaptive_composite_score(
+    target: AggregatedMetrics,
+    all_results: list[AggregatedMetrics],
+) -> float:
+    """Score with adaptive weights proportional to cross-experiment variance.
+
+    Metrics that differentiate between experiments get higher weight.
+    Falls back to fixed weights for single-experiment evaluation.
+    """
+    if len(all_results) < 2:
+        return composite_score(target)
+
+    # Define metrics: (extractor, direction) where direction=1 means higher=better
+    metric_defs: list[tuple[str, callable, int]] = [
+        ("dino", lambda r: r.dino_similarity_mean, 1),
+        ("lpips", lambda r: r.lpips_distance_mean, -1),
+        ("hps", lambda r: r.hps_score_mean, 1),
+        ("aesthetics", lambda r: r.aesthetics_score_mean / 10.0, 1),
+        ("ssim", lambda r: r.ssim_mean, 1),
+        ("color_hist", lambda r: r.color_histogram_mean, 1),
+        ("v_style", lambda r: r.vision_style / 10.0, 1),
+        ("v_subject", lambda r: r.vision_subject / 10.0, 1),
+        ("v_color", lambda r: r.vision_color / 10.0, 1),
+        ("v_composition", lambda r: r.vision_composition / 10.0, 1),
+    ]
+
+    # Compute stddev and normalized value for each metric
+    import math
+
+    weighted_sum = 0.0
+    total_weight = 0.0
+
+    for _name, extractor, direction in metric_defs:
+        values = [extractor(r) for r in all_results]
+        target_val = extractor(target)
+
+        mean = sum(values) / len(values)
+        std = math.sqrt(sum((v - mean) ** 2 for v in values) / len(values))
+
+        if std < 1e-8:
+            continue  # metric is identical across experiments — not informative
+
+        # Normalize target value to [0, 1] using min/max
+        vmin, vmax = min(values), max(values)
+        rng = vmax - vmin
+        if rng < 1e-8:
+            continue
+        normalized = (target_val - vmin) / rng
+        if direction < 0:
+            normalized = 1.0 - normalized
+
+        weighted_sum += std * normalized
+        total_weight += std
+
+    if total_weight < 1e-8:
+        return composite_score(target)
+
+    return weighted_sum / total_weight
 
 
 @dataclass(frozen=True)

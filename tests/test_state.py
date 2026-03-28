@@ -175,7 +175,14 @@ class TestToDict:
     def test_metric_scores_all_floats(self) -> None:
         ms = make_metric_scores(seed=2.0)
         d = _to_dict(ms)
-        assert set(d.keys()) == {"dino_similarity", "lpips_distance", "hps_score", "aesthetics_score"}
+        assert set(d.keys()) == {
+            "dino_similarity",
+            "lpips_distance",
+            "hps_score",
+            "aesthetics_score",
+            "ssim",
+            "color_histogram",
+        }
         for v in d.values():
             assert isinstance(v, float)
 

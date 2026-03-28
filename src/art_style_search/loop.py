@@ -112,12 +112,18 @@ def _log_experiment_results(results: list[IterationResult], log_dir: Path) -> No
         save_iteration_log(r, log_dir)
         m = r.aggregated
         logger.info(
-            "Exp %d — DINO=%.4f LPIPS=%.4f HPS=%.4f Aes=%.2f %s",
+            "Exp %d — DINO=%.3f LPIPS=%.3f SSIM=%.3f Color=%.3f HPS=%.3f Aes=%.1f V[S=%.0f Su=%.0f C=%.0f Co=%.0f] %s",
             r.branch_id,
             m.dino_similarity_mean,
             m.lpips_distance_mean,
+            m.ssim_mean,
+            m.color_histogram_mean,
             m.hps_score_mean,
             m.aesthetics_score_mean,
+            m.vision_style,
+            m.vision_subject,
+            m.vision_color,
+            m.vision_composition,
             "KEPT" if r.kept else "discarded",
         )
 
@@ -260,9 +266,9 @@ async def _run_experiment(
     sorted_pairs = [item[0] for item in scored_items]
     sorted_captions = [item[2] for item in scored_items]
 
-    # Vision comparison with per-pair captions
+    # Vision comparison with per-pair captions — returns text + structured scores
     sorted_caption_texts = [c.text for c in sorted_captions]
-    vision_feedback = await compare_vision(
+    vision_feedback, vision_scores = await compare_vision(
         sorted_pairs,
         sorted_caption_texts,
         meta_prompt,
@@ -272,7 +278,18 @@ async def _run_experiment(
         max_pairs=5,
     )
 
-    # Build roundtrip feedback — full captions for worst 3
+    # Merge vision scores into aggregated metrics
+    from dataclasses import replace
+
+    aggregated = replace(
+        aggregated,
+        vision_style=vision_scores.style.score,
+        vision_subject=vision_scores.subject.score,
+        vision_color=vision_scores.color.score,
+        vision_composition=vision_scores.composition.score,
+    )
+
+    # Build roundtrip feedback — full caption for worst image, truncated for rest
     roundtrip_details: list[str] = []
     prev = _best_kept_result(last_results)
     prev_scores: dict[Path, float] = {}
@@ -289,6 +306,7 @@ async def _run_experiment(
         caption_text = cap.text if idx < 3 else f"{cap.text[:300]}..."
         roundtrip_details.append(
             f"Image ({_orig.name}): DINO={sc.dino_similarity:.3f} LPIPS={sc.lpips_distance:.3f} "
+            f"SSIM={sc.ssim:.3f} Color={sc.color_histogram:.3f} "
             f"HPS={sc.hps_score:.3f} Aes={sc.aesthetics_score:.1f}{trend}\n"
             f"  Caption: {caption_text}"
         )
@@ -345,6 +363,12 @@ def _update_knowledge_base(
             "lpips": result.aggregated.lpips_distance_mean - best_metrics.lpips_distance_mean,
             "hps": result.aggregated.hps_score_mean - best_metrics.hps_score_mean,
             "aesthetics": result.aggregated.aesthetics_score_mean - best_metrics.aesthetics_score_mean,
+            "ssim": result.aggregated.ssim_mean - best_metrics.ssim_mean,
+            "color_histogram": result.aggregated.color_histogram_mean - best_metrics.color_histogram_mean,
+            "vision_style": result.aggregated.vision_style - best_metrics.vision_style,
+            "vision_subject": result.aggregated.vision_subject - best_metrics.vision_subject,
+            "vision_color": result.aggregated.vision_color - best_metrics.vision_color,
+            "vision_composition": result.aggregated.vision_composition - best_metrics.vision_composition,
         }
 
     lessons = proposal.lessons
@@ -395,6 +419,31 @@ def _update_knowledge_base(
             new_problems.append(
                 OpenProblem(text=prob_text, category=prob_cat, priority=priority, metric_gap=gap, since_iteration=since)
             )
+        # Auto-add open problems from low Gemini vision dimension scores
+        agg = result.aggregated
+        vision_dims = [
+            ("style", agg.vision_style, "technique"),
+            ("subject", agg.vision_subject, "subject_matter"),
+            ("color", agg.vision_color, "color_palette"),
+            ("composition", agg.vision_composition, "composition"),
+        ]
+        for dim_name, score, cat_name in vision_dims:
+            if score < 5.0:
+                # Find the assessment text from the vision feedback if available
+                assessment = f"Vision {dim_name} score: {score:.0f}/10"
+                prob_text = f"{dim_name.title()} fidelity: {assessment}"
+                # Only add if not already present
+                if not any(dim_name in p.text.lower() for p in new_problems):
+                    new_problems.append(
+                        OpenProblem(
+                            text=prob_text,
+                            category=cat_name,
+                            priority="HIGH" if score < 3.0 else "MED",
+                            metric_gap=float((5.0 - score) / 10.0),
+                            since_iteration=iteration,
+                        )
+                    )
+
         kb.open_problems = new_problems
 
 
@@ -656,17 +705,19 @@ async def run(config: Config) -> LoopState:
                 break
             continue
 
-        # Phase 3: Find best experiment
-        best_exp = max(exp_results, key=lambda r: composite_score(r.aggregated))
-        best_score = composite_score(best_exp.aggregated)
+        # Phase 3: Find best experiment using adaptive scoring
+        from art_style_search.types import adaptive_composite_score
+
+        all_agg = [r.aggregated for r in exp_results]
+        best_exp = max(exp_results, key=lambda r: adaptive_composite_score(r.aggregated, all_agg))
+        best_score = adaptive_composite_score(best_exp.aggregated, all_agg)
         baseline_score = composite_score(state.best_metrics) if state.best_metrics else float("-inf")
 
         # Phase 3.5: Synthesis — merge top experiments if multiple improved
-        improved_exps = [r for r in exp_results if composite_score(r.aggregated) > baseline_score]
+        improved_exps = [r for r in exp_results if adaptive_composite_score(r.aggregated, all_agg) > baseline_score]
         if len(improved_exps) >= 2:
             logger.info("Synthesizing %d improved experiments into merged template", len(improved_exps))
-            # Sort by score descending, take top 3
-            improved_exps.sort(key=lambda r: composite_score(r.aggregated), reverse=True)
+            improved_exps.sort(key=lambda r: adaptive_composite_score(r.aggregated, all_agg), reverse=True)
             top_exps = improved_exps[:3]
 
             merged_template, merged_hypothesis = await synthesize_templates(

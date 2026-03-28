@@ -184,6 +184,48 @@ class ModelRegistry:
                 score = output.logits.squeeze().item()
                 return float(score)
 
+    def compute_ssim(self, generated: Image.Image, reference: Image.Image) -> float:
+        """Structural Similarity Index between two images.
+
+        Returns a float in [0, 1]; higher is better.  Both images are resized
+        to 256x256 and converted to grayscale for a fast, consistent comparison.
+        """
+        from skimage.metrics import structural_similarity
+
+        gen_gray = np.array(generated.convert("L").resize((256, 256)), dtype=np.float64)
+        ref_gray = np.array(reference.convert("L").resize((256, 256)), dtype=np.float64)
+        score: float = structural_similarity(gen_gray, ref_gray, data_range=255.0)
+        return score
+
+    def compute_color_histogram(self, generated: Image.Image, reference: Image.Image) -> float:
+        """Color histogram similarity in HSV space via histogram intersection.
+
+        Returns a float in [0, 1]; higher is better.  Both images are resized
+        to 256x256, converted to HSV, and compared channel-by-channel.
+        """
+        gen_hsv = np.array(generated.convert("RGB").resize((256, 256)))
+        ref_hsv = np.array(reference.convert("RGB").resize((256, 256)))
+
+        # Convert RGB → HSV manually via PIL
+        from PIL import ImageDraw  # noqa: F401 — ensure PIL loaded
+
+        gen_hsv = np.array(generated.convert("HSV").resize((256, 256)))
+        ref_hsv = np.array(reference.convert("HSV").resize((256, 256)))
+
+        # Histogram intersection per channel, averaged
+        similarities: list[float] = []
+        for ch in range(3):
+            bins = 64 if ch == 0 else 32  # more bins for hue
+            gen_hist, _ = np.histogram(gen_hsv[:, :, ch].ravel(), bins=bins, range=(0, 256))
+            ref_hist, _ = np.histogram(ref_hsv[:, :, ch].ravel(), bins=bins, range=(0, 256))
+            # Normalize
+            gen_hist = gen_hist.astype(np.float64) / (gen_hist.sum() + 1e-10)
+            ref_hist = ref_hist.astype(np.float64) / (ref_hist.sum() + 1e-10)
+            # Intersection
+            similarities.append(float(np.minimum(gen_hist, ref_hist).sum()))
+
+        return float(np.mean(similarities))
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------

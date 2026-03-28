@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
 from pathlib import Path
 
 from google import genai
 from PIL import Image
 
 from art_style_search.models import ModelRegistry
-from art_style_search.types import AggregatedMetrics, MetricScores
+from art_style_search.types import AggregatedMetrics, MetricScores, VisionDimensionScore, VisionScores
 from art_style_search.utils import image_to_gemini_part
 
 logger = logging.getLogger(__name__)
@@ -21,23 +22,54 @@ _VISION_COMPARE_PROMPT = (
     "(attempts to reproduce each reference from a text caption).\n\n"
     "The META-PROMPT (captioner instruction) was:\n{rendered_prompt}\n\n"
     "Each pair shows the caption used for generation. Compare the generated images against "
-    "the reference images. Evaluate BOTH:\n"
-    "- **Style reproduction**: art technique, colors, lighting, textures, mood\n"
-    "- **Subject/character fidelity**: character identity, proportions, poses, distinctive "
-    "features, scene elements, object placement\n\n"
+    "the reference images. Evaluate BOTH style reproduction AND subject/character fidelity.\n\n"
     "Respond in this structured format:\n\n"
     "<matched>Aspects the generated images capture correctly (style AND subject)</matched>\n"
     "<gaps>\n"
-    '<gap priority="high">Most critical difference — what\'s most wrong (style or subject)</gap>\n'
+    '<gap priority="high">Most critical difference (style or subject)</gap>\n'
     '<gap priority="high">Second most critical difference</gap>\n'
     '<gap priority="medium">Notable but less critical difference</gap>\n'
     "</gaps>\n"
-    "<caption_diagnosis>For each pair: did the CAPTION adequately describe the reference, "
+    "<caption_diagnosis>For each pair: did the caption adequately describe the reference, "
     "or did it miss key details? Is the generator failing to follow the caption, "
     "or is the caption itself insufficient?</caption_diagnosis>\n"
     "<prompt_issues>Which parts of the meta-prompt are working, which are being ignored, "
-    "and what specific wording changes would fix the gaps above</prompt_issues>"
+    "and what specific wording changes would fix the gaps</prompt_issues>\n\n"
+    "Finally, rate the overall reproduction quality per dimension (1-10) with a brief explanation:\n"
+    "<dimensions>\n"
+    '  <style score="N">How well the art style/technique is reproduced and why</style>\n'
+    '  <subject score="N">How well subjects/characters are reproduced and why</subject>\n'
+    '  <color score="N">How well the color palette matches and why</color>\n'
+    '  <composition score="N">How well the spatial layout matches and why</composition>\n'
+    "</dimensions>"
 )
+
+_DIMENSION_RE = re.compile(
+    r'<(\w+)\s+score="(\d+(?:\.\d+)?)">(.*?)</\1>',
+    re.DOTALL,
+)
+
+
+def _parse_vision_scores(text: str) -> VisionScores:
+    """Parse <dimensions> scores from Gemini's vision comparison response."""
+    scores: dict[str, VisionDimensionScore] = {}
+    for match in _DIMENSION_RE.finditer(text):
+        dim_name = match.group(1)
+        score = float(match.group(2))
+        assessment = match.group(3).strip()
+        if dim_name in ("style", "subject", "color", "composition"):
+            scores[dim_name] = VisionDimensionScore(
+                dimension=dim_name,
+                score=min(max(score, 1.0), 10.0),  # clamp to [1, 10]
+                assessment=assessment,
+            )
+
+    return VisionScores(
+        style=scores.get("style", VisionDimensionScore("style", 5.0, "")),
+        subject=scores.get("subject", VisionDimensionScore("subject", 5.0, "")),
+        color=scores.get("color", VisionDimensionScore("color", 5.0, "")),
+        composition=scores.get("composition", VisionDimensionScore("composition", 5.0, "")),
+    )
 
 
 async def compare_vision(
@@ -49,13 +81,12 @@ async def compare_vision(
     model: str,
     semaphore: asyncio.Semaphore,
     max_pairs: int = 5,
-) -> str:
+) -> tuple[str, VisionScores]:
     """Compare (original, generated) pairs via Gemini vision.
 
     Shows up to *max_pairs* pairs, deterministically picking the first N.
     Pairs should be pre-sorted worst-first for best feedback quality.
-    Each pair includes the caption used for generation so Gemini can diagnose
-    whether the caption or the generator is at fault.
+    Returns (qualitative_text, structured_scores).
     """
     show_pairs = pairs[:max_pairs]
     show_captions = captions[:max_pairs]
@@ -79,7 +110,9 @@ async def compare_vision(
                     model=model,
                     contents=contents,
                 )
-            return response.text
+            text = response.text
+            scores = _parse_vision_scores(text)
+            return text, scores
         except Exception as exc:
             last_exc = exc
             delay = 3.0 * (2**attempt)
@@ -253,6 +286,8 @@ def _aggregate(scores: list[MetricScores]) -> AggregatedMetrics:
     lpips_vals = [s.lpips_distance for s in scores]
     hps = [s.hps_score for s in scores]
     aes = [s.aesthetics_score for s in scores]
+    ssim_vals = [s.ssim for s in scores]
+    color_vals = [s.color_histogram for s in scores]
 
     return AggregatedMetrics(
         dino_similarity_mean=_mean(dino),
@@ -263,6 +298,10 @@ def _aggregate(scores: list[MetricScores]) -> AggregatedMetrics:
         hps_score_std=_std(hps),
         aesthetics_score_mean=_mean(aes),
         aesthetics_score_std=_std(aes),
+        ssim_mean=_mean(ssim_vals),
+        ssim_std=_std(ssim_vals),
+        color_histogram_mean=_mean(color_vals),
+        color_histogram_std=_std(color_vals),
     )
 
 
@@ -272,12 +311,15 @@ def _compute_single_sync(
     references: list[Image.Image],
     prompt: str,
 ) -> MetricScores:
-    """Compute all 4 metrics for one generated image (synchronous)."""
+    """Compute all 6 per-image metrics for one generated image (synchronous)."""
+    ref = references[0]  # always a single paired reference
     return MetricScores(
         dino_similarity=registry.compute_dino(generated, references),
         lpips_distance=registry.compute_lpips(generated, references),
         hps_score=registry.compute_hps(generated, prompt),
         aesthetics_score=registry.compute_aesthetics(generated),
+        ssim=registry.compute_ssim(generated, ref),
+        color_histogram=registry.compute_color_histogram(generated, ref),
     )
 
 

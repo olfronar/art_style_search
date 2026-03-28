@@ -18,6 +18,7 @@ dependencies = [
     "hpsv2>=1.2.0",
     "simple-aesthetics-predictor>=0.1.2",
     "numpy>=1.26.0",
+    "scikit-image>=0.22.0",
     "tqdm>=4.66.0",
     "python-dotenv>=1.2.2",
     "zai-sdk>=0.2.0",
