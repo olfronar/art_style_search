@@ -336,8 +336,8 @@ async def refine_template(
         "Per-image metrics (each generated image vs its paired original):\n"
         "- DINO (higher=better): semantic/structural match. 0.4=similar, 0.6=good, 0.8+=very close.\n"
         "- LPIPS (lower=better): perceptual distance. 0.5=noticeable, 0.3=similar, 0.1=near identical.\n"
-        "- SSIM (higher=better): structural similarity. 0.5=moderate, 0.7=good, 0.9+=excellent.\n"
         "- Color histogram (higher=better): color palette match. 0.7=similar, 0.9+=very close.\n"
+        "- Texture (higher=better): Gabor filter energy similarity for brush strokes/patterns. 0.7=similar, 0.9+=very close.\n"
         "- HPS v2 (higher=better): caption-image alignment. Range 0.20-0.30.\n"
         "- Aesthetics (higher=better, 1-10): visual quality. 5=mediocre, 7=good, 8+=excellent.\n"
         "Experiment-level vision scores (from Gemini visual comparison, 1-10):\n"
@@ -483,6 +483,242 @@ async def refine_template(
         builds_on=builds_on,
         open_problems=open_problems,
     )
+
+
+def _parse_refinement_branches(text: str, num_experiments: int) -> list[RefinementResult]:
+    """Parse multiple RefinementResults from <branch>-wrapped response blocks.
+
+    Each branch is expected to contain the same response tags as a single
+    ``refine_template`` call (hypothesis, experiment, template, etc.).
+    """
+    blocks = _BRANCH_BLOCK_RE.findall(text)
+    if not blocks:
+        # Fallback: treat entire response as one branch
+        logger.warning("No <branch> tags found — treating response as a single experiment")
+        blocks = [text]
+
+    results: list[RefinementResult] = []
+    for i, block in enumerate(blocks):
+        new_template = _parse_template(block)
+        if not new_template.sections:
+            logger.warning("Branch %d has no sections — skipping", i)
+            continue
+
+        results.append(
+            RefinementResult(
+                template=new_template,
+                analysis=_parse_analysis(block),
+                template_changes=_parse_template_changes(block),
+                should_stop=_parse_converged(block),
+                hypothesis=_parse_hypothesis(block),
+                experiment=_parse_experiment(block),
+                lessons=_parse_lessons(block),
+                builds_on=_parse_builds_on(block),
+                open_problems=_parse_open_problems(block),
+            )
+        )
+
+    if len(results) < num_experiments:
+        logger.warning("Got %d valid branches but requested %d", len(results), num_experiments)
+
+    return results
+
+
+async def propose_experiments(
+    style_profile: StyleProfile,
+    current_template: PromptTemplate,
+    knowledge_base: KnowledgeBase,
+    best_metrics: AggregatedMetrics | None,
+    last_results: list[IterationResult] | None,
+    *,
+    client: ReasoningClient,
+    model: str,
+    num_experiments: int,
+    vision_feedback: str = "",
+    roundtrip_feedback: str = "",
+    caption_diffs: str = "",
+) -> list[RefinementResult]:
+    """Propose N experiments in a single Claude call.
+
+    Uses ``<branch>`` tags so Claude generates all experiments at once,
+    ensuring inherent diversity without sequential dedup.  Follows the
+    same pattern as :func:`propose_initial_templates`.
+    """
+
+    system = (
+        "You are an expert art director and prompt engineer optimizing a META-PROMPT.\n\n"
+        "## How this system works\n"
+        "You are NOT writing image generation prompts directly. You are writing a META-PROMPT — "
+        "instructions that tell Gemini Pro HOW to caption/describe reference images. "
+        "Those captions are then used by Gemini Flash to generate images. "
+        "The goal is to produce captions precise enough to RECREATE the original images.\n\n"
+        "The pipeline: meta-prompt + reference image → Gemini Pro caption → Gemini Flash generation → compare with original.\n\n"
+        "## What makes a good meta-prompt\n"
+        "The meta-prompt must instruct the captioner to describe EVERY visual detail needed "
+        "for faithful recreation:\n"
+        "- Exact colors, technique, medium, brushwork\n"
+        "- Character/figure details: poses, expressions, clothing, proportions, identity\n"
+        "- Background/environment: setting, architecture, nature elements\n"
+        "- Composition: layout, framing, depth, perspective\n"
+        "- Lighting, shadows, atmospheric effects\n"
+        "- Textures, patterns, fine details\n"
+        "- Mood, emotional tone\n"
+        "- What to AVOID (common AI generation artifacts)\n\n"
+        "The meta-prompt should be 6-10 sections, each instructing the captioner what to describe "
+        "and how detailed to be. Total rendered prompt should be 200-400 words.\n\n"
+        "## Metric guidance\n"
+        "Per-image metrics (each generated image vs its paired original):\n"
+        "- DINO (higher=better): semantic/structural match. 0.4=similar, 0.6=good, 0.8+=very close.\n"
+        "- LPIPS (lower=better): perceptual distance. 0.5=noticeable, 0.3=similar, 0.1=near identical.\n"
+        "- Color histogram (higher=better): color palette match. 0.7=similar, 0.9+=very close.\n"
+        "- Texture (higher=better): Gabor filter energy similarity for brush strokes/patterns. 0.7=similar, 0.9+=very close.\n"
+        "- HPS v2 (higher=better): caption-image alignment. Range 0.20-0.30.\n"
+        "- Aesthetics (higher=better, 1-10): visual quality. 5=mediocre, 7=good, 8+=excellent.\n"
+        "Experiment-level vision scores (from Gemini visual comparison, 1-10):\n"
+        "- vision_style: art technique reproduction quality.\n"
+        "- vision_subject: character/subject fidelity.\n"
+        "- vision_composition: spatial layout accuracy.\n"
+        "Weights are ADAPTIVE — metrics with more variance across experiments get higher weight.\n\n"
+        "## Iteration strategy\n"
+        f"- Propose exactly {num_experiments} experiments, each in a <branch> tag. "
+        "Each MUST have a DIFFERENT hypothesis targeting a DIFFERENT weakness or category.\n"
+        "- There are no fixed 'branches' — shift focus freely between categories "
+        "as the weakest area changes.\n"
+        "- Make 1-2 targeted changes per experiment, not wholesale rewrites.\n"
+        "- If DINO/LPIPS are weak: the captions miss structural or color details — "
+        "add instructions for the captioner to be more specific about those.\n"
+        "- If per-image scores vary widely: some images are harder — consider "
+        "conditional captioning instructions (e.g. 'for character images describe X; "
+        "for backgrounds describe Y').\n"
+        "- Use the vision comparison and per-image roundtrip feedback to identify "
+        "what the captions consistently miss.\n"
+        "- CRITICAL: Read the Knowledge Base carefully. The 'Do NOT Repeat' section lists "
+        "failed experiments. Build on confirmed insights. Reference hypothesis IDs (e.g. 'builds on H3').\n"
+        "- Use Per-Category Status to identify which style dimensions need work.\n"
+        "- Target the weakest category or build on partially confirmed hypotheses.\n"
+        "- Use the Open Problems list to focus on the highest-priority gaps.\n"
+        "- Update <open_problems> each iteration: add new ones, remove solved ones, re-rank.\n\n"
+        "If metrics have plateaued, append [CONVERGED] at the very end of the LAST branch.\n\n"
+        f"Response format — exactly {num_experiments} branches, each containing ALL required tags:\n"
+        "<branch>\n"
+        "<lessons>\n"
+        "  <confirmed>Which previous hypotheses are confirmed by THIS iteration's results?</confirmed>\n"
+        "  <rejected>Which previous hypotheses are rejected? What didn't work and why?</rejected>\n"
+        "  <new_insight>Any new observation from the data not covered by existing hypotheses</new_insight>\n"
+        "</lessons>\n"
+        "<hypothesis>Based on the knowledge base and current results, what is the "
+        "PRIMARY remaining gap? Be specific — name the metric, the images, the visual element.</hypothesis>\n"
+        "<builds_on>H-ids this builds on, or 'none' for fresh direction</builds_on>\n"
+        "<experiment>The specific 1-2 changes you're making to test this hypothesis</experiment>\n"
+        "<open_problems>\n"
+        "  1. Most critical remaining problem\n"
+        "  2. Second most critical\n"
+        "  3. Third (if any)\n"
+        "</open_problems>\n"
+        "<template_changes>structural changes or 'none'</template_changes>\n"
+        "<template>\n"
+        '  <section name="..." description="...">value</section>\n'
+        "  ...\n"
+        "  <negative>things to avoid</negative>\n"
+        "</template>\n"
+        "</branch>\n"
+        "(repeat for each experiment)\n"
+        "[CONVERGED]  (only if converged, after the last branch)"
+    )
+
+    # Build the user message with all context
+    has_history = knowledge_base.hypotheses
+    user_parts: list[str] = [
+        "## Style Profile\n",
+        _format_style_profile(style_profile, compact=bool(has_history)),
+        "\n\n## Current Template\n",
+        _format_template(current_template),
+        f"\nRendered prompt: {current_template.render()}",
+    ]
+
+    if best_metrics:
+        user_parts.append("\n\n## Best Metrics So Far\n")
+        user_parts.append(_format_metrics(best_metrics))
+
+    # Knowledge base — structured lessons from all previous experiments
+    kb_text = knowledge_base.render_for_claude()
+    if kb_text:
+        user_parts.append("\n\n")
+        user_parts.append(kb_text)
+
+    # Show last iteration results — only the kept experiment in detail
+    if last_results:
+        user_parts.append("\n\n## Last Iteration Results\n")
+        kept = [r for r in last_results if r.kept]
+        discarded = [r for r in last_results if not r.kept]
+        for res in kept:
+            user_parts.append(f"BEST Experiment {res.branch_id}:\n")
+            user_parts.append(f"  Metrics: {_format_metrics(res.aggregated)}\n")
+            if res.hypothesis:
+                user_parts.append(f"  Hypothesis: {res.hypothesis}\n")
+            if res.experiment:
+                user_parts.append(f"  Experiment: {res.experiment}\n")
+        if discarded:
+            user_parts.append(f"({len(discarded)} other experiments discarded)\n")
+
+    if vision_feedback:
+        user_parts.append("\n\n## Vision Comparison (Gemini analysis of generated vs reference images)\n")
+        user_parts.append(vision_feedback)
+
+    if roundtrip_feedback:
+        user_parts.append("\n\n## Per-Image Results (sorted worst → best by DINO)\n")
+        user_parts.append(roundtrip_feedback)
+
+    if caption_diffs:
+        user_parts.append(f"\n\n{caption_diffs}")
+
+    has_feedback = vision_feedback or roundtrip_feedback
+    instruction = (
+        f"\n\nPropose {num_experiments} improved templates, each in a <branch> tag. "
+        "Each experiment must target a DIFFERENT weakness — review the Knowledge Base, "
+        "then formulate hypotheses that build on previous insights (reference H-ids). "
+        "Update open problems in each branch."
+    )
+    if has_feedback:
+        instruction += (
+            " Use the vision comparison and per-image results to ground your hypotheses in specific evidence."
+        )
+    user_parts.append(instruction)
+
+    user = "".join(user_parts)
+
+    logger.info(
+        "Requesting %d experiment proposals (%s) — context: ~%d words", num_experiments, model, len(user.split())
+    )
+
+    text = await client.call(model=model, system=system, user=user, max_tokens=40000)
+
+    results = _parse_refinement_branches(text, num_experiments)
+
+    # Check for convergence signal after all branches (top-level [CONVERGED])
+    if _parse_converged(text):
+        if results:
+            results[-1].should_stop = True
+        else:
+            # No valid branches but converged — return a dummy result
+            results.append(
+                RefinementResult(
+                    template=current_template,
+                    analysis="",
+                    template_changes="",
+                    should_stop=True,
+                    hypothesis="",
+                    experiment="",
+                    lessons=Lessons(),
+                    builds_on=None,
+                    open_problems=[],
+                )
+            )
+
+    if not results:
+        logger.warning("No valid experiments parsed from response")
+
+    return results
 
 
 async def synthesize_templates(

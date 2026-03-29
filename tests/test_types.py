@@ -29,19 +29,22 @@ class TestCompositeScore:
             aesthetics_score_mean=7.0,
             aesthetics_score_std=0.5,
         )
-        # 9-metric formula; ssim/color_histogram default to 0.0, vision_* default to 5.0
+        # 8-metric formula; color_histogram defaults to 0.0, vision_* default to 5.0
         # HPS normalized: min(0.28/0.35, 1.0) = 0.8
-        expected = (
-            0.28 * 0.8
-            - 0.18 * 0.3
+        base = (
+            0.26 * 0.8
+            - 0.14 * 0.3
             + 0.10 * min(0.28 / 0.35, 1.0)
             + 0.10 * (7.0 / 10.0)
             + 0.18 * 0.0
             + 0.10 * 0.0
-            + 0.02 * (5.0 / 10.0)
-            + 0.02 * (5.0 / 10.0)
-            + 0.02 * (5.0 / 10.0)
+            + 0.04 * (5.0 / 10.0)
+            + 0.04 * (5.0 / 10.0)
+            + 0.04 * (5.0 / 10.0)
         )
+        # Consistency penalty: 0.15 * (dino_std + lpips_std + color_histogram_std) / 3.0
+        penalty = 0.15 * (0.01 + 0.02 + 0.0) / 3.0
+        expected = base - penalty
         assert abs(composite_score(m) - expected) < 1e-9
 
     def test_zero_metrics(self) -> None:
@@ -56,7 +59,7 @@ class TestCompositeScore:
             aesthetics_score_std=0.0,
         )
         # vision_style/subject/composition default to 5.0
-        expected = 0.02 * (5.0 / 10.0) + 0.02 * (5.0 / 10.0) + 0.02 * (5.0 / 10.0)
+        expected = 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0)
         assert abs(composite_score(m) - expected) < 1e-9
 
     def test_higher_dino_yields_higher_score(self) -> None:
@@ -88,8 +91,8 @@ class TestCompositeScore:
         assert composite_score(low_lpips) > composite_score(high_lpips)
 
     def test_weights_sum_to_one(self) -> None:
-        """Verify the coefficient magnitudes sum to 1.0 (9 metrics)."""
-        assert abs((0.28 + 0.18 + 0.10 + 0.10 + 0.18 + 0.10 + 0.02 + 0.02 + 0.02) - 1.0) < 1e-9
+        """Verify the coefficient magnitudes sum to 1.0 (8 metrics)."""
+        assert abs((0.26 + 0.14 + 0.10 + 0.10 + 0.18 + 0.10 + 0.04 + 0.04 + 0.04) - 1.0) < 1e-9
 
     def test_hps_normalized(self) -> None:
         """HPS v2 scores (~0.25-0.35) should be normalized to [0,1] via /0.35 ceiling."""
@@ -104,7 +107,7 @@ class TestCompositeScore:
             aesthetics_score_std=0.0,
         )
         # HPS: 0.10 * min(0.35/0.35, 1.0) = 0.10, plus 3 vision defaults at 5.0
-        expected = 0.10 * 1.0 + 0.02 * (5.0 / 10.0) + 0.02 * (5.0 / 10.0) + 0.02 * (5.0 / 10.0)
+        expected = 0.10 * 1.0 + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0)
         assert abs(composite_score(m) - expected) < 1e-9
 
     def test_hps_clamped_above_ceiling(self) -> None:
@@ -120,7 +123,7 @@ class TestCompositeScore:
             aesthetics_score_std=0.0,
         )
         # Clamped: min(0.50/0.35, 1.0) = 1.0
-        expected = 0.10 * 1.0 + 0.02 * (5.0 / 10.0) + 0.02 * (5.0 / 10.0) + 0.02 * (5.0 / 10.0)
+        expected = 0.10 * 1.0 + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0)
         assert abs(composite_score(m) - expected) < 1e-9
 
     def test_aesthetics_divided_by_ten(self) -> None:
@@ -136,7 +139,7 @@ class TestCompositeScore:
             aesthetics_score_std=0.0,
         )
         # Aesthetics: 0.10 * (10.0 / 10.0) = 0.10, plus 3 vision defaults at 5.0
-        expected = 0.10 * (10.0 / 10.0) + 0.02 * (5.0 / 10.0) + 0.02 * (5.0 / 10.0) + 0.02 * (5.0 / 10.0)
+        expected = 0.10 * (10.0 / 10.0) + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0)
         assert abs(composite_score(m) - expected) < 1e-9
 
 
@@ -221,10 +224,10 @@ class TestAggregatedMetricsSummaryDict:
             "hps_score_std",
             "aesthetics_score_mean",
             "aesthetics_score_std",
-            "ssim_mean",
-            "ssim_std",
             "color_histogram_mean",
             "color_histogram_std",
+            "texture_mean",
+            "texture_std",
             "vision_style",
             "vision_subject",
             "vision_composition",
@@ -265,7 +268,7 @@ class TestAggregatedMetricsSummaryDict:
         )
         assert isinstance(m.summary_dict(), dict)
 
-    def test_exactly_sixteen_entries(self) -> None:
+    def test_exactly_fifteen_entries(self) -> None:
         m = AggregatedMetrics(
             dino_similarity_mean=0.0,
             dino_similarity_std=0.0,

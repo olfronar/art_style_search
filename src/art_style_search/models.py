@@ -184,19 +184,6 @@ class ModelRegistry:
                 score = output.logits.squeeze().item()
                 return float(score)
 
-    def compute_ssim(self, generated: Image.Image, reference: Image.Image) -> float:
-        """Structural Similarity Index between two images.
-
-        Returns a float in [0, 1]; higher is better.  Both images are resized
-        to 256x256 and converted to grayscale for a fast, consistent comparison.
-        """
-        from skimage.metrics import structural_similarity
-
-        gen_gray = np.array(generated.convert("L").resize((256, 256)), dtype=np.float64)
-        ref_gray = np.array(reference.convert("L").resize((256, 256)), dtype=np.float64)
-        score: float = structural_similarity(gen_gray, ref_gray, data_range=255.0)
-        return score
-
     def compute_color_histogram(self, generated: Image.Image, reference: Image.Image) -> float:
         """Color histogram similarity in HSV space via histogram intersection.
 
@@ -219,6 +206,53 @@ class ModelRegistry:
             similarities.append(float(np.minimum(gen_hist, ref_hist).sum()))
 
         return float(np.mean(similarities))
+
+    def compute_texture(self, generated: Image.Image, reference: Image.Image) -> float:
+        """Texture similarity via Gabor filter bank energy comparison.
+
+        Applies Gabor filters at multiple orientations and frequencies to both
+        images, extracts energy features, and returns cosine similarity in [0, 1].
+        Higher is better.
+        """
+        from scipy.ndimage import convolve
+
+        size = 256
+        gen_gray = np.array(generated.convert("L").resize((size, size)), dtype=np.float64)
+        ref_gray = np.array(reference.convert("L").resize((size, size)), dtype=np.float64)
+
+        # Gabor filter bank: 4 orientations x 3 frequencies = 12 filters
+        orientations = [0, np.pi / 4, np.pi / 2, 3 * np.pi / 4]
+        frequencies = [0.1, 0.2, 0.4]
+        ksize = 31
+
+        def _gabor_kernel(freq: float, theta: float) -> np.ndarray:
+            x = np.arange(ksize) - ksize // 2
+            y = np.arange(ksize) - ksize // 2
+            xx, yy = np.meshgrid(x, y)
+            xr = xx * np.cos(theta) + yy * np.sin(theta)
+            yr = -xx * np.sin(theta) + yy * np.cos(theta)
+            sigma = 1.0 / (2.0 * np.pi * freq)
+            gauss = np.exp(-0.5 * (xr**2 + yr**2) / sigma**2)
+            return gauss * np.cos(2.0 * np.pi * freq * xr)
+
+        gen_features: list[float] = []
+        ref_features: list[float] = []
+        for theta in orientations:
+            for freq in frequencies:
+                kernel = _gabor_kernel(freq, theta)
+                gen_resp = convolve(gen_gray, kernel, mode="reflect")
+                ref_resp = convolve(ref_gray, kernel, mode="reflect")
+                gen_features.append(float(np.mean(gen_resp**2)))
+                ref_features.append(float(np.mean(ref_resp**2)))
+
+        # Cosine similarity of energy feature vectors
+        gen_vec = np.array(gen_features)
+        ref_vec = np.array(ref_features)
+        dot = float(np.dot(gen_vec, ref_vec))
+        norm = float(np.linalg.norm(gen_vec) * np.linalg.norm(ref_vec))
+        if norm < 1e-10:
+            return 0.0
+        return max(0.0, min(1.0, dot / norm))
 
     # ------------------------------------------------------------------
     # Helpers

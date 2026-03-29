@@ -95,12 +95,12 @@ def parse_args(argv: list[str] | None = None) -> Config:
         "--reasoning-provider",
         choices=["anthropic", "zai"],
         default="anthropic",
-        help="Reasoning model provider: anthropic (Claude) or zai (GLM-5)",
+        help="Reasoning model provider: anthropic (Claude) or zai (GLM-5.1)",
     )
     models.add_argument(
         "--reasoning-model",
         default=None,
-        help="Reasoning model name (default: claude-opus-4-6 for anthropic, glm-5 for zai)",
+        help="Reasoning model name (default: claude-opus-4-6 for anthropic, glm-5.1 for zai)",
     )
 
     # Concurrency
@@ -129,7 +129,7 @@ def parse_args(argv: list[str] | None = None) -> Config:
         parser.error("GOOGLE_API_KEY must be set via --google-api-key or environment variable")
 
     # Default model based on provider
-    default_models = {"anthropic": "claude-opus-4-6", "zai": "glm-5"}
+    default_models = {"anthropic": "claude-opus-4-6", "zai": "glm-5.1"}
     reasoning_model = args.reasoning_model or default_models[provider]
 
     if not args.reference_dir.is_dir():

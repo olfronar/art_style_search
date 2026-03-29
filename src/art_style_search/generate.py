@@ -29,8 +29,8 @@ async def _generate_single(
     last_exc: Exception | None = None
 
     for attempt in range(_MAX_RETRIES):
-        async with semaphore:
-            try:
+        try:
+            async with semaphore:
                 response = await client.aio.models.generate_content(
                     model=model,
                     contents=prompt,
@@ -44,55 +44,55 @@ async def _generate_single(
                     ),
                 )
 
-                if not response.candidates or not response.candidates[0].content.parts:
-                    msg = f"Image {index}: empty response from model"
-                    raise RuntimeError(msg)
-
-                for part in response.candidates[0].content.parts:
-                    if part.inline_data is not None:
-                        output_path.write_bytes(part.inline_data.data)
-                        return output_path
-                    if hasattr(part, "image") and part.image is not None:
-                        output_path.write_bytes(part.image.image_bytes)
-                        return output_path
-
-                part_types = [type(p).__name__ for p in response.candidates[0].content.parts]
-                text_parts = [p.text for p in response.candidates[0].content.parts if hasattr(p, "text") and p.text]
-                text_summary = "; ".join(t[:200] for t in text_parts) if text_parts else "none"
-                logger.warning(
-                    "Image %d: response parts=%s, text=%s",
-                    index,
-                    part_types,
-                    text_summary,
-                )
-                msg = f"Image {index}: no image data found in response parts"
+            if not response.candidates or not response.candidates[0].content.parts:
+                msg = f"Image {index}: empty response from model"
                 raise RuntimeError(msg)
 
-            except genai.errors.ClientError as exc:
-                last_exc = exc
-                delay = _BASE_DELAY * (2**attempt)
-                logger.warning(
-                    "Image %d: ClientError on attempt %d/%d, retrying in %.1fs: %s",
-                    index,
-                    attempt + 1,
-                    _MAX_RETRIES,
-                    delay,
-                    exc,
-                )
-                await asyncio.sleep(delay)
-            except Exception as exc:
-                # Catch rate-limit or transient errors
-                last_exc = exc
-                delay = _BASE_DELAY * (2**attempt)
-                logger.warning(
-                    "Image %d: error on attempt %d/%d, retrying in %.1fs: %s",
-                    index,
-                    attempt + 1,
-                    _MAX_RETRIES,
-                    delay,
-                    exc,
-                )
-                await asyncio.sleep(delay)
+            for part in response.candidates[0].content.parts:
+                if part.inline_data is not None:
+                    output_path.write_bytes(part.inline_data.data)
+                    return output_path
+                if hasattr(part, "image") and part.image is not None:
+                    output_path.write_bytes(part.image.image_bytes)
+                    return output_path
+
+            part_types = [type(p).__name__ for p in response.candidates[0].content.parts]
+            text_parts = [p.text for p in response.candidates[0].content.parts if hasattr(p, "text") and p.text]
+            text_summary = "; ".join(t[:200] for t in text_parts) if text_parts else "none"
+            logger.warning(
+                "Image %d: response parts=%s, text=%s",
+                index,
+                part_types,
+                text_summary,
+            )
+            msg = f"Image {index}: no image data found in response parts"
+            raise RuntimeError(msg)
+
+        except genai.errors.ClientError as exc:
+            last_exc = exc
+            delay = _BASE_DELAY * (2**attempt)
+            logger.warning(
+                "Image %d: ClientError on attempt %d/%d, retrying in %.1fs: %s",
+                index,
+                attempt + 1,
+                _MAX_RETRIES,
+                delay,
+                exc,
+            )
+            await asyncio.sleep(delay)
+        except Exception as exc:
+            # Catch rate-limit or transient errors
+            last_exc = exc
+            delay = _BASE_DELAY * (2**attempt)
+            logger.warning(
+                "Image %d: error on attempt %d/%d, retrying in %.1fs: %s",
+                index,
+                attempt + 1,
+                _MAX_RETRIES,
+                delay,
+                exc,
+            )
+            await asyncio.sleep(delay)
 
     msg = f"Image {index}: all {_MAX_RETRIES} retries exhausted"
     raise RuntimeError(msg) from last_exc

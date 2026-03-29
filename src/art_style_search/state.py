@@ -76,17 +76,19 @@ def _caption_from_dict(d: dict[str, Any]) -> Caption:
 
 
 def _metric_scores_from_dict(d: dict[str, Any]) -> MetricScores:
+    # Note: old state.json files may contain "ssim" — silently ignored for backward compat.
     return MetricScores(
         dino_similarity=d["dino_similarity"],
         lpips_distance=d["lpips_distance"],
         hps_score=d["hps_score"],
         aesthetics_score=d["aesthetics_score"],
-        ssim=d.get("ssim", 0.0),
         color_histogram=d.get("color_histogram", 0.0),
+        texture=d.get("texture", 0.0),
     )
 
 
 def _aggregated_metrics_from_dict(d: dict[str, Any]) -> AggregatedMetrics:
+    # Note: old state.json files may contain "ssim_mean"/"ssim_std" — silently ignored for backward compat.
     return AggregatedMetrics(
         dino_similarity_mean=d["dino_similarity_mean"],
         dino_similarity_std=d["dino_similarity_std"],
@@ -96,10 +98,10 @@ def _aggregated_metrics_from_dict(d: dict[str, Any]) -> AggregatedMetrics:
         hps_score_std=d["hps_score_std"],
         aesthetics_score_mean=d["aesthetics_score_mean"],
         aesthetics_score_std=d["aesthetics_score_std"],
-        ssim_mean=d.get("ssim_mean", 0.0),
-        ssim_std=d.get("ssim_std", 0.0),
         color_histogram_mean=d.get("color_histogram_mean", 0.0),
         color_histogram_std=d.get("color_histogram_std", 0.0),
+        texture_mean=d.get("texture_mean", 0.0),
+        texture_std=d.get("texture_std", 0.0),
         vision_style=d.get("vision_style", 5.0),
         vision_subject=d.get("vision_subject", 5.0),
         vision_composition=d.get("vision_composition", 5.0),

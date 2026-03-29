@@ -180,8 +180,8 @@ class TestToDict:
             "lpips_distance",
             "hps_score",
             "aesthetics_score",
-            "ssim",
             "color_histogram",
+            "texture",
         }
         for v in d.values():
             assert isinstance(v, float)

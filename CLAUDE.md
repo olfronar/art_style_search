@@ -15,7 +15,7 @@ Self-improving loop that optimizes a meta-prompt for precise image recreation. T
 ## Loop Flow
 
 0. **Zero-step**: Fix 10 reference images. Caption them, analyze style → `StyleProfile` + N diverse initial meta-prompts. Evaluate all, pick best.
-1. Claude proposes N experiments (hypothesis-driven template variants) from shared KB, each with a different hypothesis
+1. Claude proposes N experiments in a single batched call (hypothesis-driven template variants, `<branch>` tags) from shared KB, each with a different hypothesis
 2. Each experiment in parallel: meta-prompt + reference → caption → generate → evaluate
 3. Compare each (original, generated) pair: per-image paired metrics (DINO, LPIPS, HPS, aesthetics) + Gemini vision comparison (style + subject fidelity)
 4. Best experiment updates the current template; all results feed into shared KnowledgeBase
@@ -37,7 +37,7 @@ uv run python -m art_style_search clean  # Remove outputs, logs, and state
 
 - `ANTHROPIC_API_KEY` - Anthropic API key for Claude (when using `--reasoning-provider anthropic`)
 - `GOOGLE_API_KEY` - Google API key for Gemini models (always required)
-- `ZAI_API_KEY` - Z.AI API key for GLM-5 (when using `--reasoning-provider zai`)
+- `ZAI_API_KEY` - Z.AI API key for GLM-5.1 (when using `--reasoning-provider zai`)
 
 ## Module Map
 
@@ -45,10 +45,12 @@ uv run python -m art_style_search clean  # Remove outputs, logs, and state
 - `config.py` - CLI argument parsing → Config dataclass
 - `analyze.py` - Zero-step: parallel Gemini+Claude style analysis → StyleProfile + initial PromptTemplate
 - `caption.py` - Gemini Pro captioning with disk cache
-- `prompt.py` - Claude meta-prompt proposal/refinement (template structure + values); `RefinementResult` dataclass for structured returns
+- `prompt.py` - Claude meta-prompt proposal/refinement (template structure + values); `propose_experiments` batches N proposals in one call using `<branch>` tags; `refine_template` exists for single-experiment use; `RefinementResult` dataclass for structured returns
 - `generate.py` - Gemini Flash image generation with semaphore + retry
-- `models.py` - ModelRegistry: lazy-load DINO/LPIPS/HPS/Aesthetics with per-model locks
-- `evaluate.py` - Dispatches 4 metrics per image via asyncio.to_thread + Gemini vision comparison
+- `experiment.py` - Single-experiment execution (caption + generate + evaluate), `ExperimentProposal` dataclass, result collection helpers
+- `knowledge.py` - Knowledge Base maintenance (hypothesis tracking, open problems, caption diffs)
+- `models.py` - ModelRegistry: lazy-load DINO/LPIPS/HPS/Aesthetics/Texture with per-model locks
+- `evaluate.py` - Dispatches metrics per image via asyncio.to_thread + Gemini vision comparison
 - `utils.py` - Shared helpers: Anthropic streaming/text extraction, Gemini image part builder, MIME map
 - `state.py` - JSON persistence (state.json + per-iteration logs)
 - `loop.py` - Experiment-based orchestration loop (zero-step → N parallel experiments per iteration → shared KB → convergence)
@@ -67,24 +69,26 @@ uv run python -m art_style_search clean  # Remove outputs, logs, and state
 Each metric compares a generated image against its specific paired original (not all references):
 - **DINO cosine similarity**: Semantic/structural match per image pair. Higher = better.
 - **LPIPS**: Perceptual distance per image pair. Lower = better.
-- **SSIM**: Structural similarity. Higher = better.
 - **Color histogram**: HSV histogram intersection. Higher = better.
+- **Texture**: Gabor filter energy cosine similarity. Higher = better.
 - **HPS v2**: Caption-image alignment (normalized: raw / 0.35, clamped to 1.0). Higher = better.
 - **LAION Aesthetics**: Aesthetic quality predictor (1-10 scale, normalized /10). Higher = better.
-- **Vision scores (style/subject/composition)**: Gemini LLM-based comparison (1-10 scale, normalized /10, low weight 2% each due to single-sample noise). Higher = better.
+- **Vision scores (style/subject/composition)**: Gemini LLM-based comparison (1-10 scale, normalized /10, low weight 4% each). Higher = better.
 
 ## Code Conventions
 
 - Helpers used by 2+ modules belong in `utils.py`; within a module, extract helpers when the same logic appears in both zero-step and main loop paths (e.g. `_apply_best_result`, `_collect_experiment_results`)
-- Data fed to Claude in `refine_template` must appear via exactly one path — if the history formatter includes a field, don't also add a dedicated section for it (or vice versa)
+- Data fed to Claude in `propose_experiments` / `refine_template` must appear via exactly one path — if the history formatter includes a field, don't also add a dedicated section for it (or vice versa)
 - Evaluation metrics must receive inputs matching their documented semantics — DINO/LPIPS compare against the specific paired reference (not a set centroid), HPS scores against the per-image caption (the generation prompt, not the meta-prompt)
 - Persisted collections (`experiment_history`, etc.) must be bounded — cap and drop oldest entries rather than growing without limit in state.json
 - Iteration-to-iteration learning uses a shared `KnowledgeBase` on `LoopState` — no persistent branches, just per-iteration experiments feeding one KB
 - `BranchState` is legacy (kept for backward compat deserialization of old state.json)
 - Hypothesis classification uses keyword matching in `classify_hypothesis()` with `_CATEGORY_SYNONYMS` — extend the synonym map when adding new categories
-- Scoring: `adaptive_composite_score` ranks experiments against each other (relative); `composite_score` is used for improvement checks against baseline (absolute, same scale) — never compare values from different scoring functions
+- Scoring: `adaptive_composite_score` ranks experiments against each other (relative); `composite_score` is used for improvement checks against baseline (absolute, same scale, with `IMPROVEMENT_EPSILON` threshold to filter generation noise) — never compare values from different scoring functions
+- `composite_score` includes a consistency penalty (0.15 weight) based on per-image std of DINO, LPIPS, and color histogram — experiments with high variance across images are penalized
 - Open problems in KB are merged across experiments (deduplicated by text, capped at 10), not replaced — earlier experiments' problems survive
 - Vision comparison failures degrade gracefully to neutral defaults (5.0) instead of killing experiments
+- Exploration mechanism: on even plateau counts (2, 4, 6, ...), the loop adopts the second-best experiment (ranked by `adaptive_composite_score`) to escape local optima; odd counts stay greedy (alternating exploration/exploitation). Requires >= 2 experiments to trigger.
 
 ## Code Style
 

@@ -16,8 +16,6 @@ import asyncio
 import concurrent.futures
 import logging
 import random
-import re
-from dataclasses import dataclass, replace
 from pathlib import Path
 
 from google import genai
@@ -25,36 +23,35 @@ from google import genai
 from art_style_search.analyze import analyze_style
 from art_style_search.caption import caption_references
 from art_style_search.config import Config
-from art_style_search.evaluate import check_caption_compliance, compare_vision, evaluate_images
-from art_style_search.generate import _generate_single
+from art_style_search.experiment import (
+    ExperimentProposal,
+    best_kept_result,
+    collect_experiment_results,
+    run_experiment,
+)
+from art_style_search.knowledge import build_caption_diffs, update_knowledge_base
 from art_style_search.models import ModelRegistry
 from art_style_search.prompt import (
     Lessons,
+    propose_experiments,
     propose_initial_templates,
-    refine_template,
     synthesize_templates,
 )
 from art_style_search.state import load_state, save_iteration_log, save_state
 from art_style_search.types import (
-    AggregatedMetrics,
-    Caption,
+    IMPROVEMENT_EPSILON,
     ConvergenceReason,
     IterationResult,
     KnowledgeBase,
     LoopState,
-    OpenProblem,
-    PromptTemplate,
     adaptive_composite_score,
-    classify_hypothesis,
     composite_score,
-    get_category_names,
 )
 from art_style_search.utils import ReasoningClient
 
 logger = logging.getLogger(__name__)
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
-_PRIORITY_ORDER = {"HIGH": 0, "MED": 1, "LOW": 2}
 
 
 # ---------------------------------------------------------------------------
@@ -74,24 +71,6 @@ def _sample(items: list[Path], max_count: int) -> list[Path]:
     if len(items) <= max_count:
         return items
     return random.sample(items, max_count)
-
-
-def _best_kept_result(results: list[IterationResult]) -> IterationResult | None:
-    """Return the kept result from a list, or the first result, or None."""
-    if not results:
-        return None
-    return next((r for r in results if r.kept), results[0])
-
-
-def _collect_experiment_results(raw: list[IterationResult | BaseException], label: str) -> list[IterationResult]:
-    """Filter successful results from asyncio.gather output, logging failures."""
-    results: list[IterationResult] = []
-    for r in raw:
-        if isinstance(r, BaseException):
-            logger.error("%s failed: %s: %s", label, type(r).__name__, r, exc_info=r)
-        else:
-            results.append(r)
-    return results
 
 
 def _apply_best_result(state: LoopState, result: IterationResult) -> None:
@@ -119,12 +98,12 @@ def _log_experiment_results(results: list[IterationResult], log_dir: Path) -> No
         save_iteration_log(r, log_dir)
         m = r.aggregated
         logger.info(
-            "Exp %d — DINO=%.3f LPIPS=%.3f SSIM=%.3f Color=%.3f HPS=%.3f Aes=%.1f V[S=%.0f Su=%.0f Co=%.0f] %s",
+            "Exp %d — DINO=%.3f LPIPS=%.3f Color=%.3f Tex=%.3f HPS=%.3f Aes=%.1f V[S=%.0f Su=%.0f Co=%.0f] %s",
             r.branch_id,
             m.dino_similarity_mean,
             m.lpips_distance_mean,
-            m.ssim_mean,
             m.color_histogram_mean,
+            m.texture_mean,
             m.hps_score_mean,
             m.aesthetics_score_mean,
             m.vision_style,
@@ -132,350 +111,6 @@ def _log_experiment_results(results: list[IterationResult], log_dir: Path) -> No
             m.vision_composition,
             "KEPT" if r.kept else "discarded",
         )
-
-
-# ---------------------------------------------------------------------------
-# Experiment proposal dataclass (replaces 8-element tuple)
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class _ExperimentProposal:
-    """Holds Claude's proposed experiment before it's executed."""
-
-    template: PromptTemplate
-    hypothesis: str
-    experiment_desc: str
-    builds_on: str | None
-    open_problems: list[str]
-    lessons: Lessons
-
-
-# ---------------------------------------------------------------------------
-# Captioning + generation + evaluation
-# ---------------------------------------------------------------------------
-
-
-async def _caption_and_generate(
-    ref_paths: list[Path],
-    meta_prompt: str,
-    *,
-    config: Config,
-    gemini_client: genai.Client,
-    gemini_semaphore: asyncio.Semaphore,
-    iteration: int,
-    experiment_id: int,
-) -> tuple[list[Caption], list[Path], list[tuple[Path, Path]]]:
-    """Caption reference images with the meta-prompt, then generate images from captions.
-
-    Returns (captions, generated_paths, pairs) where pairs maps (original, generated).
-    """
-    captions = await caption_references(
-        ref_paths,
-        model=config.caption_model,
-        client=gemini_client,
-        cache_dir=config.log_dir / f"iter_{iteration:03d}" / f"exp_{experiment_id}" / "captions",
-        semaphore=gemini_semaphore,
-        prompt=meta_prompt,
-        cache_key=f"iter{iteration}_e{experiment_id}",
-    )
-
-    gen_dir = config.output_dir / f"iter_{iteration:03d}" / f"exp_{experiment_id}"
-    gen_dir.mkdir(parents=True, exist_ok=True)
-
-    gen_tasks = [
-        _generate_single(
-            caption.text,
-            index=i,
-            aspect_ratio=config.aspect_ratio,
-            output_path=gen_dir / f"{i:02d}.png",
-            client=gemini_client,
-            model=config.generator_model,
-            semaphore=gemini_semaphore,
-        )
-        for i, caption in enumerate(captions)
-    ]
-
-    gen_results = await asyncio.gather(*gen_tasks, return_exceptions=True)
-
-    generated_paths: list[Path] = []
-    pairs: list[tuple[Path, Path]] = []
-    for i, (caption, gen_result) in enumerate(zip(captions, gen_results, strict=True)):
-        if isinstance(gen_result, BaseException):
-            logger.warning("Exp %d: generation from caption %d failed: %s", experiment_id, i, gen_result)
-        else:
-            generated_paths.append(gen_result)
-            pairs.append((caption.image_path, gen_result))
-
-    return captions, generated_paths, pairs
-
-
-async def _run_experiment(
-    experiment_id: int,
-    template: PromptTemplate,
-    iteration: int,
-    fixed_refs: list[Path],
-    config: Config,
-    *,
-    gemini_client: genai.Client,
-    registry: ModelRegistry,
-    gemini_semaphore: asyncio.Semaphore,
-    eval_semaphore: asyncio.Semaphore,
-    last_results: list[IterationResult],
-    hypothesis: str = "",
-    experiment_desc: str = "",
-) -> IterationResult:
-    """Execute one experiment: caption → generate → evaluate (no Claude call here)."""
-    meta_prompt = template.render()
-    logger.info("Exp %d iter %d — meta-prompt: %.100s...", experiment_id, iteration, meta_prompt)
-
-    captions, generated_paths, pairs = await _caption_and_generate(
-        fixed_refs,
-        meta_prompt,
-        config=config,
-        gemini_client=gemini_client,
-        gemini_semaphore=gemini_semaphore,
-        iteration=iteration,
-        experiment_id=experiment_id,
-    )
-
-    if not generated_paths:
-        raise RuntimeError(f"Experiment {experiment_id}: no images generated")
-
-    logger.info(
-        "Exp %d iter %d — %d/%d images generated", experiment_id, iteration, len(generated_paths), len(fixed_refs)
-    )
-
-    # Evaluate — per-image paired comparison
-    gen_paths_for_eval = [gen for _, gen in pairs]
-    ref_paths_for_eval = [orig for orig, _ in pairs]
-    caption_by_path = {c.image_path: c.text for c in captions}
-    eval_captions = [caption_by_path[orig] for orig, _ in pairs]
-
-    eval_task = evaluate_images(
-        gen_paths_for_eval,
-        ref_paths_for_eval,
-        eval_captions,
-        registry=registry,
-        semaphore=eval_semaphore,
-    )
-
-    section_names = [s.name for s in template.sections]
-    compliance = check_caption_compliance(section_names, captions)
-
-    scores, aggregated = await eval_task
-
-    # Sort by DINO worst first
-    scored_items = list(zip(pairs, scores, captions, strict=False))
-    scored_items.sort(key=lambda x: x[1].dino_similarity)
-
-    sorted_pairs = [item[0] for item in scored_items]
-    sorted_captions = [item[2] for item in scored_items]
-
-    # Vision comparison with per-pair captions — returns text + structured scores
-    sorted_caption_texts = [c.text for c in sorted_captions]
-    vision_feedback, vision_scores = await compare_vision(
-        sorted_pairs,
-        sorted_caption_texts,
-        meta_prompt,
-        client=gemini_client,
-        model=config.caption_model,
-        semaphore=gemini_semaphore,
-        max_pairs=5,
-    )
-
-    # Merge vision scores into aggregated metrics
-
-    aggregated = replace(
-        aggregated,
-        vision_style=vision_scores.style.score,
-        vision_subject=vision_scores.subject.score,
-        vision_composition=vision_scores.composition.score,
-    )
-
-    # Build roundtrip feedback — full caption for worst image, truncated for rest
-    roundtrip_details: list[str] = []
-    prev = _best_kept_result(last_results)
-    prev_scores: dict[Path, float] = {}
-    if prev:
-        for cap, sc in zip(prev.iteration_captions, prev.per_image_scores, strict=False):
-            prev_scores[cap.image_path] = sc.dino_similarity
-
-    for idx, ((_orig, _gen), sc, cap) in enumerate(scored_items):
-        prev_dino = prev_scores.get(cap.image_path)
-        trend = ""
-        if prev_dino is not None:
-            arrow = "↑" if sc.dino_similarity > prev_dino else "↓" if sc.dino_similarity < prev_dino else "="
-            trend = f" [prev DINO={prev_dino:.3f} → {sc.dino_similarity:.3f} {arrow}]"
-        caption_text = cap.text if idx < 3 else f"{cap.text[:300]}..."
-        roundtrip_details.append(
-            f"Image ({_orig.name}): DINO={sc.dino_similarity:.3f} LPIPS={sc.lpips_distance:.3f} "
-            f"SSIM={sc.ssim:.3f} Color={sc.color_histogram:.3f} "
-            f"HPS={sc.hps_score:.3f} Aes={sc.aesthetics_score:.1f}{trend}\n"
-            f"  Caption: {caption_text}"
-        )
-    roundtrip_feedback = "\n".join(roundtrip_details)
-    if compliance:
-        roundtrip_feedback = compliance + "\n\n" + roundtrip_feedback
-
-    return IterationResult(
-        branch_id=experiment_id,
-        iteration=iteration,
-        template=template,
-        rendered_prompt=meta_prompt,
-        image_paths=generated_paths,
-        per_image_scores=scores,
-        aggregated=aggregated,
-        claude_analysis="",
-        template_changes="",
-        kept=False,
-        hypothesis=hypothesis,
-        experiment=experiment_desc,
-        vision_feedback=vision_feedback,
-        roundtrip_feedback=roundtrip_feedback,
-        iteration_captions=captions,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Knowledge Base maintenance
-# ---------------------------------------------------------------------------
-
-
-def _update_knowledge_base(
-    kb: KnowledgeBase,
-    result: IterationResult,
-    template: PromptTemplate,
-    best_metrics: AggregatedMetrics | None,
-    proposal: _ExperimentProposal,
-    iteration: int,
-) -> None:
-    """Update the shared KB with one experiment's results."""
-    parent_id: str | None = None
-    if proposal.builds_on:
-        parent_match = re.match(r"H(\d+)", proposal.builds_on)
-        if parent_match:
-            parent_id = f"H{parent_match.group(1)}"
-
-    category_names = get_category_names(template)
-    category = classify_hypothesis(result.hypothesis, category_names) if result.hypothesis else "general"
-
-    metric_delta: dict[str, float] = {}
-    if best_metrics is not None:
-        metric_delta = {
-            "dino": result.aggregated.dino_similarity_mean - best_metrics.dino_similarity_mean,
-            "lpips": result.aggregated.lpips_distance_mean - best_metrics.lpips_distance_mean,
-            "hps": result.aggregated.hps_score_mean - best_metrics.hps_score_mean,
-            "aesthetics": result.aggregated.aesthetics_score_mean - best_metrics.aesthetics_score_mean,
-            "ssim": result.aggregated.ssim_mean - best_metrics.ssim_mean,
-            "color_histogram": result.aggregated.color_histogram_mean - best_metrics.color_histogram_mean,
-            "vision_style": result.aggregated.vision_style - best_metrics.vision_style,
-            "vision_subject": result.aggregated.vision_subject - best_metrics.vision_subject,
-            "vision_composition": result.aggregated.vision_composition - best_metrics.vision_composition,
-        }
-
-    lessons = proposal.lessons
-    lesson_text = lessons.confirmed or lessons.new_insight or lessons.rejected or ""
-
-    if result.hypothesis:
-        kb.add_hypothesis(
-            iteration=iteration,
-            parent_id=parent_id,
-            statement=result.hypothesis,
-            experiment=result.experiment,
-            category=category,
-            kept=result.kept,
-            metric_delta=metric_delta,
-            lesson=lesson_text,
-            confirmed=lessons.confirmed,
-            rejected=lessons.rejected,
-        )
-
-    if proposal.open_problems:
-        scores = result.per_image_scores
-        cat_dinos: dict[str, list[float]] = {}
-        for sc in scores:
-            cat_dinos.setdefault("all", []).append(sc.dino_similarity)
-        best_cat_dino = max((sum(v) / len(v) for v in cat_dinos.values()), default=0.0)
-
-        prev_problem_texts = {p.text: p.since_iteration for p in kb.open_problems}
-
-        new_problems: list[OpenProblem] = []
-        for prob_text in proposal.open_problems:
-            prob_cat = classify_hypothesis(prob_text, category_names)
-            cat_progress = kb.categories.get(prob_cat)
-
-            if cat_progress is None or not cat_progress.confirmed_insights:
-                priority = "HIGH"
-            elif cat_progress.rejected_approaches and len(cat_progress.rejected_approaches) >= len(
-                cat_progress.confirmed_insights
-            ):
-                priority = "MED"
-            else:
-                priority = "LOW"
-
-            gap = best_cat_dino - (
-                cat_progress.best_dino_delta if cat_progress and cat_progress.best_dino_delta else 0.0
-            )
-            since = prev_problem_texts.get(prob_text, iteration)
-
-            new_problems.append(
-                OpenProblem(text=prob_text, category=prob_cat, priority=priority, metric_gap=gap, since_iteration=since)
-            )
-        # Auto-add open problems from low Gemini vision dimension scores
-        agg = result.aggregated
-        vision_dims = [
-            ("style", agg.vision_style, "technique"),
-            ("subject", agg.vision_subject, "subject_matter"),
-            ("composition", agg.vision_composition, "composition"),
-        ]
-        for dim_name, score, cat_name in vision_dims:
-            if score < 5.0:
-                # Find the assessment text from the vision feedback if available
-                assessment = f"Vision {dim_name} score: {score:.0f}/10"
-                prob_text = f"{dim_name.title()} fidelity: {assessment}"
-                # Only add if not already present
-                if not any(dim_name in p.text.lower() for p in new_problems):
-                    new_problems.append(
-                        OpenProblem(
-                            text=prob_text,
-                            category=cat_name,
-                            priority="HIGH" if score < 3.0 else "MED",
-                            metric_gap=float((5.0 - score) / 10.0),
-                            since_iteration=iteration,
-                        )
-                    )
-
-        # Merge with existing problems instead of replacing — keeps context across experiments
-        existing_by_text = {p.text: p for p in kb.open_problems}
-        for p in new_problems:
-            existing_by_text[p.text] = p  # newer version wins for duplicates
-        kb.open_problems = sorted(existing_by_text.values(), key=lambda p: _PRIORITY_ORDER.get(p.priority, 3))[:10]
-
-
-def _build_caption_diffs(last_results: list[IterationResult], worst_captions: list[Caption]) -> str:
-    """Show how captions changed for worst-performing images vs previous iteration."""
-    if not last_results or not worst_captions:
-        return ""
-    prev = _best_kept_result(last_results)
-    if not prev:
-        return ""
-    prev_by_path = {c.image_path: c.text for c in prev.iteration_captions}
-
-    diffs: list[str] = []
-    for cap in worst_captions:
-        prev_text = prev_by_path.get(cap.image_path)
-        if prev_text is None:
-            continue
-        if prev_text == cap.text:
-            diffs.append(
-                f"**{cap.image_path.name}**: Caption UNCHANGED (meta-prompt change had no effect on this image)"
-            )
-        else:
-            diffs.append(f"**{cap.image_path.name}**:\n  PREV: {prev_text[:200]}...\n  NOW:  {cap.text[:200]}...")
-    if not diffs:
-        return ""
-    return "## Caption Changes (worst 3 images, prev → current)\n" + "\n".join(diffs)
 
 
 # ---------------------------------------------------------------------------
@@ -514,7 +149,7 @@ async def run(config: Config) -> LoopState:
         raise FileNotFoundError(msg)
     logger.info("Found %d reference images", len(all_ref_paths))
 
-    # Shared kwargs for _run_experiment
+    # Shared kwargs for run_experiment
     exp_kwargs = {
         "config": config,
         "gemini_client": gemini_client,
@@ -583,7 +218,7 @@ async def run(config: Config) -> LoopState:
         logger.info("=== Iteration 0 — evaluating %d initial templates ===", len(initial_templates))
         try:
             init_tasks = [
-                _run_experiment(
+                run_experiment(
                     experiment_id=i,
                     template=t,
                     iteration=0,
@@ -596,7 +231,7 @@ async def run(config: Config) -> LoopState:
                 for i, t in enumerate(initial_templates)
             ]
 
-            init_results = _collect_experiment_results(
+            init_results = collect_experiment_results(
                 await asyncio.gather(*init_tasks, return_exceptions=True), "Initial experiment"
             )
         except Exception:
@@ -621,7 +256,7 @@ async def run(config: Config) -> LoopState:
         logger.info("=== Iteration %d/%d ===", iteration + 1, config.max_iterations)
 
         # Use the best experiment's feedback from last iteration
-        best_last = _best_kept_result(state.last_iteration_results)
+        best_last = best_kept_result(state.last_iteration_results)
         vision_fb = best_last.vision_feedback if best_last else ""
         roundtrip_fb = best_last.roundtrip_feedback if best_last else ""
 
@@ -632,36 +267,32 @@ async def run(config: Config) -> LoopState:
                 key=lambda x: x[1].dino_similarity,
             )
             worst_caps = [c for c, _ in sorted_caps[:3]]
-            caption_diffs = _build_caption_diffs(state.last_iteration_results, worst_caps)
+            caption_diffs = build_caption_diffs(state.last_iteration_results, worst_caps)
 
-        # Phase 1: Claude proposes N experiments sequentially (for dedup)
-        proposals: list[_ExperimentProposal] = []
-        proposed_hypotheses: list[str] = []
+        # Phase 1: Claude proposes N experiments in a single call
+        refinements = await propose_experiments(
+            state.style_profile,
+            state.current_template,
+            state.knowledge_base,
+            state.best_metrics,
+            state.last_iteration_results,
+            client=reasoning_client,
+            model=config.reasoning_model,
+            num_experiments=config.num_branches,
+            vision_feedback=vision_fb,
+            roundtrip_feedback=roundtrip_fb,
+            caption_diffs=caption_diffs,
+        )
 
-        for exp_idx in range(config.num_branches):
-            refinement = await refine_template(
-                state.style_profile,
-                state.current_template,
-                state.knowledge_base,
-                state.best_metrics,
-                state.last_iteration_results,
-                client=reasoning_client,
-                model=config.reasoning_model,
-                vision_feedback=vision_fb,
-                roundtrip_feedback=roundtrip_fb,
-                caption_diffs=caption_diffs,
-                already_proposed=proposed_hypotheses if proposed_hypotheses else None,
-            )
-
+        proposals: list[ExperimentProposal] = []
+        for refinement in refinements:
             if refinement.should_stop:
-                logger.info("Claude signaled convergence at experiment %d", exp_idx)
+                logger.info("Claude signaled convergence")
                 state.converged = True
                 state.convergence_reason = ConvergenceReason.CLAUDE_STOP
                 break
-
-            proposed_hypotheses.append(refinement.hypothesis)
             proposals.append(
-                _ExperimentProposal(
+                ExperimentProposal(
                     template=refinement.template,
                     hypothesis=refinement.hypothesis,
                     experiment_desc=refinement.experiment,
@@ -682,7 +313,7 @@ async def run(config: Config) -> LoopState:
 
         # Phase 2: Run all experiments in parallel
         exp_tasks = [
-            _run_experiment(
+            run_experiment(
                 experiment_id=i,
                 template=p.template,
                 iteration=iteration,
@@ -695,9 +326,7 @@ async def run(config: Config) -> LoopState:
             for i, p in enumerate(proposals)
         ]
 
-        exp_results = _collect_experiment_results(
-            await asyncio.gather(*exp_tasks, return_exceptions=True), "Experiment"
-        )
+        exp_results = collect_experiment_results(await asyncio.gather(*exp_tasks, return_exceptions=True), "Experiment")
 
         if not exp_results:
             logger.warning("All experiments failed this iteration")
@@ -721,7 +350,7 @@ async def run(config: Config) -> LoopState:
 
         # Phase 3.5: Synthesis — merge top experiments if multiple improved
         synth_result: IterationResult | None = None
-        improved_exps = [r for r in exp_results if exp_scores[id(r)] > baseline_score]
+        improved_exps = [r for r in exp_results if exp_scores[id(r)] > baseline_score + IMPROVEMENT_EPSILON]
         if len(improved_exps) >= 2:
             logger.info("Synthesizing %d improved experiments into merged template", len(improved_exps))
             improved_exps.sort(key=lambda r: exp_scores[id(r)], reverse=True)
@@ -735,7 +364,7 @@ async def run(config: Config) -> LoopState:
             )
 
             # Validate the merged template
-            synth_result = await _run_experiment(
+            synth_result = await run_experiment(
                 experiment_id=len(exp_results),
                 template=merged_template,
                 iteration=iteration,
@@ -758,14 +387,28 @@ async def run(config: Config) -> LoopState:
                 best_score = merged_score
                 logger.info("Synthesis beat best individual — adopting merged template")
 
-        # Update state with best result
-        improved = best_score > baseline_score
+        # Update state with best result (epsilon threshold filters generation noise)
+        improved = best_score > baseline_score + IMPROVEMENT_EPSILON
 
         if improved:
             _apply_best_result(state, best_exp)
             state.plateau_counter = 0
         else:
             state.plateau_counter += 1
+
+            # Exploration: on even plateau counts (2, 4, 6, ...), adopt the second-best
+            # experiment to escape potential local optima.  Odd counts stay greedy so we
+            # alternate between exploration and exploitation.
+            if state.plateau_counter >= 2 and state.plateau_counter % 2 == 0 and len(exp_results) >= 2:
+                # Rank by adaptive score (diversity-aware) to pick a genuinely different runner-up
+                ranked = sorted(
+                    exp_results,
+                    key=lambda r: adaptive_composite_score(r.aggregated, all_agg),
+                    reverse=True,
+                )
+                second_best = ranked[1]
+                logger.info("Exploration: adopting second-best experiment to escape potential local optimum")
+                _apply_best_result(state, second_best)
 
         state.last_iteration_results = exp_results
         state.experiment_history.extend(exp_results)
@@ -775,7 +418,7 @@ async def run(config: Config) -> LoopState:
 
         # Phase 4: Update shared KB with ALL experiment results
         for exp_result, proposal in zip(exp_results, proposals, strict=False):
-            _update_knowledge_base(
+            update_knowledge_base(
                 state.knowledge_base,
                 exp_result,
                 exp_result.template,
@@ -785,7 +428,7 @@ async def run(config: Config) -> LoopState:
             )
         # Record synthesis experiment separately (it has no matching proposal)
         if synth_result is not None:
-            synth_proposal = _ExperimentProposal(
+            synth_proposal = ExperimentProposal(
                 template=synth_result.template,
                 hypothesis=synth_result.hypothesis,
                 experiment_desc=synth_result.experiment,
@@ -793,7 +436,7 @@ async def run(config: Config) -> LoopState:
                 open_problems=[],
                 lessons=Lessons(),
             )
-            _update_knowledge_base(
+            update_knowledge_base(
                 state.knowledge_base,
                 synth_result,
                 synth_result.template,

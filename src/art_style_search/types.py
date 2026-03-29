@@ -24,8 +24,8 @@ class MetricScores:
     lpips_distance: float  # lower = better, perceptual distance
     hps_score: float  # higher = better, human preference for caption-image alignment
     aesthetics_score: float  # higher = better, 1-10 scale
-    ssim: float = 0.0  # higher = better, structural similarity [0, 1]
     color_histogram: float = 0.0  # higher = better, HSV histogram similarity [0, 1]
+    texture: float = 0.0  # higher = better, Gabor filter energy cosine similarity [0, 1]
 
 
 @dataclass(frozen=True)
@@ -59,7 +59,7 @@ class VisionScores:
 class AggregatedMetrics:
     """Mean + std of per-image MetricScores, plus experiment-level vision scores."""
 
-    # Per-image metric aggregates (6 metrics x 2 = 12 fields)
+    # Per-image metric aggregates (5 metrics x 2 = 10 fields)
     dino_similarity_mean: float
     dino_similarity_std: float
     lpips_distance_mean: float
@@ -68,10 +68,10 @@ class AggregatedMetrics:
     hps_score_std: float
     aesthetics_score_mean: float
     aesthetics_score_std: float
-    ssim_mean: float = 0.0
-    ssim_std: float = 0.0
     color_histogram_mean: float = 0.0
     color_histogram_std: float = 0.0
+    texture_mean: float = 0.0
+    texture_std: float = 0.0
 
     # Experiment-level Gemini vision scores (1-10 scale, not per-image)
     vision_style: float = 5.0
@@ -89,41 +89,49 @@ class AggregatedMetrics:
             "hps_score_std": self.hps_score_std,
             "aesthetics_score_mean": self.aesthetics_score_mean,
             "aesthetics_score_std": self.aesthetics_score_std,
-            "ssim_mean": self.ssim_mean,
-            "ssim_std": self.ssim_std,
             "color_histogram_mean": self.color_histogram_mean,
             "color_histogram_std": self.color_histogram_std,
+            "texture_mean": self.texture_mean,
+            "texture_std": self.texture_std,
             "vision_style": self.vision_style,
             "vision_subject": self.vision_subject,
             "vision_composition": self.vision_composition,
         }
 
 
-_HPS_CEILING = 0.35  # empirical max for HPS v2 scores; used to normalize to [0, 1]
+_HPS_CEILING = 0.35  # default empirical max for HPS v2 scores; used to normalize to [0, 1]
+
+# Improvement must exceed this threshold to be accepted (filters generation noise)
+IMPROVEMENT_EPSILON = 0.005
 
 
-def _normalize_hps(raw: float) -> float:
+def _normalize_hps(raw: float, ceiling: float = _HPS_CEILING) -> float:
     """Normalize raw HPS v2 score to [0, 1] using the empirical ceiling."""
-    return min(raw / _HPS_CEILING, 1.0)
+    return min(raw / ceiling, 1.0)
 
 
 def composite_score(m: AggregatedMetrics) -> float:
     """Fixed-weight composite score used for absolute quality comparison.
 
-    All metrics normalized to ~[0, 1] before weighting.  Vision scores are
-    downweighted (2% each) because they are single-sample LLM estimates.
+    All metrics normalized to ~[0, 1] before weighting.
+    Weights: DINO 26%, LPIPS -14%, Color 18%, Texture 10%, HPS 10%, Aesthetics 10%,
+    Vision 4%+4%+4%=12%.
+    Includes a consistency penalty based on per-image score variance.
     """
-    return (
-        0.28 * m.dino_similarity_mean
-        - 0.18 * m.lpips_distance_mean
+    base = (
+        0.26 * m.dino_similarity_mean
+        - 0.14 * m.lpips_distance_mean
         + 0.10 * _normalize_hps(m.hps_score_mean)
         + 0.10 * (m.aesthetics_score_mean / 10.0)
-        + 0.18 * m.ssim_mean
-        + 0.10 * m.color_histogram_mean
-        + 0.02 * (m.vision_style / 10.0)
-        + 0.02 * (m.vision_subject / 10.0)
-        + 0.02 * (m.vision_composition / 10.0)
+        + 0.18 * m.color_histogram_mean
+        + 0.10 * m.texture_mean
+        + 0.04 * (m.vision_style / 10.0)
+        + 0.04 * (m.vision_subject / 10.0)
+        + 0.04 * (m.vision_composition / 10.0)
     )
+    # Penalize inconsistency: high std across images means unreliable reproduction
+    variance_penalty = 0.15 * (m.dino_similarity_std + m.lpips_distance_std + m.color_histogram_std) / 3.0
+    return base - variance_penalty
 
 
 def adaptive_composite_score(
@@ -144,8 +152,8 @@ def adaptive_composite_score(
         ("lpips", lambda r: r.lpips_distance_mean, -1),
         ("hps", lambda r: _normalize_hps(r.hps_score_mean), 1),
         ("aesthetics", lambda r: r.aesthetics_score_mean / 10.0, 1),
-        ("ssim", lambda r: r.ssim_mean, 1),
         ("color_hist", lambda r: r.color_histogram_mean, 1),
+        ("texture", lambda r: r.texture_mean, 1),
         ("v_style", lambda r: r.vision_style / 10.0, 1),
         ("v_subject", lambda r: r.vision_subject / 10.0, 1),
         ("v_composition", lambda r: r.vision_composition / 10.0, 1),

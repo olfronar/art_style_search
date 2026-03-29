@@ -290,8 +290,8 @@ def _aggregate(scores: list[MetricScores]) -> AggregatedMetrics:
     lpips_vals = [s.lpips_distance for s in scores]
     hps = [s.hps_score for s in scores]
     aes = [s.aesthetics_score for s in scores]
-    ssim_vals = [s.ssim for s in scores]
     color_vals = [s.color_histogram for s in scores]
+    texture_vals = [s.texture for s in scores]
 
     return AggregatedMetrics(
         dino_similarity_mean=_mean(dino),
@@ -302,10 +302,10 @@ def _aggregate(scores: list[MetricScores]) -> AggregatedMetrics:
         hps_score_std=_std(hps),
         aesthetics_score_mean=_mean(aes),
         aesthetics_score_std=_std(aes),
-        ssim_mean=_mean(ssim_vals),
-        ssim_std=_std(ssim_vals),
         color_histogram_mean=_mean(color_vals),
         color_histogram_std=_std(color_vals),
+        texture_mean=_mean(texture_vals),
+        texture_std=_std(texture_vals),
     )
 
 
@@ -322,8 +322,8 @@ def _compute_single_sync(
         lpips_distance=registry.compute_lpips(generated, references),
         hps_score=registry.compute_hps(generated, prompt),
         aesthetics_score=registry.compute_aesthetics(generated),
-        ssim=registry.compute_ssim(generated, ref),
         color_histogram=registry.compute_color_histogram(generated, ref),
+        texture=registry.compute_texture(generated, ref),
     )
 
 
