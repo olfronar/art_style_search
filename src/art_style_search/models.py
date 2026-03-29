@@ -216,7 +216,7 @@ class ModelRegistry:
             return self._gabor_kernels
 
         orientations = [0, np.pi / 4, np.pi / 2, 3 * np.pi / 4]
-        frequencies = [0.1, 0.2, 0.4]
+        frequencies = [0.05, 0.1, 0.2]
         ksize = 31
         kernels: list[np.ndarray] = []
         x = np.arange(ksize) - ksize // 2
@@ -226,7 +226,8 @@ class ModelRegistry:
             xr = xx * ct + yy * st
             yr = -xx * st + yy * ct
             for freq in frequencies:
-                sigma = 1.0 / (2.0 * np.pi * freq)
+                # Standard Gabor: sigma = 0.5 / freq (~1 octave bandwidth)
+                sigma = 0.5 / freq
                 gauss = np.exp(-0.5 * (xr**2 + yr**2) / sigma**2)
                 kernels.append(gauss * np.cos(2.0 * np.pi * freq * xr))
         self._gabor_kernels = kernels
@@ -236,18 +237,25 @@ class ModelRegistry:
         """Texture similarity via Gabor filter bank energy comparison.
 
         Returns cosine similarity in [0, 1]; higher is better.
+        Mean-subtracts images to remove DC bias and uses log-energy features
+        so all frequency bands contribute equally to the similarity.
         """
         from scipy.ndimage import convolve
 
         kernels = self._ensure_gabor_kernels()
         gen_gray = np.array(generated.convert("L").resize((256, 256)), dtype=np.float64)
         ref_gray = np.array(reference.convert("L").resize((256, 256)), dtype=np.float64)
+        # Remove DC component so similarity reflects texture, not brightness
+        gen_gray -= gen_gray.mean()
+        ref_gray -= ref_gray.mean()
 
         gen_features: list[float] = []
         ref_features: list[float] = []
         for kernel in kernels:
-            gen_features.append(float(np.mean(convolve(gen_gray, kernel, mode="reflect") ** 2)))
-            ref_features.append(float(np.mean(convolve(ref_gray, kernel, mode="reflect") ** 2)))
+            gen_energy = float(np.mean(convolve(gen_gray, kernel, mode="reflect") ** 2))
+            ref_energy = float(np.mean(convolve(ref_gray, kernel, mode="reflect") ** 2))
+            gen_features.append(np.log1p(gen_energy))
+            ref_features.append(np.log1p(ref_energy))
 
         gen_vec = np.array(gen_features)
         ref_vec = np.array(ref_features)
