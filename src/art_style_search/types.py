@@ -99,17 +99,24 @@ class AggregatedMetrics:
         }
 
 
+_HPS_CEILING = 0.35  # empirical max for HPS v2 scores; used to normalize to [0, 1]
+
+
+def _normalize_hps(raw: float) -> float:
+    """Normalize raw HPS v2 score to [0, 1] using the empirical ceiling."""
+    return min(raw / _HPS_CEILING, 1.0)
+
+
 def composite_score(m: AggregatedMetrics) -> float:
     """Fixed-weight composite score used for absolute quality comparison.
 
     All metrics normalized to ~[0, 1] before weighting.  Vision scores are
     downweighted (2% each) because they are single-sample LLM estimates.
-    HPS v2 is normalized using an empirical ceiling of 0.35.
     """
     return (
         0.28 * m.dino_similarity_mean
         - 0.18 * m.lpips_distance_mean
-        + 0.10 * min(m.hps_score_mean / 0.35, 1.0)
+        + 0.10 * _normalize_hps(m.hps_score_mean)
         + 0.10 * (m.aesthetics_score_mean / 10.0)
         + 0.18 * m.ssim_mean
         + 0.10 * m.color_histogram_mean
@@ -135,7 +142,7 @@ def adaptive_composite_score(
     metric_defs: list[tuple[str, callable, int]] = [
         ("dino", lambda r: r.dino_similarity_mean, 1),
         ("lpips", lambda r: r.lpips_distance_mean, -1),
-        ("hps", lambda r: min(r.hps_score_mean / 0.35, 1.0), 1),
+        ("hps", lambda r: _normalize_hps(r.hps_score_mean), 1),
         ("aesthetics", lambda r: r.aesthetics_score_mean / 10.0, 1),
         ("ssim", lambda r: r.ssim_mean, 1),
         ("color_hist", lambda r: r.color_histogram_mean, 1),

@@ -54,6 +54,7 @@ from art_style_search.utils import ReasoningClient
 logger = logging.getLogger(__name__)
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+_PRIORITY_ORDER = {"HIGH": 0, "MED": 1, "LOW": 2}
 
 
 # ---------------------------------------------------------------------------
@@ -449,8 +450,7 @@ def _update_knowledge_base(
         existing_by_text = {p.text: p for p in kb.open_problems}
         for p in new_problems:
             existing_by_text[p.text] = p  # newer version wins for duplicates
-        priority_order = {"HIGH": 0, "MED": 1, "LOW": 2}
-        kb.open_problems = sorted(existing_by_text.values(), key=lambda p: priority_order.get(p.priority, 3))[:10]
+        kb.open_problems = sorted(existing_by_text.values(), key=lambda p: _PRIORITY_ORDER.get(p.priority, 3))[:10]
 
 
 def _build_caption_diffs(last_results: list[IterationResult], worst_captions: list[Caption]) -> str:
@@ -601,7 +601,6 @@ async def run(config: Config) -> LoopState:
             )
         except Exception:
             logger.exception("Zero-step evaluation failed — partial state saved for resume")
-            save_state(state, config.state_file)
             raise
 
         if init_results:
@@ -717,11 +716,15 @@ async def run(config: Config) -> LoopState:
         best_score = composite_score(best_exp.aggregated)
         baseline_score = composite_score(state.best_metrics) if state.best_metrics else float("-inf")
 
+        # Pre-compute composite scores to avoid repeated calls
+        exp_scores = {id(r): composite_score(r.aggregated) for r in exp_results}
+
         # Phase 3.5: Synthesis — merge top experiments if multiple improved
-        improved_exps = [r for r in exp_results if composite_score(r.aggregated) > baseline_score]
+        synth_result: IterationResult | None = None
+        improved_exps = [r for r in exp_results if exp_scores[id(r)] > baseline_score]
         if len(improved_exps) >= 2:
             logger.info("Synthesizing %d improved experiments into merged template", len(improved_exps))
-            improved_exps.sort(key=lambda r: composite_score(r.aggregated), reverse=True)
+            improved_exps.sort(key=lambda r: exp_scores[id(r)], reverse=True)
             top_exps = improved_exps[:3]
 
             merged_template, merged_hypothesis = await synthesize_templates(
@@ -732,7 +735,7 @@ async def run(config: Config) -> LoopState:
             )
 
             # Validate the merged template
-            merged_result = await _run_experiment(
+            synth_result = await _run_experiment(
                 experiment_id=len(exp_results),
                 template=merged_template,
                 iteration=iteration,
@@ -742,16 +745,16 @@ async def run(config: Config) -> LoopState:
                 experiment_desc="Synthesis of top experiments",
                 **exp_kwargs,
             )
-            merged_score = composite_score(merged_result.aggregated)
+            merged_score = composite_score(synth_result.aggregated)
             logger.info(
                 "Synthesis result: DINO=%.4f (best individual: %.4f)",
-                merged_result.aggregated.dino_similarity_mean,
+                synth_result.aggregated.dino_similarity_mean,
                 best_exp.aggregated.dino_similarity_mean,
             )
 
-            exp_results.append(merged_result)
+            exp_results.append(synth_result)
             if merged_score > best_score:
-                best_exp = merged_result
+                best_exp = synth_result
                 best_score = merged_score
                 logger.info("Synthesis beat best individual — adopting merged template")
 
@@ -781,8 +784,7 @@ async def run(config: Config) -> LoopState:
                 iteration,
             )
         # Record synthesis experiment separately (it has no matching proposal)
-        if len(exp_results) > len(proposals):
-            synth_result = exp_results[-1]
+        if synth_result is not None:
             synth_proposal = _ExperimentProposal(
                 template=synth_result.template,
                 hypothesis=synth_result.hypothesis,
