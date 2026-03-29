@@ -21,26 +21,32 @@ _VISION_COMPARE_PROMPT = (
     "You are an expert art analyst. You are shown reference images and generated images "
     "(attempts to reproduce each reference from a text caption).\n\n"
     "The META-PROMPT (captioner instruction) was:\n{rendered_prompt}\n\n"
-    "Each pair shows the caption used for generation. Compare the generated images against "
-    "the reference images. Evaluate BOTH style reproduction AND subject/character fidelity.\n\n"
+    "Each pair shows the caption used for generation. Be BRUTALLY HONEST — do not be generous. "
+    "Focus on what is WRONG, not what is right.\n\n"
     "Respond in this structured format:\n\n"
-    "<matched>Aspects the generated images capture correctly (style AND subject)</matched>\n"
+    "<matched>Aspects captured correctly (be brief)</matched>\n"
     "<gaps>\n"
-    '<gap priority="high">Most critical difference (style or subject)</gap>\n'
+    '<gap priority="high">Most critical difference — be specific about WHAT pixels/regions are wrong</gap>\n'
     '<gap priority="high">Second most critical difference</gap>\n'
-    '<gap priority="medium">Notable but less critical difference</gap>\n'
+    '<gap priority="medium">Third difference</gap>\n'
     "</gaps>\n"
-    "<caption_diagnosis>For each pair: did the caption adequately describe the reference, "
-    "or did it miss key details? Is the generator failing to follow the caption, "
-    "or is the caption itself insufficient?</caption_diagnosis>\n"
-    "<prompt_issues>Which parts of the meta-prompt are working, which are being ignored, "
-    "and what specific wording changes would fix the gaps</prompt_issues>\n\n"
-    "Finally, rate the overall reproduction quality per dimension (1-10) with a brief explanation:\n"
+    "<characters>For EACH pair that contains characters/figures: compare the reference character "
+    "against the generated one. List SPECIFIC differences in: face shape, eye size/position, "
+    "nose shape, mouth, skin tone, hair style/color, body proportions, clothing details, pose accuracy. "
+    "If a character is unrecognizable compared to the reference, say so explicitly.</characters>\n"
+    "<caption_diagnosis>For each pair: is the caption missing critical information, or is the "
+    "generator failing to follow the caption? Quote the specific caption phrases that were "
+    "ignored or misinterpreted by the generator.</caption_diagnosis>\n"
+    "<prompt_issues>What specific meta-prompt wording changes would fix the character and "
+    "subject fidelity gaps above</prompt_issues>\n\n"
+    "Rate reproduction quality per dimension using STRICT criteria "
+    "(5=mediocre match with obvious differences, 7=good but noticeable gaps, 9+=near-identical):\n"
     "<dimensions>\n"
-    '  <style score="N">How well the art style/technique is reproduced and why</style>\n'
-    '  <subject score="N">How well subjects/characters are reproduced and why</subject>\n'
-    '  <color score="N">How well the color palette matches and why</color>\n'
-    '  <composition score="N">How well the spatial layout matches and why</composition>\n'
+    '  <style score="N">Art technique reproduction — be strict</style>\n'
+    '  <subject score="N">Character/subject identity and proportions — be very strict, '
+    "any wrong proportions or missing features = low score</subject>\n"
+    '  <color score="N">Color palette accuracy — compare specific colors, not just overall warmth</color>\n'
+    '  <composition score="N">Spatial layout, object positions, framing — be strict</composition>\n'
     "</dimensions>"
 )
 
