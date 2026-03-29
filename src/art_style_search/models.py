@@ -55,6 +55,9 @@ class ModelRegistry:
     _aesthetics_processor: object | None = field(default=None, init=False, repr=False)
     _aesthetics_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
+    _gabor_kernels: list[np.ndarray] | None = field(default=None, init=False, repr=False)
+    _lpips_transform: object | None = field(default=None, init=False, repr=False)
+
     # ------------------------------------------------------------------
     # Construction
     # ------------------------------------------------------------------
@@ -207,45 +210,45 @@ class ModelRegistry:
 
         return float(np.mean(similarities))
 
-    def compute_texture(self, generated: Image.Image, reference: Image.Image) -> float:
-        """Texture similarity via Gabor filter bank energy comparison.
+    def _ensure_gabor_kernels(self) -> list[np.ndarray]:
+        """Build the Gabor filter bank once and cache it."""
+        if self._gabor_kernels is not None:
+            return self._gabor_kernels
 
-        Applies Gabor filters at multiple orientations and frequencies to both
-        images, extracts energy features, and returns cosine similarity in [0, 1].
-        Higher is better.
-        """
-        from scipy.ndimage import convolve
-
-        size = 256
-        gen_gray = np.array(generated.convert("L").resize((size, size)), dtype=np.float64)
-        ref_gray = np.array(reference.convert("L").resize((size, size)), dtype=np.float64)
-
-        # Gabor filter bank: 4 orientations x 3 frequencies = 12 filters
         orientations = [0, np.pi / 4, np.pi / 2, 3 * np.pi / 4]
         frequencies = [0.1, 0.2, 0.4]
         ksize = 31
+        kernels: list[np.ndarray] = []
+        x = np.arange(ksize) - ksize // 2
+        xx, yy = np.meshgrid(x, x)
+        for theta in orientations:
+            ct, st = np.cos(theta), np.sin(theta)
+            xr = xx * ct + yy * st
+            yr = -xx * st + yy * ct
+            for freq in frequencies:
+                sigma = 1.0 / (2.0 * np.pi * freq)
+                gauss = np.exp(-0.5 * (xr**2 + yr**2) / sigma**2)
+                kernels.append(gauss * np.cos(2.0 * np.pi * freq * xr))
+        self._gabor_kernels = kernels
+        return kernels
 
-        def _gabor_kernel(freq: float, theta: float) -> np.ndarray:
-            x = np.arange(ksize) - ksize // 2
-            y = np.arange(ksize) - ksize // 2
-            xx, yy = np.meshgrid(x, y)
-            xr = xx * np.cos(theta) + yy * np.sin(theta)
-            yr = -xx * np.sin(theta) + yy * np.cos(theta)
-            sigma = 1.0 / (2.0 * np.pi * freq)
-            gauss = np.exp(-0.5 * (xr**2 + yr**2) / sigma**2)
-            return gauss * np.cos(2.0 * np.pi * freq * xr)
+    def compute_texture(self, generated: Image.Image, reference: Image.Image) -> float:
+        """Texture similarity via Gabor filter bank energy comparison.
+
+        Returns cosine similarity in [0, 1]; higher is better.
+        """
+        from scipy.ndimage import convolve
+
+        kernels = self._ensure_gabor_kernels()
+        gen_gray = np.array(generated.convert("L").resize((256, 256)), dtype=np.float64)
+        ref_gray = np.array(reference.convert("L").resize((256, 256)), dtype=np.float64)
 
         gen_features: list[float] = []
         ref_features: list[float] = []
-        for theta in orientations:
-            for freq in frequencies:
-                kernel = _gabor_kernel(freq, theta)
-                gen_resp = convolve(gen_gray, kernel, mode="reflect")
-                ref_resp = convolve(ref_gray, kernel, mode="reflect")
-                gen_features.append(float(np.mean(gen_resp**2)))
-                ref_features.append(float(np.mean(ref_resp**2)))
+        for kernel in kernels:
+            gen_features.append(float(np.mean(convolve(gen_gray, kernel, mode="reflect") ** 2)))
+            ref_features.append(float(np.mean(convolve(ref_gray, kernel, mode="reflect") ** 2)))
 
-        # Cosine similarity of energy feature vectors
         gen_vec = np.array(gen_features)
         ref_vec = np.array(ref_features)
         dot = float(np.dot(gen_vec, ref_vec))
@@ -259,20 +262,17 @@ class ModelRegistry:
     # ------------------------------------------------------------------
 
     def _pil_to_lpips_tensor(self, img: Image.Image) -> torch.Tensor:
-        """Convert a PIL image to a [-1, 1] tensor suitable for LPIPS.
+        """Convert a PIL image to a [-1, 1] tensor suitable for LPIPS."""
+        if self._lpips_transform is None:
+            from torchvision import transforms
 
-        LPIPS expects (N, 3, H, W) tensors normalised to [-1, 1].
-        We resize to 256x256 to keep memory usage constant.
-        """
-        from torchvision import transforms
-
-        transform = transforms.Compose(
-            [
-                transforms.Resize((256, 256)),
-                transforms.ToTensor(),  # -> [0, 1]
-                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),  # -> [-1, 1]
-            ]
-        )
+            self._lpips_transform = transforms.Compose(
+                [
+                    transforms.Resize((256, 256)),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+                ]
+            )
         img_rgb = img.convert("RGB")
-        tensor: torch.Tensor = transform(img_rgb).unsqueeze(0).to(self.device)  # (1, 3, 256, 256)
+        tensor: torch.Tensor = self._lpips_transform(img_rgb).unsqueeze(0).to(self.device)
         return tensor

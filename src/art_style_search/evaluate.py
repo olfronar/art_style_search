@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import random
 import re
 from pathlib import Path
 
@@ -165,103 +164,6 @@ def check_caption_compliance(
         lines.append(f"  {name}: {status} ({hits}/{total} captions address this)")
 
     return "Caption compliance with meta-prompt sections:\n" + "\n".join(lines)
-
-
-_ROUNDTRIP_COMPARE_PROMPT = (
-    "You are an expert art analyst. For each pair below, the ORIGINAL is a reference artwork "
-    "and the GENERATED image was created from a text caption of that original.\n\n"
-    "For each pair, describe:\n"
-    "<pair>\n"
-    "<captured>What aspects of the original the generated image reproduces well</captured>\n"
-    "<lost>What aspects were lost or changed — focus on style, color, technique, mood, details</lost>\n"
-    "<caption_gap>What the caption likely failed to describe that would be needed to reproduce the original</caption_gap>\n"
-    "</pair>\n\n"
-    "After all pairs, provide:\n"
-    "<summary>Overall patterns: what do captions consistently miss? "
-    "What style elements are hardest to capture in text? "
-    "What specific descriptors should be added to prompts to close these gaps?</summary>"
-)
-
-
-async def caption_roundtrip_test(
-    reference_paths: list[Path],
-    captions: list[object],
-    *,
-    gemini_client: object,
-    caption_model: str,
-    generator_model: str,
-    gen_semaphore: asyncio.Semaphore,
-    output_dir: Path,
-    iteration: int,
-    aspect_ratio: str,
-    num_test_images: int = 4,
-) -> str:
-    """Generate images from reference captions and compare with originals via Gemini vision.
-
-    Picks *num_test_images* reference images, generates an image from each caption,
-    then asks Gemini to compare original vs generated to identify what captions miss.
-    """
-    from art_style_search.generate import _generate_single
-    from art_style_search.types import Caption
-
-    typed_captions: list[Caption] = [c for c in captions if isinstance(c, Caption)]
-
-    # Match captions to paths
-    caption_by_path = {c.image_path: c for c in typed_captions}
-    available = [p for p in reference_paths if p in caption_by_path]
-    if not available:
-        return ""
-
-    sample = random.sample(available, min(num_test_images, len(available)))
-
-    # Generate images from captions
-    roundtrip_dir = output_dir / f"iter_{iteration:03d}" / "roundtrip"
-    roundtrip_dir.mkdir(parents=True, exist_ok=True)
-
-    gen_tasks = []
-    for i, ref_path in enumerate(sample):
-        caption_text = caption_by_path[ref_path].text
-        gen_tasks.append(
-            _generate_single(
-                caption_text,
-                index=i,
-                aspect_ratio=aspect_ratio,
-                output_path=roundtrip_dir / f"rt_{i:02d}.png",
-                client=gemini_client,
-                model=generator_model,
-                semaphore=gen_semaphore,
-            )
-        )
-
-    gen_results = await asyncio.gather(*gen_tasks, return_exceptions=True)
-
-    # Build comparison contents for Gemini vision
-    pairs: list[tuple[Path, Path]] = []
-    for i, (ref_path, gen_result) in enumerate(zip(sample, gen_results, strict=True)):
-        if isinstance(gen_result, BaseException):
-            logger.warning("Roundtrip generation %d failed: %s", i, gen_result)
-            continue
-        pairs.append((ref_path, gen_result))
-
-    if not pairs:
-        return ""
-
-    contents: list[object] = []
-    for i, (ref_path, gen_path) in enumerate(pairs):
-        contents.append(f"\n## Pair {i + 1}:\n### ORIGINAL:")
-        contents.append(image_to_gemini_part(ref_path))
-        contents.append("### GENERATED (from caption):")
-        contents.append(image_to_gemini_part(gen_path))
-
-    contents.append(f"\n{_ROUNDTRIP_COMPARE_PROMPT}")
-
-    async with gen_semaphore:
-        response = await gemini_client.aio.models.generate_content(
-            model=caption_model,
-            contents=contents,
-        )
-
-    return response.text
 
 
 def _aggregate(scores: list[MetricScores]) -> AggregatedMetrics:

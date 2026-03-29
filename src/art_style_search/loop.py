@@ -382,6 +382,7 @@ async def run(config: Config) -> LoopState:
             )
 
             exp_results.append(synth_result)
+            all_agg = [r.aggregated for r in exp_results]  # refresh after synthesis append
             if merged_score > best_score:
                 best_exp = synth_result
                 best_score = merged_score
@@ -396,11 +397,8 @@ async def run(config: Config) -> LoopState:
         else:
             state.plateau_counter += 1
 
-            # Exploration: on even plateau counts (2, 4, 6, ...), adopt the second-best
-            # experiment to escape potential local optima.  Odd counts stay greedy so we
-            # alternate between exploration and exploitation.
+            # Exploration: on even plateau counts, adopt second-best to escape local optima
             if state.plateau_counter >= 2 and state.plateau_counter % 2 == 0 and len(exp_results) >= 2:
-                # Rank by adaptive score (diversity-aware) to pick a genuinely different runner-up
                 ranked = sorted(
                     exp_results,
                     key=lambda r: adaptive_composite_score(r.aggregated, all_agg),

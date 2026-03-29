@@ -73,10 +73,7 @@ def update_knowledge_base(
 
     if proposal.open_problems:
         scores = result.per_image_scores
-        cat_dinos: dict[str, list[float]] = {}
-        for sc in scores:
-            cat_dinos.setdefault("all", []).append(sc.dino_similarity)
-        best_cat_dino = max((sum(v) / len(v) for v in cat_dinos.values()), default=0.0)
+        best_cat_dino = sum(sc.dino_similarity for sc in scores) / len(scores) if scores else 0.0
 
         prev_problem_texts = {p.text: p.since_iteration for p in kb.open_problems}
 
