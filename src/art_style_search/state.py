@@ -116,6 +116,8 @@ def _prompt_template_from_dict(d: dict[str, Any]) -> PromptTemplate:
     return PromptTemplate(
         sections=[_prompt_section_from_dict(s) for s in d.get("sections", [])],
         negative_prompt=d.get("negative_prompt"),
+        caption_sections=d.get("caption_sections", []),
+        caption_length_target=d.get("caption_length_target", 0),
     )
 
 

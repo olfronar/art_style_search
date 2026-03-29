@@ -259,17 +259,34 @@ class PromptTemplate:
     The template defines WHAT sections exist and their purpose.
     Values fill the sections with specific style descriptions.
     Claude can propose changes to either the template or the values.
+
+    ``caption_sections`` lists the labeled output sections the captioner
+    should produce (e.g. ``["Art Style", "Color Palette", …]``).  Their
+    order is part of the optimisation surface.
+
+    ``caption_length_target`` is the target word count for produced captions.
     """
 
     sections: list[PromptSection] = field(default_factory=list)
     negative_prompt: str | None = None
+    caption_sections: list[str] = field(default_factory=list)
+    caption_length_target: int = 0
 
     def render(self) -> str:
-        """Combine all section values into the final image generation prompt."""
+        """Combine all section values into the final captioning meta-prompt."""
         parts = [s.value for s in self.sections if s.value]
         if self.negative_prompt:
             parts.append(f"Do NOT include: {self.negative_prompt}")
-        return " ".join(parts)
+        main_block = " ".join(parts)
+        caption_parts: list[str] = []
+        if self.caption_sections:
+            section_list = ", ".join(f"[{s}]" for s in self.caption_sections)
+            caption_parts.append(f"Format your response with these labeled sections in this order: {section_list}.")
+        if self.caption_length_target:
+            caption_parts.append(f"Target length: approximately {self.caption_length_target} words.")
+        if caption_parts:
+            return main_block + "\n\n" + " ".join(caption_parts)
+        return main_block
 
 
 class ConvergenceReason(enum.Enum):
@@ -292,6 +309,7 @@ _CATEGORY_SYNONYMS: dict[str, list[str]] = {
     "texture": ["texture", "surface", "grain", "detail", "pattern"],
     "subject_matter": ["subject", "character", "figure", "object", "scene"],
     "background": ["background", "environment", "setting", "landscape", "sky"],
+    "caption_structure": ["section", "label", "order", "ordering", "structure", "format", "length"],
 }
 
 

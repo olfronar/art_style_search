@@ -95,7 +95,7 @@ async def _caption_single(
     caption_text = response.text
 
     # Validate caption quality — empty or very short captions waste downstream cycles
-    min_caption_length = 50
+    min_caption_length = 150
     if not caption_text or len(caption_text.strip()) < min_caption_length:
         msg = (
             f"Captioning {image_path.name} produced empty or too-short caption "

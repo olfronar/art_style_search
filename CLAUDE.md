@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Self-improving loop that optimizes a meta-prompt for precise image recreation. The meta-prompt instructs a captioner (Gemini Pro) how to describe images so a generator (Gemini Flash) can recreate them from the captions. Inspired by karpathy/autoresearch.
+Self-improving loop that optimizes a meta-prompt for art-style capture and image recreation. The meta-prompt (800-1200 words) instructs a captioner (Gemini Pro) how to describe images with labeled style-guidance sections so that: (a) a generator (Gemini Flash) can recreate them from the captions, and (b) the style guidance can be reused to generate new art in the same style. Inspired by karpathy/autoresearch.
 
 ## Architecture
 
@@ -41,7 +41,7 @@ uv run python -m art_style_search clean  # Remove outputs, logs, and state
 
 ## Module Map
 
-- `types.py` - Shared dataclasses (Caption, MetricScores, StyleProfile, PromptTemplate, LoopState, KnowledgeBase, Hypothesis, etc.) + category classification helpers
+- `types.py` - Shared dataclasses (Caption, MetricScores, StyleProfile, PromptTemplate, LoopState, KnowledgeBase, Hypothesis, etc.) + category classification helpers. PromptTemplate includes `caption_sections` (ordered labeled output sections for captions) and `caption_length_target` (target word count for captions).
 - `config.py` - CLI argument parsing → Config dataclass
 - `analyze.py` - Zero-step: parallel Gemini+Claude style analysis → StyleProfile + initial PromptTemplate
 - `caption.py` - Gemini Pro captioning with disk cache
@@ -89,10 +89,13 @@ Each metric compares a generated image against its specific paired original (not
 - `composite_score` includes a consistency penalty (0.30 weight) based on per-image std of DINO, LPIPS, color histogram, and texture — experiments with high variance across images are penalized
 - All metrics in `composite_score` are normalized to [0, 1] before weighting — LPIPS via `_normalize_lpips` (ceiling 0.7), HPS via `_normalize_hps` (ceiling 0.35), aesthetics /10, vision /10
 - KB metric deltas must be computed against the pre-update baseline — `update_knowledge_base` runs BEFORE `_apply_best_result` mutates `state.best_metrics`
-- Caption quality is validated after Gemini returns — empty or too-short captions (<50 chars) raise RuntimeError
+- Caption quality is validated after Gemini returns — empty or too-short captions (<150 chars) raise RuntimeError
 - Open problems in KB are merged across experiments (deduplicated by text, capped at 10), not replaced — earlier experiments' problems survive
 - Vision comparison is per-image (one Gemini call per image pair) with ternary verdicts (MATCH/PARTIAL/MISS → 1.0/0.5/0.0); failures degrade to PARTIAL (0.5) neutral defaults
 - Exploration mechanism: on even plateau counts (2, 4, 6, ...), the loop adopts the second-best experiment (ranked by `adaptive_composite_score`) to escape local optima; odd counts stay greedy (alternating exploration/exploitation). Requires >= 2 experiments to trigger.
+- Meta-prompt is 800-1200 words with 8-15 sections (4-8 sentences each). Section values embed core style rules from StyleProfile as literal text that the captioner weaves into every caption.
+- Captions have labeled output sections (e.g. `[Art Style]`, `[Color Palette]`). The set of section names, their ordering, and the caption length target are all part of the optimization surface — Claude experiments with these via `caption_sections` and `caption_length_target` on `PromptTemplate`.
+- Caption compliance checking verifies both keyword coverage (meta-prompt section topics) and labeled section marker presence (`[Section Name]` in caption text).
 
 ## Code Style
 

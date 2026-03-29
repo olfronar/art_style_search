@@ -67,20 +67,28 @@ _COMPILATION_PROMPT = (
     "## Analysis from reasoning model (Claude — read detailed captions):\n{claude_analysis}\n\n"
     "Synthesize BOTH analyses into:\n"
     "1. A structured **StyleProfile** with 6 sections.\n"
-    "2. An initial **PromptTemplate** — a set of prompt sections that, when concatenated, "
-    "would instruct Gemini Flash (an image generation model) to reproduce this style.\n\n"
+    "2. An initial **PromptTemplate** — a set of prompt sections that instruct a captioner "
+    "(Gemini Pro) HOW to describe reference images. The captions produced must serve a dual "
+    "purpose: (a) contain enough detail to recreate the image, and (b) embed reusable "
+    "art-style guidance in labeled sections that can later generate NEW art in the same style.\n\n"
     "Where the two analyses disagree, prefer the visual model's observations for concrete visual details "
     "(colors, textures) and the reasoning model's insights for abstract principles (style rules, mood logic).\n\n"
-    "**Prompt engineering guidance for Gemini Flash:**\n"
+    "**Meta-prompt engineering guidance:**\n"
     "- Use specific, descriptive language — concrete color names, technique terms, art-movement references.\n"
     "- Front-load the most distinctive style elements.\n"
-    "- Create a COMPREHENSIVE template with 6-10 sections covering ALL visual aspects.\n"
-    "- Each section value should be detailed (2-4 sentences).\n"
-    "- The negative prompt should target common failure modes the reasoning model identified.\n\n"
-    "The prompt template should have 6-10 sections covering: technique/medium, color palette, composition, "
-    "character/figure treatment, background/environment, details/textures, lighting, mood/atmosphere. "
+    "- Create a COMPREHENSIVE template with 8-15 sections covering ALL visual aspects.\n"
+    "- Each section value should be detailed (4-8 sentences) and EMBED the core style rules "
+    "from the StyleProfile as literal text that the captioner weaves into every caption.\n"
+    "- Total rendered meta-prompt should be 800-1200 words.\n"
+    "- The negative prompt should target common failure modes the reasoning model identified.\n"
+    "- Include <caption_sections>: an ordered comma-separated list of labeled sections "
+    "the captioner should produce in its output (e.g. Art Style, Color Palette, Composition, etc.).\n"
+    "- Include <caption_length>: target word count for produced captions (e.g. 500).\n\n"
+    "The prompt template should have 8-15 sections covering: technique/medium, color palette, composition, "
+    "character/figure treatment, background/environment, details/textures, lighting, mood/atmosphere, "
+    "and optionally: art style overview, subject rendering, emotional tone. "
     "Each section should have a short name, a description of what it controls, "
-    "and detailed prompt text as its value. Include a thorough negative prompt.\n\n"
+    "and detailed prompt text with embedded style rules as its value. Include a thorough negative prompt.\n\n"
     "Respond in EXACTLY this XML format (no markdown fences, no extra text outside the XML):\n"
     "<style_profile>\n"
     "  <color_palette>detailed description of the color palette</color_palette>\n"
@@ -91,23 +99,28 @@ _COMPILATION_PROMPT = (
     "  <influences>detailed description of influences</influences>\n"
     "</style_profile>\n"
     "<initial_template>\n"
+    '  <section name="art_style_overview" description="core art style identity and rules">'
+    "detailed style identity with embedded rules (4-8 sentences)</section>\n"
     '  <section name="medium_and_technique" description="art medium, rendering style, brushwork">'
-    "detailed technique description (2-4 sentences)</section>\n"
+    "detailed technique description with style rules (4-8 sentences)</section>\n"
     '  <section name="color_palette" description="dominant colors and color relationships">'
-    "detailed color description (2-4 sentences)</section>\n"
+    "detailed color description with palette rules (4-8 sentences)</section>\n"
     '  <section name="composition" description="layout, framing, spatial arrangement">'
-    "detailed composition description</section>\n"
+    "detailed composition description with style patterns (4-8 sentences)</section>\n"
     '  <section name="characters" description="how figures and characters are rendered">'
-    "detailed character treatment</section>\n"
+    "detailed character treatment with style rules (4-8 sentences)</section>\n"
     '  <section name="background" description="environment and setting treatment">'
-    "detailed background description</section>\n"
+    "detailed background description with style rules (4-8 sentences)</section>\n"
     '  <section name="details" description="textures, patterns, fine elements">'
-    "detailed texture and detail description</section>\n"
+    "detailed texture and detail description (4-8 sentences)</section>\n"
     '  <section name="lighting" description="light source, quality, shadows">'
-    "detailed lighting description</section>\n"
+    "detailed lighting description with style rules (4-8 sentences)</section>\n"
     '  <section name="mood" description="emotional tone, atmosphere">'
-    "detailed mood description</section>\n"
+    "detailed mood description with style rules (4-8 sentences)</section>\n"
     "  <negative>thorough list of things to avoid in generation</negative>\n"
+    "  <caption_sections>Art Style, Color Palette, Technique, Composition, Characters, "
+    "Background, Details, Lighting, Mood</caption_sections>\n"
+    "  <caption_length>500</caption_length>\n"
     "</initial_template>"
 )
 
@@ -152,9 +165,17 @@ def _parse_compilation(text: str, gemini_raw: str, claude_raw: str) -> tuple[Sty
     sections = _parse_sections(template_block)
     negative = _extract_tag(template_block, "negative")
 
+    caption_sections_raw = _extract_tag(template_block, "caption_sections")
+    caption_sections = [s.strip() for s in caption_sections_raw.split(",") if s.strip()] if caption_sections_raw else []
+
+    caption_length_raw = _extract_tag(template_block, "caption_length")
+    caption_length_target = int(caption_length_raw) if caption_length_raw.isdigit() else 500
+
     template = PromptTemplate(
         sections=sections,
         negative_prompt=negative or None,
+        caption_sections=caption_sections,
+        caption_length_target=caption_length_target,
     )
 
     return profile, template

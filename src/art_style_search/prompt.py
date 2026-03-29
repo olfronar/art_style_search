@@ -60,6 +60,10 @@ def _format_template(template: PromptTemplate) -> str:
         parts.append(f'  <section name="{section.name}" description="{section.description}">{section.value}</section>')
     if template.negative_prompt:
         parts.append(f"  <negative>{template.negative_prompt}</negative>")
+    if template.caption_sections:
+        parts.append(f"  <caption_sections>{', '.join(template.caption_sections)}</caption_sections>")
+    if template.caption_length_target:
+        parts.append(f"  <caption_length>{template.caption_length_target}</caption_length>")
     parts.append("</template>")
     return "\n".join(parts)
 
@@ -89,6 +93,8 @@ _SECTION_RE_LOOSE = re.compile(
     re.DOTALL,
 )
 _NEGATIVE_RE = re.compile(r"<negative>(.*?)</negative>", re.DOTALL)
+_CAPTION_SECTIONS_RE = re.compile(r"<caption_sections>(.*?)</caption_sections>", re.DOTALL)
+_CAPTION_LENGTH_RE = re.compile(r"<caption_length>\s*(\d+)\s*</caption_length>", re.DOTALL)
 _ANALYSIS_RE = re.compile(r"<analysis>(.*?)</analysis>", re.DOTALL)
 _TEMPLATE_CHANGES_RE = re.compile(r"<template_changes>(.*?)</template_changes>", re.DOTALL)
 _CONVERGED_RE = re.compile(r"\[CONVERGED\]")
@@ -133,7 +139,23 @@ def _parse_template(text: str) -> PromptTemplate:
     neg_match = _NEGATIVE_RE.search(text)
     if neg_match:
         negative = neg_match.group(1).strip() or None
-    return PromptTemplate(sections=sections, negative_prompt=negative)
+
+    caption_sections: list[str] = []
+    cs_match = _CAPTION_SECTIONS_RE.search(text)
+    if cs_match:
+        caption_sections = [s.strip() for s in cs_match.group(1).split(",") if s.strip()]
+
+    caption_length_target = 0
+    cl_match = _CAPTION_LENGTH_RE.search(text)
+    if cl_match:
+        caption_length_target = int(cl_match.group(1))
+
+    return PromptTemplate(
+        sections=sections,
+        negative_prompt=negative,
+        caption_sections=caption_sections,
+        caption_length_target=caption_length_target,
+    )
 
 
 def _parse_analysis(text: str) -> str:
@@ -256,31 +278,57 @@ async def propose_initial_templates(
     system = (
         "You are an expert art director and prompt engineer. Your task is to create "
         "diverse META-PROMPTS — instructions that tell an AI vision model (Gemini Pro) "
-        "HOW to describe/caption reference images so that the captions can be used by "
-        "an image generation model (Gemini Flash) to recreate the originals as precisely as possible.\n\n"
+        "HOW to describe/caption reference images.\n\n"
+        "## Goal\n"
+        "The captions produced must serve a DUAL purpose:\n"
+        "1. Contain enough detail to RECREATE the original image (we measure this with metrics).\n"
+        "2. Embed REUSABLE art-style guidance — labeled sections with style rules, color palette, "
+        "technique descriptions, etc. — that can later be applied to generate NEW art in the same style "
+        "with different subjects.\n\n"
         "## How the system works\n"
         "meta-prompt + reference image → Gemini Pro caption → Gemini Flash generation → compare with original.\n"
         "The meta-prompt is the ONLY thing being optimized. It must instruct the captioner "
-        "to describe every detail needed for faithful recreation.\n\n"
+        "to describe every detail needed for faithful recreation AND embed the art-style guidance "
+        "from the Style Profile into every caption as reusable style rules.\n\n"
         "## Meta-prompt requirements\n"
-        "- 6-10 sections, each instructing the captioner WHAT to describe and HOW precisely.\n"
+        "- 8-15 sections, each instructing the captioner WHAT to describe and HOW precisely.\n"
         "- Must cover: technique/medium, colors, composition, characters/figures, "
         "background/environment, textures/details, lighting, mood/atmosphere.\n"
-        "- Each section should be 2-4 sentences of instruction.\n"
-        "- Total rendered meta-prompt should be 200-400 words.\n"
+        "- Sections should EMBED the core style rules from the Style Profile as literal text — "
+        "the captioner should weave these rules into every caption as a shared style foundation, "
+        "then add per-image observations on top.\n"
+        "- Each section should be 4-8 sentences of instruction.\n"
+        "- Total rendered meta-prompt should be 800-1200 words.\n"
         "- Include a negative section: what the captioner should tell the generator to AVOID.\n"
         "- The meta-prompt must produce captions specific enough that someone who has never "
         "seen the image could recreate it from the caption alone.\n\n"
+        "## Caption output structure\n"
+        "The meta-prompt must instruct the captioner to produce captions with LABELED SECTIONS "
+        "like [Art Style], [Color Palette], [Composition], etc. You decide WHICH sections and "
+        "in WHAT ORDER — this is part of the experimentation.\n"
+        "- Specify the caption output sections as a <caption_sections> tag (comma-separated list).\n"
+        "- Specify the target caption length as a <caption_length> tag (word count).\n"
+        "- The caption sections should contain both the shared style guidance (from the Style Profile) "
+        "and per-image specific observations.\n\n"
         "## Example of a good meta-prompt section\n"
-        '<section name="colors_and_palette" description="instruct captioner on color description">'
-        "Describe the EXACT colors visible in the image using specific color names "
-        "(e.g. 'burnt sienna', 'cadmium yellow', not just 'brown' or 'yellow'). "
-        "Note the overall color temperature (warm/cool), saturation levels, "
-        "and how colors relate to each other. Describe any gradients or color transitions."
+        '<section name="colors_and_palette" description="instruct captioner on color description '
+        'with embedded style rules">'
+        "This art style uses a warm earth-tone palette dominated by burnt sienna, raw umber, "
+        "and cadmium yellow, with cool accents of cerulean blue. Saturation is moderate — colors "
+        "feel muted and aged rather than vibrant. "
+        "When describing the image, note the EXACT colors visible using specific color names "
+        "(not just 'brown' or 'yellow'). Describe the overall color temperature, saturation levels, "
+        "and how colors relate to each other. Note any gradients, color transitions, or areas where "
+        "the palette deviates from the core warm-earth foundation. "
+        "In your [Color Palette] section, first state the core style palette rules, then describe "
+        "how this specific image applies or varies from them."
         "</section>\n\n"
         "## Diversity across meta-prompts\n"
+        "- Vary the set of caption output section names and their ordering.\n"
+        "- Vary caption length targets (e.g. 400, 600, 800 words).\n"
         "- Vary emphasis: some focus on technique precision, others on spatial accuracy, "
         "others on mood fidelity.\n"
+        "- Vary the balance between shared style guidance vs per-image detail.\n"
         "- Vary instruction style: some give the captioner strict checklists, "
         "others give artistic direction, others ask for technical analysis.\n"
         "- All must be comprehensive — diversity is in approach, not coverage.\n\n"
@@ -289,9 +337,11 @@ async def propose_initial_templates(
         "<branch>\n"
         "<template>\n"
         '  <section name="..." description="what this instructs the captioner to describe">'
-        "instruction for the captioner (2-4 sentences)</section>\n"
-        "  ... (6-10 sections)\n"
+        "instruction for the captioner with embedded style rules (4-8 sentences)</section>\n"
+        "  ... (8-15 sections)\n"
         "  <negative>instruct captioner to tell generator what to avoid</negative>\n"
+        "  <caption_sections>Art Style, Color Palette, Composition, ...</caption_sections>\n"
+        "  <caption_length>500</caption_length>\n"
         "</template>\n"
         "</branch>"
     )
@@ -383,19 +433,34 @@ async def propose_experiments(
         "Those captions are then used by Gemini Flash to generate images. "
         "The goal is to produce captions precise enough to RECREATE the original images.\n\n"
         "The pipeline: meta-prompt + reference image → Gemini Pro caption → Gemini Flash generation → compare with original.\n\n"
+        "## Dual-purpose captions\n"
+        "The captions produced must serve TWO purposes:\n"
+        "1. Contain enough detail to faithfully recreate the reference image (measured by metrics).\n"
+        "2. Embed REUSABLE art-style guidance — labeled sections with style rules, color palette, "
+        "technique descriptions, mood cues, etc. — that can later generate NEW art in the same style.\n"
+        "The meta-prompt must embed core style rules from the Style Profile as literal text "
+        "that the captioner weaves into every caption as a shared style foundation, "
+        "plus per-image specific observations.\n\n"
         "## What makes a good meta-prompt\n"
         "The meta-prompt must instruct the captioner to describe EVERY visual detail needed "
-        "for faithful recreation:\n"
-        "- Exact colors, technique, medium, brushwork\n"
+        "for faithful recreation, while embedding style guidance:\n"
+        "- Exact colors, technique, medium, brushwork — with style rules embedded\n"
         "- Character/figure details: poses, expressions, clothing, proportions, identity\n"
         "- Background/environment: setting, architecture, nature elements\n"
-        "- Composition: layout, framing, depth, perspective\n"
-        "- Lighting, shadows, atmospheric effects\n"
-        "- Textures, patterns, fine details\n"
-        "- Mood, emotional tone\n"
+        "- Composition: layout, framing, depth, perspective — with style patterns noted\n"
+        "- Lighting, shadows, atmospheric effects — with style lighting rules\n"
+        "- Textures, patterns, fine details — with technique guidance\n"
+        "- Mood, emotional tone — with style mood rules\n"
         "- What to AVOID (common AI generation artifacts)\n\n"
-        "The meta-prompt should be 6-10 sections, each instructing the captioner what to describe "
-        "and how detailed to be. Total rendered prompt should be 200-400 words.\n\n"
+        "The meta-prompt should be 8-15 sections, each 4-8 sentences of instruction "
+        "with embedded style rules from the Style Profile. "
+        "Total rendered prompt should be 800-1200 words.\n\n"
+        "## Caption output structure\n"
+        "The meta-prompt must instruct the captioner to produce captions with LABELED SECTIONS "
+        "like [Art Style], [Color Palette], [Composition], etc.\n"
+        "- You decide WHICH labeled sections and in WHAT ORDER — this is part of experimentation.\n"
+        "- Specify caption sections as <caption_sections> and target length as <caption_length>.\n"
+        "- Each caption section should contain both shared style guidance and per-image observations.\n\n"
         "## Metric guidance\n"
         "Per-image metrics (each generated image vs its paired original):\n"
         "- DINO (higher=better): semantic/structural match. 0.4=similar, 0.6=good, 0.8+=very close.\n"
@@ -416,6 +481,8 @@ async def propose_experiments(
         "- There are no fixed 'branches' — shift focus freely between categories "
         "as the weakest area changes.\n"
         "- Make 1-2 targeted changes per experiment, not wholesale rewrites.\n"
+        "- Experiments can vary: section content, caption output section names/ordering, "
+        "caption length target, balance of shared style vs per-image detail.\n"
         "- If DINO/LPIPS are weak: the captions miss structural or color details — "
         "add instructions for the captioner to be more specific about those.\n"
         "- If per-image scores vary widely: some images are harder — consider "
@@ -449,9 +516,11 @@ async def propose_experiments(
         "</open_problems>\n"
         "<template_changes>structural changes or 'none'</template_changes>\n"
         "<template>\n"
-        '  <section name="..." description="...">value</section>\n'
-        "  ...\n"
+        '  <section name="..." description="...">value with embedded style rules (4-8 sentences)</section>\n'
+        "  ... (8-15 sections)\n"
         "  <negative>things to avoid</negative>\n"
+        "  <caption_sections>ordered comma-separated list of labeled output sections</caption_sections>\n"
+        "  <caption_length>target word count for captions</caption_length>\n"
         "</template>\n"
         "</branch>\n"
         "(repeat for each experiment)\n"
@@ -585,13 +654,18 @@ async def synthesize_templates(
         "- For each section, pick the best version from the experiments based on per-image scores.\n"
         "- If two experiments improved different aspects, combine their strengths.\n"
         "- Do NOT average or water down — pick the strongest phrasing for each section.\n"
-        "- Keep the template 6-10 sections, 200-400 words rendered.\n\n"
+        "- Keep the template 8-15 sections, 800-1200 words rendered.\n"
+        "- Preserve embedded style rules in section values.\n"
+        "- Merge caption output structure: pick the best caption_sections ordering and caption_length "
+        "from the experiments, or combine them.\n\n"
         "Response format:\n"
         "<rationale>Which sections you took from which experiment and why</rationale>\n"
         "<template>\n"
         '  <section name="..." description="...">value</section>\n'
         "  ...\n"
         "  <negative>things to avoid</negative>\n"
+        "  <caption_sections>ordered comma-separated list of labeled output sections</caption_sections>\n"
+        "  <caption_length>target word count for captions</caption_length>\n"
         "</template>"
     )
 

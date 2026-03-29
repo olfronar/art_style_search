@@ -136,8 +136,12 @@ async def compare_vision_per_image(
 def check_caption_compliance(
     section_names: list[str],
     captions: object,
+    caption_sections: list[str] | None = None,
 ) -> str:
     """Check whether captions address the topics from the meta-prompt sections.
+
+    When *caption_sections* is provided, also checks for the presence of
+    labeled ``[Section Name]`` markers in the caption text.
 
     Returns a summary of which sections are well-covered vs missed.
     """
@@ -147,22 +151,34 @@ def check_caption_compliance(
     if not typed or not section_names:
         return ""
 
-    # Simple keyword presence check per section
+    total = len(typed)
+    lines: list[str] = []
+
+    # Keyword presence check per meta-prompt section
     section_hits: dict[str, int] = {name: 0 for name in section_names}
     for caption in typed:
         text_lower = caption.text.lower()
         for name in section_names:
-            # Check if section topic keywords appear in caption
             keywords = name.replace("_", " ").split()
             if any(kw in text_lower for kw in keywords):
                 section_hits[name] += 1
 
-    total = len(typed)
-    lines: list[str] = []
     for name, hits in section_hits.items():
         pct = hits / total * 100
         status = "OK" if pct >= 70 else "WEAK" if pct >= 30 else "MISSING"
         lines.append(f"  {name}: {status} ({hits}/{total} captions address this)")
+
+    # Labeled section marker check (e.g. "[Art Style]" in caption text)
+    if caption_sections:
+        marker_lines: list[str] = []
+        for sec_name in caption_sections:
+            marker = f"[{sec_name}]".lower()
+            hits = sum(1 for c in typed if marker in c.text.lower())
+            pct = hits / total * 100
+            status = "OK" if pct >= 70 else "WEAK" if pct >= 30 else "MISSING"
+            marker_lines.append(f"  [{sec_name}]: {status} ({hits}/{total} captions contain this label)")
+        lines.append("Labeled section markers in captions:")
+        lines.extend(marker_lines)
 
     return "Caption compliance with meta-prompt sections:\n" + "\n".join(lines)
 

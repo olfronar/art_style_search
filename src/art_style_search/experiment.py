@@ -171,7 +171,7 @@ async def run_experiment(
     )
 
     section_names = [s.name for s in template.sections]
-    compliance = check_caption_compliance(section_names, captions)
+    compliance = check_caption_compliance(section_names, captions, caption_sections=template.caption_sections)
 
     # Sort by DINO worst-first, merge vision scores into MetricScores, then aggregate
     order = sorted(range(len(metric_scores)), key=lambda i: metric_scores[i].dino_similarity)
