@@ -37,7 +37,7 @@ uv run python -m art_style_search clean  # Remove outputs, logs, and state
 
 - `ANTHROPIC_API_KEY` - Anthropic API key for Claude (when using `--reasoning-provider anthropic`)
 - `GOOGLE_API_KEY` - Google API key for Gemini models (always required)
-- `ZAI_API_KEY` - Z.AI API key for GLM-5.1 (when using `--reasoning-provider zai`)
+- `ZAI_API_KEY` - Z.AI API key for GLM-5 (when using `--reasoning-provider zai`)
 
 ## Module Map
 
