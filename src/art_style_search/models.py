@@ -203,12 +203,6 @@ class ModelRegistry:
         Returns a float in [0, 1]; higher is better.  Both images are resized
         to 256x256, converted to HSV, and compared channel-by-channel.
         """
-        gen_hsv = np.array(generated.convert("RGB").resize((256, 256)))
-        ref_hsv = np.array(reference.convert("RGB").resize((256, 256)))
-
-        # Convert RGB → HSV manually via PIL
-        from PIL import ImageDraw  # noqa: F401 — ensure PIL loaded
-
         gen_hsv = np.array(generated.convert("HSV").resize((256, 256)))
         ref_hsv = np.array(reference.convert("HSV").resize((256, 256)))
 

@@ -145,6 +145,21 @@ class Lessons:
     new_insight: str = ""
 
 
+@dataclass
+class RefinementResult:
+    """Complete result of a template refinement by Claude."""
+
+    template: PromptTemplate
+    analysis: str
+    template_changes: str
+    should_stop: bool
+    hypothesis: str
+    experiment: str
+    lessons: Lessons
+    builds_on: str | None
+    open_problems: list[str]
+
+
 def _parse_lessons(text: str) -> Lessons:
     confirmed = _CONFIRMED_RE.search(text)
     rejected = _REJECTED_RE.search(text)
@@ -289,14 +304,11 @@ async def refine_template(
     roundtrip_feedback: str = "",
     caption_diffs: str = "",
     already_proposed: list[str] | None = None,
-) -> tuple[PromptTemplate, str, str, bool, str, str, Lessons, str | None, list[str]]:
+) -> RefinementResult:
     """Propose a template refinement based on shared Knowledge Base.
 
     No persistent branch identity — each call proposes one experiment.
     Use *already_proposed* to prevent duplicate hypotheses within an iteration.
-
-    Returns (new_template, analysis, template_changes, should_stop,
-             hypothesis, experiment, lessons, builds_on, open_problems).
     """
 
     system = (
@@ -460,16 +472,16 @@ async def refine_template(
         logger.warning("Refined template has no sections — falling back to current template")
         new_template = current_template
 
-    return (
-        new_template,
-        analysis_text,
-        template_changes_description,
-        should_stop,
-        hypothesis,
-        experiment,
-        lessons,
-        builds_on,
-        open_problems,
+    return RefinementResult(
+        template=new_template,
+        analysis=analysis_text,
+        template_changes=template_changes_description,
+        should_stop=should_stop,
+        hypothesis=hypothesis,
+        experiment=experiment,
+        lessons=lessons,
+        builds_on=builds_on,
+        open_problems=open_problems,
     )
 
 

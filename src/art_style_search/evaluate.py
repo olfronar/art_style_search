@@ -129,8 +129,8 @@ async def compare_vision(
             )
             await asyncio.sleep(delay)
 
-    msg = "Vision comparison failed after 3 retries"
-    raise RuntimeError(msg) from last_exc
+    logger.error("Vision comparison failed after 3 retries: %s — using neutral defaults", last_exc)
+    return "", VisionScores.default()
 
 
 def check_caption_compliance(

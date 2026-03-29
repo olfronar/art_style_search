@@ -24,22 +24,23 @@ class TestCompositeScore:
             dino_similarity_std=0.01,
             lpips_distance_mean=0.3,
             lpips_distance_std=0.02,
-            hps_score_mean=0.5,
+            hps_score_mean=0.28,
             hps_score_std=0.03,
             aesthetics_score_mean=7.0,
             aesthetics_score_std=0.5,
         )
         # 9-metric formula; ssim/color_histogram default to 0.0, vision_* default to 5.0
+        # HPS normalized: min(0.28/0.35, 1.0) = 0.8
         expected = (
-            0.25 * 0.8
-            - 0.15 * 0.3
-            + 0.10 * 0.5
+            0.28 * 0.8
+            - 0.18 * 0.3
+            + 0.10 * min(0.28 / 0.35, 1.0)
             + 0.10 * (7.0 / 10.0)
-            + 0.15 * 0.0
+            + 0.18 * 0.0
             + 0.10 * 0.0
-            + 0.05 * (5.0 / 10.0)
-            + 0.05 * (5.0 / 10.0)
-            + 0.05 * (5.0 / 10.0)
+            + 0.02 * (5.0 / 10.0)
+            + 0.02 * (5.0 / 10.0)
+            + 0.02 * (5.0 / 10.0)
         )
         assert abs(composite_score(m) - expected) < 1e-9
 
@@ -55,7 +56,7 @@ class TestCompositeScore:
             aesthetics_score_std=0.0,
         )
         # vision_style/subject/composition default to 5.0
-        expected = 0.05 * (5.0 / 10.0) + 0.05 * (5.0 / 10.0) + 0.05 * (5.0 / 10.0)
+        expected = 0.02 * (5.0 / 10.0) + 0.02 * (5.0 / 10.0) + 0.02 * (5.0 / 10.0)
         assert abs(composite_score(m) - expected) < 1e-9
 
     def test_higher_dino_yields_higher_score(self) -> None:
@@ -88,7 +89,39 @@ class TestCompositeScore:
 
     def test_weights_sum_to_one(self) -> None:
         """Verify the coefficient magnitudes sum to 1.0 (9 metrics)."""
-        assert abs((0.25 + 0.15 + 0.10 + 0.10 + 0.15 + 0.10 + 0.05 + 0.05 + 0.05) - 1.0) < 1e-9
+        assert abs((0.28 + 0.18 + 0.10 + 0.10 + 0.18 + 0.10 + 0.02 + 0.02 + 0.02) - 1.0) < 1e-9
+
+    def test_hps_normalized(self) -> None:
+        """HPS v2 scores (~0.25-0.35) should be normalized to [0,1] via /0.35 ceiling."""
+        m = AggregatedMetrics(
+            dino_similarity_mean=0.0,
+            dino_similarity_std=0.0,
+            lpips_distance_mean=0.0,
+            lpips_distance_std=0.0,
+            hps_score_mean=0.35,
+            hps_score_std=0.0,
+            aesthetics_score_mean=0.0,
+            aesthetics_score_std=0.0,
+        )
+        # HPS: 0.10 * min(0.35/0.35, 1.0) = 0.10, plus 3 vision defaults at 5.0
+        expected = 0.10 * 1.0 + 0.02 * (5.0 / 10.0) + 0.02 * (5.0 / 10.0) + 0.02 * (5.0 / 10.0)
+        assert abs(composite_score(m) - expected) < 1e-9
+
+    def test_hps_clamped_above_ceiling(self) -> None:
+        """HPS values above 0.35 should clamp to 1.0 contribution."""
+        m = AggregatedMetrics(
+            dino_similarity_mean=0.0,
+            dino_similarity_std=0.0,
+            lpips_distance_mean=0.0,
+            lpips_distance_std=0.0,
+            hps_score_mean=0.50,
+            hps_score_std=0.0,
+            aesthetics_score_mean=0.0,
+            aesthetics_score_std=0.0,
+        )
+        # Clamped: min(0.50/0.35, 1.0) = 1.0
+        expected = 0.10 * 1.0 + 0.02 * (5.0 / 10.0) + 0.02 * (5.0 / 10.0) + 0.02 * (5.0 / 10.0)
+        assert abs(composite_score(m) - expected) < 1e-9
 
     def test_aesthetics_divided_by_ten(self) -> None:
         """Aesthetics is on a 1-10 scale and should be normalized to 0-1."""
@@ -103,7 +136,7 @@ class TestCompositeScore:
             aesthetics_score_std=0.0,
         )
         # Aesthetics: 0.10 * (10.0 / 10.0) = 0.10, plus 3 vision defaults at 5.0
-        expected = 0.10 * (10.0 / 10.0) + 0.05 * (5.0 / 10.0) + 0.05 * (5.0 / 10.0) + 0.05 * (5.0 / 10.0)
+        expected = 0.10 * (10.0 / 10.0) + 0.02 * (5.0 / 10.0) + 0.02 * (5.0 / 10.0) + 0.02 * (5.0 / 10.0)
         assert abs(composite_score(m) - expected) < 1e-9
 
 

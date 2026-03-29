@@ -45,7 +45,7 @@ uv run python -m art_style_search clean  # Remove outputs, logs, and state
 - `config.py` - CLI argument parsing → Config dataclass
 - `analyze.py` - Zero-step: parallel Gemini+Claude style analysis → StyleProfile + initial PromptTemplate
 - `caption.py` - Gemini Pro captioning with disk cache
-- `prompt.py` - Claude meta-prompt proposal/refinement (template structure + values)
+- `prompt.py` - Claude meta-prompt proposal/refinement (template structure + values); `RefinementResult` dataclass for structured returns
 - `generate.py` - Gemini Flash image generation with semaphore + retry
 - `models.py` - ModelRegistry: lazy-load DINO/LPIPS/HPS/Aesthetics with per-model locks
 - `evaluate.py` - Dispatches 4 metrics per image via asyncio.to_thread + Gemini vision comparison
@@ -67,8 +67,11 @@ uv run python -m art_style_search clean  # Remove outputs, logs, and state
 Each metric compares a generated image against its specific paired original (not all references):
 - **DINO cosine similarity**: Semantic/structural match per image pair. Higher = better.
 - **LPIPS**: Perceptual distance per image pair. Lower = better.
-- **HPS v2**: How well the generated image matches its caption. Higher = better.
-- **LAION Aesthetics**: Aesthetic quality predictor (1-10 scale). Higher = better.
+- **SSIM**: Structural similarity. Higher = better.
+- **Color histogram**: HSV histogram intersection. Higher = better.
+- **HPS v2**: Caption-image alignment (normalized: raw / 0.35, clamped to 1.0). Higher = better.
+- **LAION Aesthetics**: Aesthetic quality predictor (1-10 scale, normalized /10). Higher = better.
+- **Vision scores (style/subject/composition)**: Gemini LLM-based comparison (1-10 scale, normalized /10, low weight 2% each due to single-sample noise). Higher = better.
 
 ## Code Conventions
 
@@ -79,6 +82,9 @@ Each metric compares a generated image against its specific paired original (not
 - Iteration-to-iteration learning uses a shared `KnowledgeBase` on `LoopState` — no persistent branches, just per-iteration experiments feeding one KB
 - `BranchState` is legacy (kept for backward compat deserialization of old state.json)
 - Hypothesis classification uses keyword matching in `classify_hypothesis()` with `_CATEGORY_SYNONYMS` — extend the synonym map when adding new categories
+- Scoring: `adaptive_composite_score` ranks experiments against each other (relative); `composite_score` is used for improvement checks against baseline (absolute, same scale) — never compare values from different scoring functions
+- Open problems in KB are merged across experiments (deduplicated by text, capped at 10), not replaced — earlier experiments' problems survive
+- Vision comparison failures degrade gracefully to neutral defaults (5.0) instead of killing experiments
 
 ## Code Style
 

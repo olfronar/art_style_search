@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import enum
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -99,17 +100,22 @@ class AggregatedMetrics:
 
 
 def composite_score(m: AggregatedMetrics) -> float:
-    """Fixed-weight composite score. Used as fallback when adaptive scoring isn't available."""
+    """Fixed-weight composite score used for absolute quality comparison.
+
+    All metrics normalized to ~[0, 1] before weighting.  Vision scores are
+    downweighted (2% each) because they are single-sample LLM estimates.
+    HPS v2 is normalized using an empirical ceiling of 0.35.
+    """
     return (
-        0.25 * m.dino_similarity_mean
-        - 0.15 * m.lpips_distance_mean
-        + 0.10 * m.hps_score_mean
+        0.28 * m.dino_similarity_mean
+        - 0.18 * m.lpips_distance_mean
+        + 0.10 * min(m.hps_score_mean / 0.35, 1.0)
         + 0.10 * (m.aesthetics_score_mean / 10.0)
-        + 0.15 * m.ssim_mean
+        + 0.18 * m.ssim_mean
         + 0.10 * m.color_histogram_mean
-        + 0.05 * (m.vision_style / 10.0)
-        + 0.05 * (m.vision_subject / 10.0)
-        + 0.05 * (m.vision_composition / 10.0)
+        + 0.02 * (m.vision_style / 10.0)
+        + 0.02 * (m.vision_subject / 10.0)
+        + 0.02 * (m.vision_composition / 10.0)
     )
 
 
@@ -129,7 +135,7 @@ def adaptive_composite_score(
     metric_defs: list[tuple[str, callable, int]] = [
         ("dino", lambda r: r.dino_similarity_mean, 1),
         ("lpips", lambda r: r.lpips_distance_mean, -1),
-        ("hps", lambda r: r.hps_score_mean, 1),
+        ("hps", lambda r: min(r.hps_score_mean / 0.35, 1.0), 1),
         ("aesthetics", lambda r: r.aesthetics_score_mean / 10.0, 1),
         ("ssim", lambda r: r.ssim_mean, 1),
         ("color_hist", lambda r: r.color_histogram_mean, 1),
@@ -139,7 +145,6 @@ def adaptive_composite_score(
     ]
 
     # Compute stddev and normalized value for each metric
-    import math
 
     weighted_sum = 0.0
     total_weight = 0.0

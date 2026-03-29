@@ -17,7 +17,7 @@ import concurrent.futures
 import logging
 import random
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from google import genai
@@ -28,7 +28,12 @@ from art_style_search.config import Config
 from art_style_search.evaluate import check_caption_compliance, compare_vision, evaluate_images
 from art_style_search.generate import _generate_single
 from art_style_search.models import ModelRegistry
-from art_style_search.prompt import Lessons, propose_initial_templates, refine_template, synthesize_templates
+from art_style_search.prompt import (
+    Lessons,
+    propose_initial_templates,
+    refine_template,
+    synthesize_templates,
+)
 from art_style_search.state import load_state, save_iteration_log, save_state
 from art_style_search.types import (
     AggregatedMetrics,
@@ -39,6 +44,7 @@ from art_style_search.types import (
     LoopState,
     OpenProblem,
     PromptTemplate,
+    adaptive_composite_score,
     classify_hypothesis,
     composite_score,
     get_category_names,
@@ -278,7 +284,6 @@ async def _run_experiment(
     )
 
     # Merge vision scores into aggregated metrics
-    from dataclasses import replace
 
     aggregated = replace(
         aggregated,
@@ -440,7 +445,12 @@ def _update_knowledge_base(
                         )
                     )
 
-        kb.open_problems = new_problems
+        # Merge with existing problems instead of replacing — keeps context across experiments
+        existing_by_text = {p.text: p for p in kb.open_problems}
+        for p in new_problems:
+            existing_by_text[p.text] = p  # newer version wins for duplicates
+        priority_order = {"HIGH": 0, "MED": 1, "LOW": 2}
+        kb.open_problems = sorted(existing_by_text.values(), key=lambda p: priority_order.get(p.priority, 3))[:10]
 
 
 def _build_caption_diffs(last_results: list[IterationResult], worst_captions: list[Caption]) -> str:
@@ -566,25 +576,33 @@ async def run(config: Config) -> LoopState:
             fixed_references=fixed_refs,
         )
 
+        # Save state before evaluation so a crash doesn't lose analysis work
+        save_state(state, config.state_file)
+
         # Evaluate initial templates as iteration 0
         logger.info("=== Iteration 0 — evaluating %d initial templates ===", len(initial_templates))
-        init_tasks = [
-            _run_experiment(
-                experiment_id=i,
-                template=t,
-                iteration=0,
-                fixed_refs=fixed_refs,
-                last_results=[],
-                hypothesis=f"Initial template {i}",
-                experiment_desc="Zero-step diverse template",
-                **exp_kwargs,
-            )
-            for i, t in enumerate(initial_templates)
-        ]
+        try:
+            init_tasks = [
+                _run_experiment(
+                    experiment_id=i,
+                    template=t,
+                    iteration=0,
+                    fixed_refs=fixed_refs,
+                    last_results=[],
+                    hypothesis=f"Initial template {i}",
+                    experiment_desc="Zero-step diverse template",
+                    **exp_kwargs,
+                )
+                for i, t in enumerate(initial_templates)
+            ]
 
-        init_results = _collect_experiment_results(
-            await asyncio.gather(*init_tasks, return_exceptions=True), "Initial experiment"
-        )
+            init_results = _collect_experiment_results(
+                await asyncio.gather(*init_tasks, return_exceptions=True), "Initial experiment"
+            )
+        except Exception:
+            logger.exception("Zero-step evaluation failed — partial state saved for resume")
+            save_state(state, config.state_file)
+            raise
 
         if init_results:
             best_init = max(init_results, key=lambda r: composite_score(r.aggregated))
@@ -622,17 +640,7 @@ async def run(config: Config) -> LoopState:
         proposed_hypotheses: list[str] = []
 
         for exp_idx in range(config.num_branches):
-            (
-                new_template,
-                _analysis,
-                _template_changes,
-                should_stop,
-                hypothesis,
-                experiment_desc,
-                lessons,
-                builds_on,
-                open_problems,
-            ) = await refine_template(
+            refinement = await refine_template(
                 state.style_profile,
                 state.current_template,
                 state.knowledge_base,
@@ -646,21 +654,21 @@ async def run(config: Config) -> LoopState:
                 already_proposed=proposed_hypotheses if proposed_hypotheses else None,
             )
 
-            if should_stop:
+            if refinement.should_stop:
                 logger.info("Claude signaled convergence at experiment %d", exp_idx)
                 state.converged = True
                 state.convergence_reason = ConvergenceReason.CLAUDE_STOP
                 break
 
-            proposed_hypotheses.append(hypothesis)
+            proposed_hypotheses.append(refinement.hypothesis)
             proposals.append(
                 _ExperimentProposal(
-                    template=new_template,
-                    hypothesis=hypothesis,
-                    experiment_desc=experiment_desc,
-                    builds_on=builds_on,
-                    open_problems=open_problems,
-                    lessons=lessons,
+                    template=refinement.template,
+                    hypothesis=refinement.hypothesis,
+                    experiment_desc=refinement.experiment,
+                    builds_on=refinement.builds_on,
+                    open_problems=refinement.open_problems,
+                    lessons=refinement.lessons,
                 )
             )
 
@@ -701,19 +709,19 @@ async def run(config: Config) -> LoopState:
                 break
             continue
 
-        # Phase 3: Find best experiment using adaptive scoring
-        from art_style_search.types import adaptive_composite_score
-
+        # Phase 3: Find best experiment
+        # Adaptive scoring ranks experiments against each other (relative).
+        # composite_score is used for improvement checks (absolute, same scale).
         all_agg = [r.aggregated for r in exp_results]
         best_exp = max(exp_results, key=lambda r: adaptive_composite_score(r.aggregated, all_agg))
-        best_score = adaptive_composite_score(best_exp.aggregated, all_agg)
+        best_score = composite_score(best_exp.aggregated)
         baseline_score = composite_score(state.best_metrics) if state.best_metrics else float("-inf")
 
         # Phase 3.5: Synthesis — merge top experiments if multiple improved
-        improved_exps = [r for r in exp_results if adaptive_composite_score(r.aggregated, all_agg) > baseline_score]
+        improved_exps = [r for r in exp_results if composite_score(r.aggregated) > baseline_score]
         if len(improved_exps) >= 2:
             logger.info("Synthesizing %d improved experiments into merged template", len(improved_exps))
-            improved_exps.sort(key=lambda r: adaptive_composite_score(r.aggregated, all_agg), reverse=True)
+            improved_exps.sort(key=lambda r: composite_score(r.aggregated), reverse=True)
             top_exps = improved_exps[:3]
 
             merged_template, merged_hypothesis = await synthesize_templates(
@@ -770,6 +778,25 @@ async def run(config: Config) -> LoopState:
                 exp_result.template,
                 state.best_metrics,
                 proposal,
+                iteration,
+            )
+        # Record synthesis experiment separately (it has no matching proposal)
+        if len(exp_results) > len(proposals):
+            synth_result = exp_results[-1]
+            synth_proposal = _ExperimentProposal(
+                template=synth_result.template,
+                hypothesis=synth_result.hypothesis,
+                experiment_desc=synth_result.experiment,
+                builds_on=None,
+                open_problems=[],
+                lessons=Lessons(),
+            )
+            _update_knowledge_base(
+                state.knowledge_base,
+                synth_result,
+                synth_result.template,
+                state.best_metrics,
+                synth_proposal,
                 iteration,
             )
 
