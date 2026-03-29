@@ -40,9 +40,9 @@ class TestCompositeScore:
             + 0.14 * 0.0
             + 0.10 * 0.0
             + 0.08 * 0.0
-            + 0.04 * (5.0 / 10.0)
-            + 0.04 * (5.0 / 10.0)
-            + 0.04 * (5.0 / 10.0)
+            + 0.04 * 0.5
+            + 0.04 * 0.5
+            + 0.04 * 0.5
         )
         # Consistency penalty: 0.30 * (dino_std + lpips_norm_std + color_hist_std + texture_std) / 4.0
         penalty = 0.30 * (0.01 + min(0.02 / 0.7, 1.0) + 0.0 + 0.0) / 4.0
@@ -60,8 +60,8 @@ class TestCompositeScore:
             aesthetics_score_mean=0.0,
             aesthetics_score_std=0.0,
         )
-        # vision_style/subject/composition default to 5.0; all other metrics zero
-        expected = 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0)
+        # vision_style/subject/composition default to 0.5; all other metrics zero
+        expected = 0.04 * 0.5 + 0.04 * 0.5 + 0.04 * 0.5
         assert abs(composite_score(m) - expected) < 1e-9
 
     def test_higher_dino_yields_higher_score(self) -> None:
@@ -108,8 +108,8 @@ class TestCompositeScore:
             aesthetics_score_mean=0.0,
             aesthetics_score_std=0.0,
         )
-        # HPS: 0.05 * min(0.35/0.35, 1.0) = 0.05, plus 3 vision defaults at 5.0
-        expected = 0.05 * 1.0 + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0)
+        # HPS: 0.05 * min(0.35/0.35, 1.0) = 0.05, plus 3 vision defaults at 0.5
+        expected = 0.05 * 1.0 + 0.04 * 0.5 + 0.04 * 0.5 + 0.04 * 0.5
         assert abs(composite_score(m) - expected) < 1e-9
 
     def test_hps_clamped_above_ceiling(self) -> None:
@@ -125,7 +125,7 @@ class TestCompositeScore:
             aesthetics_score_std=0.0,
         )
         # Clamped: min(0.50/0.35, 1.0) = 1.0
-        expected = 0.05 * 1.0 + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0)
+        expected = 0.05 * 1.0 + 0.04 * 0.5 + 0.04 * 0.5 + 0.04 * 0.5
         assert abs(composite_score(m) - expected) < 1e-9
 
     def test_aesthetics_divided_by_ten(self) -> None:
@@ -140,8 +140,8 @@ class TestCompositeScore:
             aesthetics_score_mean=10.0,
             aesthetics_score_std=0.0,
         )
-        # Aesthetics: 0.06 * (10.0 / 10.0) = 0.06, plus 3 vision defaults at 5.0
-        expected = 0.06 * (10.0 / 10.0) + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0)
+        # Aesthetics: 0.06 * (10.0 / 10.0) = 0.06, plus 3 vision defaults at 0.5
+        expected = 0.06 * (10.0 / 10.0) + 0.04 * 0.5 + 0.04 * 0.5 + 0.04 * 0.5
         assert abs(composite_score(m) - expected) < 1e-9
 
 
@@ -233,8 +233,11 @@ class TestAggregatedMetricsSummaryDict:
             "ssim_mean",
             "ssim_std",
             "vision_style",
+            "vision_style_std",
             "vision_subject",
+            "vision_subject_std",
             "vision_composition",
+            "vision_composition_std",
         }
         assert set(d.keys()) == expected_keys
 
@@ -283,7 +286,7 @@ class TestAggregatedMetricsSummaryDict:
             aesthetics_score_mean=0.0,
             aesthetics_score_std=0.0,
         )
-        assert len(m.summary_dict()) == 17
+        assert len(m.summary_dict()) == 20
 
 
 # -- ConvergenceReason --------------------------------------------------------

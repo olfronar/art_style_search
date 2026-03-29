@@ -98,7 +98,7 @@ def _log_experiment_results(results: list[IterationResult], log_dir: Path) -> No
         save_iteration_log(r, log_dir)
         m = r.aggregated
         logger.info(
-            "Exp %d — DINO=%.3f LPIPS=%.3f Color=%.3f Tex=%.3f SSIM=%.3f HPS=%.3f Aes=%.1f V[S=%.0f Su=%.0f Co=%.0f] %s",
+            "Exp %d — DINO=%.3f LPIPS=%.3f Color=%.3f Tex=%.3f SSIM=%.3f HPS=%.3f Aes=%.1f V[S=%.2f Su=%.2f Co=%.2f] %s",
             r.branch_id,
             m.dino_similarity_mean,
             m.lpips_distance_mean,

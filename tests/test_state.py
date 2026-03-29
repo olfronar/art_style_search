@@ -183,6 +183,9 @@ class TestToDict:
             "color_histogram",
             "texture",
             "ssim",
+            "vision_style",
+            "vision_subject",
+            "vision_composition",
         }
         for v in d.values():
             assert isinstance(v, float)

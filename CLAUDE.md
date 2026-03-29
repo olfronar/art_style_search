@@ -74,7 +74,7 @@ Each metric compares a generated image against its specific paired original (not
 - **SSIM** (8%): Structural similarity index for pixel-level comparison. Higher = better.
 - **HPS v2** (5%): Caption-image alignment (normalized: raw / 0.35, clamped to 1.0). Higher = better.
 - **LAION Aesthetics** (6%): Aesthetic quality predictor (1-10 scale, normalized /10). Higher = better.
-- **Vision scores (style/subject/composition)** (4% each = 12%): Gemini LLM-based comparison (1-10 scale, normalized /10). Higher = better.
+- **Vision scores (style/subject/composition)** (4% each = 12%): Per-image Gemini ternary comparison (MATCH=1.0, PARTIAL=0.5, MISS=0.0). Higher = better.
 
 ## Code Conventions
 
@@ -91,7 +91,7 @@ Each metric compares a generated image against its specific paired original (not
 - KB metric deltas must be computed against the pre-update baseline — `update_knowledge_base` runs BEFORE `_apply_best_result` mutates `state.best_metrics`
 - Caption quality is validated after Gemini returns — empty or too-short captions (<50 chars) raise RuntimeError
 - Open problems in KB are merged across experiments (deduplicated by text, capped at 10), not replaced — earlier experiments' problems survive
-- Vision comparison failures degrade gracefully to neutral defaults (5.0) instead of killing experiments
+- Vision comparison is per-image (one Gemini call per image pair) with ternary verdicts (MATCH/PARTIAL/MISS → 1.0/0.5/0.0); failures degrade to PARTIAL (0.5) neutral defaults
 - Exploration mechanism: on even plateau counts (2, 4, 6, ...), the loop adopts the second-best experiment (ranked by `adaptive_composite_score`) to escape local optima; odd counts stay greedy (alternating exploration/exploitation). Requires >= 2 experiments to trigger.
 
 ## Code Style

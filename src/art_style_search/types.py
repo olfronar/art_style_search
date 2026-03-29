@@ -27,20 +27,28 @@ class MetricScores:
     color_histogram: float = 0.0  # higher = better, HSV histogram similarity [0, 1]
     texture: float = 0.0  # higher = better, Gabor filter energy cosine similarity [0, 1]
     ssim: float = 0.0  # higher = better, structural similarity index [0, 1]
+    vision_style: float = 0.5  # higher = better, ternary: MATCH=1.0, PARTIAL=0.5, MISS=0.0
+    vision_subject: float = 0.5  # higher = better, ternary: MATCH=1.0, PARTIAL=0.5, MISS=0.0
+    vision_composition: float = 0.5  # higher = better, ternary: MATCH=1.0, PARTIAL=0.5, MISS=0.0
+
+
+# Ternary verdict map for Gemini vision scoring
+VISION_VERDICT_MAP: dict[str, float] = {"MATCH": 1.0, "PARTIAL": 0.5, "MISS": 0.0}
+VISION_VERDICT_DEFAULT = 0.5  # neutral when parsing fails
 
 
 @dataclass(frozen=True)
 class VisionDimensionScore:
-    """One dimension of the Gemini vision comparison — numeric + qualitative."""
+    """One dimension of the Gemini vision comparison — ternary + qualitative."""
 
-    dimension: str  # "style", "subject", "color", "composition"
-    score: float  # 1-10
-    assessment: str  # qualitative text explaining the score
+    dimension: str  # "style", "subject", "composition"
+    score: float  # 0.0 (MISS), 0.5 (PARTIAL), 1.0 (MATCH)
+    assessment: str  # qualitative text explaining the verdict
 
 
 @dataclass(frozen=True)
 class VisionScores:
-    """Structured scores from Gemini vision comparison across 4 dimensions."""
+    """Structured per-image scores from Gemini vision comparison."""
 
     style: VisionDimensionScore
     subject: VisionDimensionScore
@@ -50,9 +58,9 @@ class VisionScores:
     def default(cls) -> VisionScores:
         """Neutral scores when parsing fails."""
         return cls(
-            style=VisionDimensionScore("style", 5.0, ""),
-            subject=VisionDimensionScore("subject", 5.0, ""),
-            composition=VisionDimensionScore("composition", 5.0, ""),
+            style=VisionDimensionScore("style", 0.5, ""),
+            subject=VisionDimensionScore("subject", 0.5, ""),
+            composition=VisionDimensionScore("composition", 0.5, ""),
         )
 
 
@@ -76,10 +84,13 @@ class AggregatedMetrics:
     ssim_mean: float = 0.0
     ssim_std: float = 0.0
 
-    # Experiment-level Gemini vision scores (1-10 scale, not per-image)
-    vision_style: float = 5.0
-    vision_subject: float = 5.0
-    vision_composition: float = 5.0
+    # Per-image Gemini vision scores (ternary: MATCH=1.0, PARTIAL=0.5, MISS=0.0)
+    vision_style: float = 0.5
+    vision_style_std: float = 0.0
+    vision_subject: float = 0.5
+    vision_subject_std: float = 0.0
+    vision_composition: float = 0.5
+    vision_composition_std: float = 0.0
 
     def summary_dict(self) -> dict[str, float]:
         """Flat dict for JSON serialization and reasoning model consumption."""
@@ -99,8 +110,11 @@ class AggregatedMetrics:
             "ssim_mean": self.ssim_mean,
             "ssim_std": self.ssim_std,
             "vision_style": self.vision_style,
+            "vision_style_std": self.vision_style_std,
             "vision_subject": self.vision_subject,
+            "vision_subject_std": self.vision_subject_std,
             "vision_composition": self.vision_composition,
+            "vision_composition_std": self.vision_composition_std,
         }
 
 
@@ -137,9 +151,9 @@ def composite_score(m: AggregatedMetrics) -> float:
         + 0.14 * m.color_histogram_mean
         + 0.10 * m.texture_mean
         + 0.08 * m.ssim_mean
-        + 0.04 * (m.vision_style / 10.0)
-        + 0.04 * (m.vision_subject / 10.0)
-        + 0.04 * (m.vision_composition / 10.0)
+        + 0.04 * m.vision_style
+        + 0.04 * m.vision_subject
+        + 0.04 * m.vision_composition
     )
     # Penalize inconsistency: high std across images means unreliable reproduction
     variance_penalty = (
@@ -171,9 +185,9 @@ def adaptive_composite_score(
         ("color_hist", lambda r: r.color_histogram_mean, 1),
         ("texture", lambda r: r.texture_mean, 1),
         ("ssim", lambda r: r.ssim_mean, 1),
-        ("v_style", lambda r: r.vision_style / 10.0, 1),
-        ("v_subject", lambda r: r.vision_subject / 10.0, 1),
-        ("v_composition", lambda r: r.vision_composition / 10.0, 1),
+        ("v_style", lambda r: r.vision_style, 1),
+        ("v_subject", lambda r: r.vision_subject, 1),
+        ("v_composition", lambda r: r.vision_composition, 1),
     ]
 
     # Compute stddev and normalized value for each metric

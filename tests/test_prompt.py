@@ -307,7 +307,7 @@ class TestFormatMetrics:
         )
         output = _format_metrics(metrics)
         lines = output.strip().split("\n")
-        assert len(lines) == 17
+        assert len(lines) == 20
         for line in lines:
             assert line.startswith("- ")
 

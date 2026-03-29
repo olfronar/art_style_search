@@ -11,125 +11,126 @@ from google import genai
 from PIL import Image
 
 from art_style_search.models import ModelRegistry
-from art_style_search.types import AggregatedMetrics, MetricScores, VisionDimensionScore, VisionScores
+from art_style_search.types import (
+    VISION_VERDICT_DEFAULT,
+    VISION_VERDICT_MAP,
+    AggregatedMetrics,
+    MetricScores,
+    VisionDimensionScore,
+    VisionScores,
+)
 from art_style_search.utils import image_to_gemini_part
 
 logger = logging.getLogger(__name__)
 
-_VISION_COMPARE_PROMPT = (
-    "You are an expert art analyst. You are shown reference images and generated images "
-    "(attempts to reproduce each reference from a text caption).\n\n"
-    "The META-PROMPT (captioner instruction) was:\n{rendered_prompt}\n\n"
-    "Each pair shows the caption used for generation. Be BRUTALLY HONEST — do not be generous. "
-    "Focus on what is WRONG, not what is right.\n\n"
-    "Respond in this structured format:\n\n"
-    "<matched>Aspects captured correctly (be brief)</matched>\n"
-    "<gaps>\n"
-    '<gap priority="high">Most critical difference — be specific about WHAT pixels/regions are wrong</gap>\n'
-    '<gap priority="high">Second most critical difference</gap>\n'
-    '<gap priority="medium">Third difference</gap>\n'
-    "</gaps>\n"
-    "<characters>For EACH pair that contains characters/figures: compare the reference character "
-    "against the generated one. List SPECIFIC differences in: face shape, eye size/position, "
-    "nose shape, mouth, skin tone, hair style/color, body proportions, clothing details, pose accuracy. "
-    "If a character is unrecognizable compared to the reference, say so explicitly.</characters>\n"
-    "<caption_diagnosis>For each pair: is the caption missing critical information, or is the "
-    "generator failing to follow the caption? Quote the specific caption phrases that were "
-    "ignored or misinterpreted by the generator.</caption_diagnosis>\n"
-    "<prompt_issues>What specific meta-prompt wording changes would fix the character and "
-    "subject fidelity gaps above</prompt_issues>\n\n"
-    "Rate reproduction quality per dimension using STRICT criteria "
-    "(5=mediocre match with obvious differences, 7=good but noticeable gaps, 9+=near-identical):\n"
-    "<dimensions>\n"
-    '  <style score="N">Art technique reproduction — be strict</style>\n'
-    '  <subject score="N">Character/subject identity and proportions — be very strict, '
-    "any wrong proportions or missing features = low score</subject>\n"
-    '  <composition score="N">Spatial layout, object positions, framing — be strict</composition>\n'
-    "</dimensions>"
+# ---------------------------------------------------------------------------
+# Per-image vision comparison (ternary: MATCH / PARTIAL / MISS)
+# ---------------------------------------------------------------------------
+
+_VISION_SINGLE_PROMPT = (
+    "Compare the ORIGINAL reference image with the GENERATED reproduction.\n"
+    "The caption used to generate was:\n{caption}\n\n"
+    "Be BRUTALLY HONEST. Focus on what is WRONG.\n\n"
+    "For each dimension, judge as:\n"
+    "- MATCH: reproduction captures this aspect well\n"
+    "- PARTIAL: some aspects captured, but notable differences\n"
+    "- MISS: significant failure to reproduce this aspect\n\n"
+    "Respond in EXACTLY this format:\n"
+    '<style verdict="MATCH|PARTIAL|MISS">1-sentence explanation</style>\n'
+    '<subject verdict="MATCH|PARTIAL|MISS">1-sentence explanation about character/subject fidelity</subject>\n'
+    '<composition verdict="MATCH|PARTIAL|MISS">1-sentence explanation about spatial layout</composition>\n'
+    "<key_gap>The single most critical thing the caption missed or the generator failed on</key_gap>"
 )
 
-_DIMENSION_RE = re.compile(
-    r'<(\w+)\s+score="(\d+(?:\.\d+)?)">(.*?)</\1>',
+_VERDICT_RE = re.compile(
+    r'<(\w+)\s+verdict="(\w+)">(.*?)</\1>',
     re.DOTALL,
 )
 
 
-def _parse_vision_scores(text: str) -> VisionScores:
-    """Parse <dimensions> scores from Gemini's vision comparison response."""
+def _parse_vision_verdicts(text: str) -> VisionScores:
+    """Parse ternary verdicts from per-image Gemini vision comparison."""
     scores: dict[str, VisionDimensionScore] = {}
-    for match in _DIMENSION_RE.finditer(text):
+    for match in _VERDICT_RE.finditer(text):
         dim_name = match.group(1)
-        score = float(match.group(2))
+        verdict = match.group(2).upper()
         assessment = match.group(3).strip()
         if dim_name in ("style", "subject", "composition"):
-            scores[dim_name] = VisionDimensionScore(
-                dimension=dim_name,
-                score=min(max(score, 1.0), 10.0),  # clamp to [1, 10]
-                assessment=assessment,
-            )
+            score = VISION_VERDICT_MAP.get(verdict, VISION_VERDICT_DEFAULT)
+            scores[dim_name] = VisionDimensionScore(dimension=dim_name, score=score, assessment=assessment)
 
     return VisionScores(
-        style=scores.get("style", VisionDimensionScore("style", 5.0, "")),
-        subject=scores.get("subject", VisionDimensionScore("subject", 5.0, "")),
-        composition=scores.get("composition", VisionDimensionScore("composition", 5.0, "")),
+        style=scores.get("style", VisionDimensionScore("style", VISION_VERDICT_DEFAULT, "")),
+        subject=scores.get("subject", VisionDimensionScore("subject", VISION_VERDICT_DEFAULT, "")),
+        composition=scores.get("composition", VisionDimensionScore("composition", VISION_VERDICT_DEFAULT, "")),
     )
 
 
-async def compare_vision(
-    pairs: list[tuple[Path, Path]],
-    captions: list[str],
-    rendered_prompt: str,
+async def _compare_vision_single(
+    ref_path: Path,
+    gen_path: Path,
+    caption: str,
     *,
     client: genai.Client,
     model: str,
     semaphore: asyncio.Semaphore,
-    max_pairs: int = 5,
 ) -> tuple[str, VisionScores]:
-    """Compare (original, generated) pairs via Gemini vision.
+    """Compare a single (original, generated) pair via Gemini vision.
 
-    Shows up to *max_pairs* pairs, deterministically picking the first N.
-    Pairs should be pre-sorted worst-first for best feedback quality.
-    Returns (qualitative_text, structured_scores).
+    Returns (qualitative_feedback, vision_scores) for this one image.
     """
-    show_pairs = pairs[:max_pairs]
-    show_captions = captions[:max_pairs]
-
-    contents: list[object] = []
-    for i, ((ref_path, gen_path), caption) in enumerate(zip(show_pairs, show_captions, strict=True)):
-        contents.append(f"\n## Pair {i + 1} — {ref_path.name}:")
-        contents.append(f"### Caption used for generation:\n{caption[:600]}")
-        contents.append("### ORIGINAL:")
-        contents.append(image_to_gemini_part(ref_path))
-        contents.append("### GENERATED (from caption above):")
-        contents.append(image_to_gemini_part(gen_path))
-
-    contents.append(f"\n{_VISION_COMPARE_PROMPT.format(rendered_prompt=rendered_prompt)}")
+    contents: list[object] = [
+        "### ORIGINAL:",
+        image_to_gemini_part(ref_path),
+        "### GENERATED (from caption):",
+        image_to_gemini_part(gen_path),
+        _VISION_SINGLE_PROMPT.format(caption=caption[:600]),
+    ]
 
     last_exc: Exception | None = None
     for attempt in range(3):
         try:
             async with semaphore:
-                response = await client.aio.models.generate_content(
-                    model=model,
-                    contents=contents,
-                )
-            text = response.text
-            scores = _parse_vision_scores(text)
+                response = await client.aio.models.generate_content(model=model, contents=contents)
+            text = response.text or ""
+            scores = _parse_vision_verdicts(text)
             return text, scores
         except Exception as exc:
             last_exc = exc
             delay = 3.0 * (2**attempt)
             logger.warning(
-                "Vision comparison attempt %d/3 failed: %s: %s — retrying in %.0fs",
+                "Vision %s attempt %d/3 failed: %s — retrying in %.0fs",
+                ref_path.name,
                 attempt + 1,
-                type(exc).__name__,
                 exc,
                 delay,
             )
             await asyncio.sleep(delay)
 
-    logger.error("Vision comparison failed after 3 retries: %s — using neutral defaults", last_exc)
+    logger.error("Vision %s failed after 3 retries: %s — using neutral defaults", ref_path.name, last_exc)
     return "", VisionScores.default()
+
+
+async def compare_vision_per_image(
+    pairs: list[tuple[Path, Path]],
+    captions: list[str],
+    *,
+    client: genai.Client,
+    model: str,
+    semaphore: asyncio.Semaphore,
+) -> tuple[list[str], list[VisionScores]]:
+    """Compare each (original, generated) pair individually via Gemini vision.
+
+    Returns (list_of_feedback_texts, list_of_vision_scores), one per pair.
+    """
+    tasks = [
+        _compare_vision_single(ref, gen, cap, client=client, model=model, semaphore=semaphore)
+        for (ref, gen), cap in zip(pairs, captions, strict=True)
+    ]
+    results = await asyncio.gather(*tasks)
+    feedbacks = [text for text, _ in results]
+    scores = [vs for _, vs in results]
+    return feedbacks, scores
 
 
 def check_caption_compliance(
@@ -195,6 +196,9 @@ def _aggregate(scores: list[MetricScores]) -> AggregatedMetrics:
     color_vals = [s.color_histogram for s in scores]
     texture_vals = [s.texture for s in scores]
     ssim_vals = [s.ssim for s in scores]
+    v_style = [s.vision_style for s in scores]
+    v_subject = [s.vision_subject for s in scores]
+    v_composition = [s.vision_composition for s in scores]
 
     return AggregatedMetrics(
         dino_similarity_mean=_mean(dino),
@@ -211,6 +215,12 @@ def _aggregate(scores: list[MetricScores]) -> AggregatedMetrics:
         texture_std=_std(texture_vals),
         ssim_mean=_mean(ssim_vals),
         ssim_std=_std(ssim_vals),
+        vision_style=_mean(v_style),
+        vision_style_std=_std(v_style),
+        vision_subject=_mean(v_subject),
+        vision_subject_std=_std(v_subject),
+        vision_composition=_mean(v_composition),
+        vision_composition_std=_std(v_composition),
     )
 
 
