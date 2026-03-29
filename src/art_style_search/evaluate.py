@@ -45,7 +45,6 @@ _VISION_COMPARE_PROMPT = (
     '  <style score="N">Art technique reproduction — be strict</style>\n'
     '  <subject score="N">Character/subject identity and proportions — be very strict, '
     "any wrong proportions or missing features = low score</subject>\n"
-    '  <color score="N">Color palette accuracy — compare specific colors, not just overall warmth</color>\n'
     '  <composition score="N">Spatial layout, object positions, framing — be strict</composition>\n'
     "</dimensions>"
 )
