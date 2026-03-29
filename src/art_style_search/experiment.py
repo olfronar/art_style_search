@@ -11,11 +11,11 @@ from google import genai
 
 from art_style_search.caption import caption_references
 from art_style_search.config import Config
-from art_style_search.evaluate import _aggregate, check_caption_compliance, compare_vision_per_image, evaluate_images
+from art_style_search.evaluate import aggregate, check_caption_compliance, compare_vision_per_image, evaluate_images
 from art_style_search.generate import _generate_single
 from art_style_search.models import ModelRegistry
 from art_style_search.prompt import Lessons
-from art_style_search.types import Caption, IterationResult, MetricScores, PromptTemplate
+from art_style_search.types import Caption, IterationResult, MetricScores, PromptTemplate, verdict_label
 
 logger = logging.getLogger(__name__)
 
@@ -155,47 +155,31 @@ async def run_experiment(
         "Exp %d iter %d — %d/%d images generated", experiment_id, iteration, len(generated_paths), len(fixed_refs)
     )
 
-    # Evaluate — per-image paired comparison
     gen_paths_for_eval = [gen for _, gen in pairs]
     ref_paths_for_eval = [orig for orig, _ in pairs]
     caption_by_path = {c.image_path: c.text for c in captions}
     eval_captions = [caption_by_path[orig] for orig, _ in pairs]
 
-    eval_task = evaluate_images(
-        gen_paths_for_eval,
-        ref_paths_for_eval,
-        eval_captions,
-        registry=registry,
-        semaphore=eval_semaphore,
+    # Run metric evaluation and vision comparison in parallel
+    (metric_scores, _), (vision_feedbacks, vision_scores_list) = await asyncio.gather(
+        evaluate_images(
+            gen_paths_for_eval, ref_paths_for_eval, eval_captions, registry=registry, semaphore=eval_semaphore
+        ),
+        compare_vision_per_image(
+            pairs, eval_captions, client=gemini_client, model=config.caption_model, semaphore=gemini_semaphore
+        ),
     )
 
     section_names = [s.name for s in template.sections]
     compliance = check_caption_compliance(section_names, captions)
 
-    scores, aggregated = await eval_task
-
-    # Sort by DINO worst first
-    scored_items = list(zip(pairs, scores, captions, strict=False))
-    scored_items.sort(key=lambda x: x[1].dino_similarity)
-
-    sorted_pairs = [item[0] for item in scored_items]
-    sorted_scores = [item[1] for item in scored_items]
-    sorted_captions = [item[2] for item in scored_items]
-
-    # Per-image vision comparison via Gemini (ternary: MATCH/PARTIAL/MISS)
-    sorted_caption_texts = [c.text for c in sorted_captions]
-    vision_feedbacks, vision_scores_list = await compare_vision_per_image(
-        sorted_pairs,
-        sorted_caption_texts,
-        client=gemini_client,
-        model=config.caption_model,
-        semaphore=gemini_semaphore,
-    )
-
-    # Merge per-image vision scores into MetricScores and re-aggregate
-    merged_scores: list[MetricScores] = []
-    for sc, vs in zip(sorted_scores, vision_scores_list, strict=True):
-        merged_scores.append(
+    # Sort by DINO worst-first, merge vision scores into MetricScores, then aggregate
+    order = sorted(range(len(metric_scores)), key=lambda i: metric_scores[i].dino_similarity)
+    scores: list[MetricScores] = []
+    vision_parts: list[str] = []
+    for i in order:
+        sc, vs, fb = metric_scores[i], vision_scores_list[i], vision_feedbacks[i]
+        scores.append(
             replace(
                 sc,
                 vision_style=vs.style.score,
@@ -203,45 +187,35 @@ async def run_experiment(
                 vision_composition=vs.composition.score,
             )
         )
-    scores = merged_scores
-
-    aggregated = _aggregate(scores)
-
-    # Combine per-image vision feedback into a single text
-    vision_parts: list[str] = []
-    for (ref_path, _), fb, vs in zip(sorted_pairs, vision_feedbacks, vision_scores_list, strict=True):
-        verdict_summary = (
-            f"S={'M' if vs.style.score == 1.0 else 'P' if vs.style.score == 0.5 else 'X'} "
-            f"Su={'M' if vs.subject.score == 1.0 else 'P' if vs.subject.score == 0.5 else 'X'} "
-            f"Co={'M' if vs.composition.score == 1.0 else 'P' if vs.composition.score == 0.5 else 'X'}"
-        )
-        vision_parts.append(f"**{ref_path.name}** [{verdict_summary}]: {fb[:300]}")
+        ref_path = pairs[i][0]
+        vl = f"S={verdict_label(vs.style.score)} Su={verdict_label(vs.subject.score)} Co={verdict_label(vs.composition.score)}"
+        vision_parts.append(f"**{ref_path.name}** [{vl}]: {fb[:300]}")
+    aggregated = aggregate(scores)
     vision_feedback = "\n".join(vision_parts)
 
-    # Build roundtrip feedback — full caption for worst image, truncated for rest
-    roundtrip_details: list[str] = []
+    sorted_pairs = [pairs[i] for i in order]
+    sorted_captions_list = [captions[order[j]] for j in range(len(order))]
+
+    # Build roundtrip feedback — full caption for worst images, truncated for rest
     prev = best_kept_result(last_results)
     prev_scores: dict[Path, float] = {}
     if prev:
         for cap, sc in zip(prev.iteration_captions, prev.per_image_scores, strict=False):
             prev_scores[cap.image_path] = sc.dino_similarity
 
-    for idx, ((ref_p, _gen_p), sc, cap) in enumerate(zip(sorted_pairs, scores, sorted_captions, strict=True)):
+    roundtrip_details: list[str] = []
+    for idx, ((ref_p, _), sc, cap) in enumerate(zip(sorted_pairs, scores, sorted_captions_list, strict=True)):
         prev_dino = prev_scores.get(cap.image_path)
         trend = ""
         if prev_dino is not None:
             arrow = "↑" if sc.dino_similarity > prev_dino else "↓" if sc.dino_similarity < prev_dino else "="
             trend = f" [prev DINO={prev_dino:.3f} → {sc.dino_similarity:.3f} {arrow}]"
-        v_str = (
-            f"V[S={'M' if sc.vision_style == 1.0 else 'P' if sc.vision_style == 0.5 else 'X'}"
-            f" Su={'M' if sc.vision_subject == 1.0 else 'P' if sc.vision_subject == 0.5 else 'X'}"
-            f" Co={'M' if sc.vision_composition == 1.0 else 'P' if sc.vision_composition == 0.5 else 'X'}]"
-        )
+        vl = f"V[S={verdict_label(sc.vision_style)} Su={verdict_label(sc.vision_subject)} Co={verdict_label(sc.vision_composition)}]"
         caption_text = cap.text if idx < 3 else f"{cap.text[:300]}..."
         roundtrip_details.append(
             f"Image ({ref_p.name}): DINO={sc.dino_similarity:.3f} LPIPS={sc.lpips_distance:.3f} "
             f"Color={sc.color_histogram:.3f} Tex={sc.texture:.3f} SSIM={sc.ssim:.3f} "
-            f"HPS={sc.hps_score:.3f} Aes={sc.aesthetics_score:.1f} {v_str}{trend}\n"
+            f"HPS={sc.hps_score:.3f} Aes={sc.aesthetics_score:.1f} {vl}{trend}\n"
             f"  Caption: {caption_text}"
         )
     roundtrip_feedback = "\n".join(roundtrip_details)

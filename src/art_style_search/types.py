@@ -35,6 +35,12 @@ class MetricScores:
 # Ternary verdict map for Gemini vision scoring
 VISION_VERDICT_MAP: dict[str, float] = {"MATCH": 1.0, "PARTIAL": 0.5, "MISS": 0.0}
 VISION_VERDICT_DEFAULT = 0.5  # neutral when parsing fails
+_VISION_SCORE_LABEL: dict[float, str] = {1.0: "M", 0.5: "P", 0.0: "X"}
+
+
+def verdict_label(score: float) -> str:
+    """Map a ternary vision score to its display letter (M/P/X)."""
+    return _VISION_SCORE_LABEL.get(score, "X")
 
 
 @dataclass(frozen=True)

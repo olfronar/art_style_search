@@ -1,18 +1,18 @@
-"""Unit tests for art_style_search.evaluate._aggregate."""
+"""Unit tests for art_style_search.evaluate.aggregate."""
 
 from __future__ import annotations
 
 import math
 
-from art_style_search.evaluate import _aggregate
+from art_style_search.evaluate import aggregate
 from art_style_search.types import MetricScores
 
 
 class TestAggregateEmpty:
-    """_aggregate with an empty list should return all-zero metrics."""
+    """aggregate with an empty list should return all-zero metrics."""
 
     def test_returns_zeros(self) -> None:
-        result = _aggregate([])
+        result = aggregate([])
         assert result.dino_similarity_mean == 0.0
         assert result.dino_similarity_std == 0.0
         assert result.lpips_distance_mean == 0.0
@@ -24,11 +24,11 @@ class TestAggregateEmpty:
 
 
 class TestAggregateSingle:
-    """_aggregate with a single score should return that score as mean, std=0."""
+    """aggregate with a single score should return that score as mean, std=0."""
 
     def test_single_score(self) -> None:
         scores = [MetricScores(dino_similarity=0.8, lpips_distance=0.3, hps_score=0.25, aesthetics_score=6.5)]
-        result = _aggregate(scores)
+        result = aggregate(scores)
 
         assert result.dino_similarity_mean == 0.8
         assert result.dino_similarity_std == 0.0
@@ -41,7 +41,7 @@ class TestAggregateSingle:
 
 
 class TestAggregateMultiple:
-    """_aggregate with multiple scores should compute correct mean and population std."""
+    """aggregate with multiple scores should compute correct mean and population std."""
 
     def test_mean_and_std(self) -> None:
         scores = [
@@ -49,7 +49,7 @@ class TestAggregateMultiple:
             MetricScores(dino_similarity=0.8, lpips_distance=0.2, hps_score=0.30, aesthetics_score=7.0),
             MetricScores(dino_similarity=1.0, lpips_distance=0.6, hps_score=0.10, aesthetics_score=9.0),
         ]
-        result = _aggregate(scores)
+        result = aggregate(scores)
 
         # Expected means
         assert math.isclose(result.dino_similarity_mean, 0.8, abs_tol=1e-9)

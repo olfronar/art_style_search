@@ -167,7 +167,7 @@ def check_caption_compliance(
     return "Caption compliance with meta-prompt sections:\n" + "\n".join(lines)
 
 
-def _aggregate(scores: list[MetricScores]) -> AggregatedMetrics:
+def aggregate(scores: list[MetricScores]) -> AggregatedMetrics:
     """Compute mean and std for each metric across a list of per-image scores."""
     n = len(scores)
     if n == 0:
@@ -283,6 +283,6 @@ async def evaluate_images(
     )
 
     scores = [r for r in results if r is not None]
-    aggregated = _aggregate(scores)
+    aggregated = aggregate(scores)
 
     return scores, aggregated
