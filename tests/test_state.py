@@ -182,6 +182,7 @@ class TestToDict:
             "aesthetics_score",
             "color_histogram",
             "texture",
+            "ssim",
         }
         for v in d.values():
             assert isinstance(v, float)

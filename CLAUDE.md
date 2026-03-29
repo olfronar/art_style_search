@@ -49,7 +49,7 @@ uv run python -m art_style_search clean  # Remove outputs, logs, and state
 - `generate.py` - Gemini Flash image generation with semaphore + retry
 - `experiment.py` - Single-experiment execution (caption + generate + evaluate), `ExperimentProposal` dataclass, result collection helpers
 - `knowledge.py` - Knowledge Base maintenance (hypothesis tracking, open problems, caption diffs)
-- `models.py` - ModelRegistry: lazy-load DINO/LPIPS/HPS/Aesthetics/Texture with per-model locks
+- `models.py` - ModelRegistry: lazy-load DINO/LPIPS/HPS/Aesthetics/Texture/SSIM with per-model locks
 - `evaluate.py` - Dispatches metrics per image via asyncio.to_thread + Gemini vision comparison
 - `utils.py` - Shared helpers: Anthropic streaming/text extraction, Gemini image part builder, MIME map
 - `state.py` - JSON persistence (state.json + per-iteration logs)
@@ -67,13 +67,14 @@ uv run python -m art_style_search clean  # Remove outputs, logs, and state
 ## Evaluation Metrics
 
 Each metric compares a generated image against its specific paired original (not all references):
-- **DINO cosine similarity**: Semantic/structural match per image pair. Higher = better.
-- **LPIPS**: Perceptual distance per image pair. Lower = better.
-- **Color histogram**: HSV histogram intersection. Higher = better.
-- **Texture**: Gabor filter energy cosine similarity. Higher = better.
-- **HPS v2**: Caption-image alignment (normalized: raw / 0.35, clamped to 1.0). Higher = better.
-- **LAION Aesthetics**: Aesthetic quality predictor (1-10 scale, normalized /10). Higher = better.
-- **Vision scores (style/subject/composition)**: Gemini LLM-based comparison (1-10 scale, normalized /10, low weight 4% each). Higher = better.
+- **DINO cosine similarity** (31%): Semantic/structural match per image pair. Higher = better.
+- **LPIPS** (-14%): Perceptual distance per image pair (normalized: raw / 0.7, clamped to 1.0). Lower = better.
+- **Color histogram** (14%): HSV histogram intersection. Higher = better.
+- **Texture** (10%): Gabor filter energy cosine similarity. Higher = better.
+- **SSIM** (8%): Structural similarity index for pixel-level comparison. Higher = better.
+- **HPS v2** (5%): Caption-image alignment (normalized: raw / 0.35, clamped to 1.0). Higher = better.
+- **LAION Aesthetics** (6%): Aesthetic quality predictor (1-10 scale, normalized /10). Higher = better.
+- **Vision scores (style/subject/composition)** (4% each = 12%): Gemini LLM-based comparison (1-10 scale, normalized /10). Higher = better.
 
 ## Code Conventions
 
@@ -85,7 +86,10 @@ Each metric compares a generated image against its specific paired original (not
 - `BranchState` is legacy (kept for backward compat deserialization of old state.json)
 - Hypothesis classification uses keyword matching in `classify_hypothesis()` with `_CATEGORY_SYNONYMS` — extend the synonym map when adding new categories
 - Scoring: `adaptive_composite_score` ranks experiments against each other (relative); `composite_score` is used for improvement checks against baseline (absolute, same scale, with `IMPROVEMENT_EPSILON` threshold to filter generation noise) — never compare values from different scoring functions
-- `composite_score` includes a consistency penalty (0.15 weight) based on per-image std of DINO, LPIPS, and color histogram — experiments with high variance across images are penalized
+- `composite_score` includes a consistency penalty (0.30 weight) based on per-image std of DINO, LPIPS, color histogram, and texture — experiments with high variance across images are penalized
+- All metrics in `composite_score` are normalized to [0, 1] before weighting — LPIPS via `_normalize_lpips` (ceiling 0.7), HPS via `_normalize_hps` (ceiling 0.35), aesthetics /10, vision /10
+- KB metric deltas must be computed against the pre-update baseline — `update_knowledge_base` runs BEFORE `_apply_best_result` mutates `state.best_metrics`
+- Caption quality is validated after Gemini returns — empty or too-short captions (<50 chars) raise RuntimeError
 - Open problems in KB are merged across experiments (deduplicated by text, capped at 10), not replaced — earlier experiments' problems survive
 - Vision comparison failures degrade gracefully to neutral defaults (5.0) instead of killing experiments
 - Exploration mechanism: on even plateau counts (2, 4, 6, ...), the loop adopts the second-best experiment (ranked by `adaptive_composite_score`) to escape local optima; odd counts stay greedy (alternating exploration/exploitation). Requires >= 2 experiments to trigger.

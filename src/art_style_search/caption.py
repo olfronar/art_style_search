@@ -94,6 +94,15 @@ async def _caption_single(
 
     caption_text = response.text
 
+    # Validate caption quality — empty or very short captions waste downstream cycles
+    min_caption_length = 50
+    if not caption_text or len(caption_text.strip()) < min_caption_length:
+        msg = (
+            f"Captioning {image_path.name} produced empty or too-short caption "
+            f"({len(caption_text.strip()) if caption_text else 0} chars, min {min_caption_length})"
+        )
+        raise RuntimeError(msg)
+
     # Write cache
     if cache_dir is not None:
         cache_dir.mkdir(parents=True, exist_ok=True)

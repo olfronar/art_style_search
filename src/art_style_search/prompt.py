@@ -75,10 +75,17 @@ def _format_metrics(metrics: AggregatedMetrics) -> str:
 # Response parsing
 # ---------------------------------------------------------------------------
 
+# Primary regex: strict name then description order
 _SECTION_RE = re.compile(
     r'<section\s+name="(?P<name>[^"]+)"\s+description="(?P<desc>[^"]+)"\s*>'
     r"(?P<value>.*?)"
     r"</section>",
+    re.DOTALL,
+)
+# Fallback regex: allows attributes in any order
+_SECTION_RE_LOOSE = re.compile(
+    r"<section\s+(?=.*?name=\"(?P<name>[^\"]+)\")(?=.*?description=\"(?P<desc>[^\"]+)\")"
+    r"[^>]*>(?P<value>.*?)</section>",
     re.DOTALL,
 )
 _NEGATIVE_RE = re.compile(r"<negative>(.*?)</negative>", re.DOTALL)
@@ -95,7 +102,11 @@ _OPEN_PROBLEMS_RE = re.compile(r"<open_problems>(.*?)</open_problems>", re.DOTAL
 
 
 def _parse_template(text: str) -> PromptTemplate:
-    """Extract a PromptTemplate from Claude's XML-style response."""
+    """Extract a PromptTemplate from Claude's XML-style response.
+
+    Tries strict regex first (name then description order), then falls back
+    to a loose regex that accepts attributes in any order.
+    """
     sections: list[PromptSection] = []
     for m in _SECTION_RE.finditer(text):
         sections.append(
@@ -105,6 +116,19 @@ def _parse_template(text: str) -> PromptTemplate:
                 value=m.group("value").strip(),
             )
         )
+    # Fallback: try loose regex if strict found nothing
+    if not sections:
+        for m in _SECTION_RE_LOOSE.finditer(text):
+            sections.append(
+                PromptSection(
+                    name=m.group("name").strip(),
+                    description=m.group("desc").strip(),
+                    value=m.group("value").strip(),
+                )
+            )
+        if sections:
+            logger.warning("Parsed %d sections with loose regex fallback", len(sections))
+
     negative = None
     neg_match = _NEGATIVE_RE.search(text)
     if neg_match:
@@ -378,6 +402,7 @@ async def propose_experiments(
         "- LPIPS (lower=better): perceptual distance. 0.5=noticeable, 0.3=similar, 0.1=near identical.\n"
         "- Color histogram (higher=better): color palette match. 0.7=similar, 0.9+=very close.\n"
         "- Texture (higher=better): Gabor filter energy similarity for brush strokes/patterns. 0.7=similar, 0.9+=very close.\n"
+        "- SSIM (higher=better): pixel-level structural similarity. 0.5=moderate, 0.7=good, 0.9+=near-identical.\n"
         "- HPS v2 (higher=better): caption-image alignment. Range 0.20-0.30.\n"
         "- Aesthetics (higher=better, 1-10): visual quality. 5=mediocre, 7=good, 8+=excellent.\n"
         "Experiment-level vision scores (from Gemini visual comparison, 1-10):\n"
@@ -398,8 +423,9 @@ async def propose_experiments(
         "for backgrounds describe Y').\n"
         "- Use the vision comparison and per-image roundtrip feedback to identify "
         "what the captions consistently miss.\n"
-        "- CRITICAL: Read the Knowledge Base carefully. The 'Do NOT Repeat' section lists "
-        "failed experiments. Build on confirmed insights. Reference hypothesis IDs (e.g. 'builds on H3').\n"
+        "- CRITICAL: Read the Knowledge Base carefully. Under Per-Category Status, "
+        "'Last rejected' entries show failed approaches — do NOT repeat them. "
+        "Build on confirmed insights. Reference hypothesis IDs (e.g. 'builds on H3').\n"
         "- Use Per-Category Status to identify which style dimensions need work.\n"
         "- Target the weakest category or build on partially confirmed hypotheses.\n"
         "- Use the Open Problems list to focus on the highest-priority gaps.\n"
@@ -469,11 +495,21 @@ async def propose_experiments(
 
     if vision_feedback:
         user_parts.append("\n\n## Vision Comparison (Gemini analysis of generated vs reference images)\n")
-        user_parts.append(vision_feedback)
+        # Cap vision feedback to ~500 words to prevent context degradation
+        vision_words = vision_feedback.split()
+        if len(vision_words) > 500:
+            user_parts.append(" ".join(vision_words[:500]) + "\n[...truncated]")
+        else:
+            user_parts.append(vision_feedback)
 
     if roundtrip_feedback:
         user_parts.append("\n\n## Per-Image Results (sorted worst → best by DINO)\n")
-        user_parts.append(roundtrip_feedback)
+        # Cap roundtrip feedback to ~800 words (full detail for worst images, metrics-only for rest)
+        roundtrip_words = roundtrip_feedback.split()
+        if len(roundtrip_words) > 800:
+            user_parts.append(" ".join(roundtrip_words[:800]) + "\n[...truncated]")
+        else:
+            user_parts.append(roundtrip_feedback)
 
     if caption_diffs:
         user_parts.append(f"\n\n{caption_diffs}")

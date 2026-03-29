@@ -98,12 +98,13 @@ def _log_experiment_results(results: list[IterationResult], log_dir: Path) -> No
         save_iteration_log(r, log_dir)
         m = r.aggregated
         logger.info(
-            "Exp %d — DINO=%.3f LPIPS=%.3f Color=%.3f Tex=%.3f HPS=%.3f Aes=%.1f V[S=%.0f Su=%.0f Co=%.0f] %s",
+            "Exp %d — DINO=%.3f LPIPS=%.3f Color=%.3f Tex=%.3f SSIM=%.3f HPS=%.3f Aes=%.1f V[S=%.0f Su=%.0f Co=%.0f] %s",
             r.branch_id,
             m.dino_similarity_mean,
             m.lpips_distance_mean,
             m.color_histogram_mean,
             m.texture_mean,
+            m.ssim_mean,
             m.hps_score_mean,
             m.aesthetics_score_mean,
             m.vision_style,
@@ -391,6 +392,19 @@ async def run(config: Config) -> LoopState:
         # Update state with best result (epsilon threshold filters generation noise)
         improved = best_score > baseline_score + IMPROVEMENT_EPSILON
 
+        # Phase 4: Update shared KB with ALL experiment results BEFORE mutating best_metrics
+        # so that metric deltas are computed against the pre-update baseline.
+        pre_update_metrics = state.best_metrics
+        for exp_result, proposal in zip(exp_results, proposals, strict=False):
+            update_knowledge_base(
+                state.knowledge_base,
+                exp_result,
+                exp_result.template,
+                pre_update_metrics,
+                proposal,
+                iteration,
+            )
+
         if improved:
             _apply_best_result(state, best_exp)
             state.plateau_counter = 0
@@ -413,17 +427,6 @@ async def run(config: Config) -> LoopState:
         # Cap persisted history to avoid unbounded state.json growth
         if len(state.experiment_history) > _MAX_PERSISTED_HISTORY:
             state.experiment_history = state.experiment_history[-_MAX_PERSISTED_HISTORY:]
-
-        # Phase 4: Update shared KB with ALL experiment results
-        for exp_result, proposal in zip(exp_results, proposals, strict=False):
-            update_knowledge_base(
-                state.knowledge_base,
-                exp_result,
-                exp_result.template,
-                state.best_metrics,
-                proposal,
-                iteration,
-            )
         # Record synthesis experiment separately (it has no matching proposal)
         if synth_result is not None:
             synth_proposal = ExperimentProposal(
@@ -438,7 +441,7 @@ async def run(config: Config) -> LoopState:
                 state.knowledge_base,
                 synth_result,
                 synth_result.template,
-                state.best_metrics,
+                pre_update_metrics,
                 synth_proposal,
                 iteration,
             )

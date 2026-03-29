@@ -257,6 +257,18 @@ class ModelRegistry:
             return 0.0
         return max(0.0, min(1.0, dot / norm))
 
+    def compute_ssim(self, generated: Image.Image, reference: Image.Image) -> float:
+        """Structural Similarity Index (SSIM) for pixel-level comparison.
+
+        Returns a float in [0, 1]; higher is better.  Both images are resized
+        to 256x256 and converted to grayscale for comparison.
+        """
+        from skimage.metrics import structural_similarity
+
+        gen_gray = np.array(generated.convert("L").resize((256, 256)), dtype=np.float64)
+        ref_gray = np.array(reference.convert("L").resize((256, 256)), dtype=np.float64)
+        return float(structural_similarity(gen_gray, ref_gray, data_range=255.0))
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------

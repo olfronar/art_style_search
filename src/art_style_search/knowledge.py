@@ -49,6 +49,7 @@ def update_knowledge_base(
             "aesthetics": result.aggregated.aesthetics_score_mean - best_metrics.aesthetics_score_mean,
             "color_histogram": result.aggregated.color_histogram_mean - best_metrics.color_histogram_mean,
             "texture": result.aggregated.texture_mean - best_metrics.texture_mean,
+            "ssim": result.aggregated.ssim_mean - best_metrics.ssim_mean,
             "vision_style": result.aggregated.vision_style - best_metrics.vision_style,
             "vision_subject": result.aggregated.vision_subject - best_metrics.vision_subject,
             "vision_composition": result.aggregated.vision_composition - best_metrics.vision_composition,
@@ -91,9 +92,8 @@ def update_knowledge_base(
             else:
                 priority = "LOW"
 
-            gap = best_cat_dino - (
-                cat_progress.best_dino_delta if cat_progress and cat_progress.best_dino_delta else 0.0
-            )
+            # Gap = distance from perfect DINO (1.0) for this experiment
+            gap = 1.0 - best_cat_dino
             since = prev_problem_texts.get(prob_text, iteration)
 
             new_problems.append(

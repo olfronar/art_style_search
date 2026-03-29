@@ -26,6 +26,7 @@ class MetricScores:
     aesthetics_score: float  # higher = better, 1-10 scale
     color_histogram: float = 0.0  # higher = better, HSV histogram similarity [0, 1]
     texture: float = 0.0  # higher = better, Gabor filter energy cosine similarity [0, 1]
+    ssim: float = 0.0  # higher = better, structural similarity index [0, 1]
 
 
 @dataclass(frozen=True)
@@ -72,6 +73,8 @@ class AggregatedMetrics:
     color_histogram_std: float = 0.0
     texture_mean: float = 0.0
     texture_std: float = 0.0
+    ssim_mean: float = 0.0
+    ssim_std: float = 0.0
 
     # Experiment-level Gemini vision scores (1-10 scale, not per-image)
     vision_style: float = 5.0
@@ -93,6 +96,8 @@ class AggregatedMetrics:
             "color_histogram_std": self.color_histogram_std,
             "texture_mean": self.texture_mean,
             "texture_std": self.texture_std,
+            "ssim_mean": self.ssim_mean,
+            "ssim_std": self.ssim_std,
             "vision_style": self.vision_style,
             "vision_subject": self.vision_subject,
             "vision_composition": self.vision_composition,
@@ -100,6 +105,7 @@ class AggregatedMetrics:
 
 
 _HPS_CEILING = 0.35  # default empirical max for HPS v2 scores; used to normalize to [0, 1]
+_LPIPS_CEILING = 0.7  # empirical max for LPIPS perceptual distance; used to normalize to [0, 1]
 
 # Improvement must exceed this threshold to be accepted (filters generation noise)
 IMPROVEMENT_EPSILON = 0.005
@@ -110,27 +116,37 @@ def _normalize_hps(raw: float, ceiling: float = _HPS_CEILING) -> float:
     return min(raw / ceiling, 1.0)
 
 
+def _normalize_lpips(raw: float, ceiling: float = _LPIPS_CEILING) -> float:
+    """Normalize raw LPIPS distance to [0, 1] using the empirical ceiling."""
+    return min(raw / ceiling, 1.0)
+
+
 def composite_score(m: AggregatedMetrics) -> float:
     """Fixed-weight composite score used for absolute quality comparison.
 
     All metrics normalized to ~[0, 1] before weighting.
-    Weights: DINO 26%, LPIPS -14%, Color 18%, Texture 10%, HPS 10%, Aesthetics 10%,
-    Vision 4%+4%+4%=12%.
+    Weights: DINO 31%, LPIPS -14%, Color 14%, Texture 10%, SSIM 8%, HPS 5%,
+    Aesthetics 6%, Vision 4%+4%+4%=12%.  Total absolute weights = 1.00.
     Includes a consistency penalty based on per-image score variance.
     """
     base = (
-        0.26 * m.dino_similarity_mean
-        - 0.14 * m.lpips_distance_mean
-        + 0.10 * _normalize_hps(m.hps_score_mean)
-        + 0.10 * (m.aesthetics_score_mean / 10.0)
-        + 0.18 * m.color_histogram_mean
+        0.31 * m.dino_similarity_mean
+        - 0.14 * _normalize_lpips(m.lpips_distance_mean)
+        + 0.05 * _normalize_hps(m.hps_score_mean)
+        + 0.06 * (m.aesthetics_score_mean / 10.0)
+        + 0.14 * m.color_histogram_mean
         + 0.10 * m.texture_mean
+        + 0.08 * m.ssim_mean
         + 0.04 * (m.vision_style / 10.0)
         + 0.04 * (m.vision_subject / 10.0)
         + 0.04 * (m.vision_composition / 10.0)
     )
     # Penalize inconsistency: high std across images means unreliable reproduction
-    variance_penalty = 0.15 * (m.dino_similarity_std + m.lpips_distance_std + m.color_histogram_std) / 3.0
+    variance_penalty = (
+        0.30
+        * (m.dino_similarity_std + _normalize_lpips(m.lpips_distance_std) + m.color_histogram_std + m.texture_std)
+        / 4.0
+    )
     return base - variance_penalty
 
 
@@ -149,11 +165,12 @@ def adaptive_composite_score(
     # Define metrics: (extractor, direction) where direction=1 means higher=better
     metric_defs: list[tuple[str, callable, int]] = [
         ("dino", lambda r: r.dino_similarity_mean, 1),
-        ("lpips", lambda r: r.lpips_distance_mean, -1),
+        ("lpips", lambda r: _normalize_lpips(r.lpips_distance_mean), -1),
         ("hps", lambda r: _normalize_hps(r.hps_score_mean), 1),
         ("aesthetics", lambda r: r.aesthetics_score_mean / 10.0, 1),
         ("color_hist", lambda r: r.color_histogram_mean, 1),
         ("texture", lambda r: r.texture_mean, 1),
+        ("ssim", lambda r: r.ssim_mean, 1),
         ("v_style", lambda r: r.vision_style / 10.0, 1),
         ("v_subject", lambda r: r.vision_subject / 10.0, 1),
         ("v_composition", lambda r: r.vision_composition / 10.0, 1),

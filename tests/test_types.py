@@ -29,21 +29,23 @@ class TestCompositeScore:
             aesthetics_score_mean=7.0,
             aesthetics_score_std=0.5,
         )
-        # 8-metric formula; color_histogram defaults to 0.0, vision_* default to 5.0
+        # 9-metric formula; color_histogram/texture/ssim default to 0.0, vision_* default to 5.0
         # HPS normalized: min(0.28/0.35, 1.0) = 0.8
+        # LPIPS normalized: min(0.3/0.7, 1.0) = 0.3/0.7
         base = (
-            0.26 * 0.8
-            - 0.14 * 0.3
-            + 0.10 * min(0.28 / 0.35, 1.0)
-            + 0.10 * (7.0 / 10.0)
-            + 0.18 * 0.0
+            0.31 * 0.8
+            - 0.14 * min(0.3 / 0.7, 1.0)
+            + 0.05 * min(0.28 / 0.35, 1.0)
+            + 0.06 * (7.0 / 10.0)
+            + 0.14 * 0.0
             + 0.10 * 0.0
+            + 0.08 * 0.0
             + 0.04 * (5.0 / 10.0)
             + 0.04 * (5.0 / 10.0)
             + 0.04 * (5.0 / 10.0)
         )
-        # Consistency penalty: 0.15 * (dino_std + lpips_std + color_histogram_std) / 3.0
-        penalty = 0.15 * (0.01 + 0.02 + 0.0) / 3.0
+        # Consistency penalty: 0.30 * (dino_std + lpips_norm_std + color_hist_std + texture_std) / 4.0
+        penalty = 0.30 * (0.01 + min(0.02 / 0.7, 1.0) + 0.0 + 0.0) / 4.0
         expected = base - penalty
         assert abs(composite_score(m) - expected) < 1e-9
 
@@ -58,7 +60,7 @@ class TestCompositeScore:
             aesthetics_score_mean=0.0,
             aesthetics_score_std=0.0,
         )
-        # vision_style/subject/composition default to 5.0
+        # vision_style/subject/composition default to 5.0; all other metrics zero
         expected = 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0)
         assert abs(composite_score(m) - expected) < 1e-9
 
@@ -91,8 +93,8 @@ class TestCompositeScore:
         assert composite_score(low_lpips) > composite_score(high_lpips)
 
     def test_weights_sum_to_one(self) -> None:
-        """Verify the coefficient magnitudes sum to 1.0 (8 metrics)."""
-        assert abs((0.26 + 0.14 + 0.10 + 0.10 + 0.18 + 0.10 + 0.04 + 0.04 + 0.04) - 1.0) < 1e-9
+        """Verify the coefficient magnitudes sum to 1.0 (9 metrics)."""
+        assert abs((0.31 + 0.14 + 0.05 + 0.06 + 0.14 + 0.10 + 0.08 + 0.04 + 0.04 + 0.04) - 1.0) < 1e-9
 
     def test_hps_normalized(self) -> None:
         """HPS v2 scores (~0.25-0.35) should be normalized to [0,1] via /0.35 ceiling."""
@@ -106,8 +108,8 @@ class TestCompositeScore:
             aesthetics_score_mean=0.0,
             aesthetics_score_std=0.0,
         )
-        # HPS: 0.10 * min(0.35/0.35, 1.0) = 0.10, plus 3 vision defaults at 5.0
-        expected = 0.10 * 1.0 + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0)
+        # HPS: 0.05 * min(0.35/0.35, 1.0) = 0.05, plus 3 vision defaults at 5.0
+        expected = 0.05 * 1.0 + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0)
         assert abs(composite_score(m) - expected) < 1e-9
 
     def test_hps_clamped_above_ceiling(self) -> None:
@@ -123,7 +125,7 @@ class TestCompositeScore:
             aesthetics_score_std=0.0,
         )
         # Clamped: min(0.50/0.35, 1.0) = 1.0
-        expected = 0.10 * 1.0 + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0)
+        expected = 0.05 * 1.0 + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0)
         assert abs(composite_score(m) - expected) < 1e-9
 
     def test_aesthetics_divided_by_ten(self) -> None:
@@ -138,8 +140,8 @@ class TestCompositeScore:
             aesthetics_score_mean=10.0,
             aesthetics_score_std=0.0,
         )
-        # Aesthetics: 0.10 * (10.0 / 10.0) = 0.10, plus 3 vision defaults at 5.0
-        expected = 0.10 * (10.0 / 10.0) + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0)
+        # Aesthetics: 0.06 * (10.0 / 10.0) = 0.06, plus 3 vision defaults at 5.0
+        expected = 0.06 * (10.0 / 10.0) + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0) + 0.04 * (5.0 / 10.0)
         assert abs(composite_score(m) - expected) < 1e-9
 
 
@@ -228,6 +230,8 @@ class TestAggregatedMetricsSummaryDict:
             "color_histogram_std",
             "texture_mean",
             "texture_std",
+            "ssim_mean",
+            "ssim_std",
             "vision_style",
             "vision_subject",
             "vision_composition",
@@ -279,7 +283,7 @@ class TestAggregatedMetricsSummaryDict:
             aesthetics_score_mean=0.0,
             aesthetics_score_std=0.0,
         )
-        assert len(m.summary_dict()) == 15
+        assert len(m.summary_dict()) == 17
 
 
 # -- ConvergenceReason --------------------------------------------------------
