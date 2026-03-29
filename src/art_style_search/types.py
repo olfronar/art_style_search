@@ -42,7 +42,6 @@ class VisionScores:
 
     style: VisionDimensionScore
     subject: VisionDimensionScore
-    color: VisionDimensionScore
     composition: VisionDimensionScore
 
     @classmethod
@@ -51,7 +50,6 @@ class VisionScores:
         return cls(
             style=VisionDimensionScore("style", 5.0, ""),
             subject=VisionDimensionScore("subject", 5.0, ""),
-            color=VisionDimensionScore("color", 5.0, ""),
             composition=VisionDimensionScore("composition", 5.0, ""),
         )
 
@@ -77,7 +75,6 @@ class AggregatedMetrics:
     # Experiment-level Gemini vision scores (1-10 scale, not per-image)
     vision_style: float = 5.0
     vision_subject: float = 5.0
-    vision_color: float = 5.0
     vision_composition: float = 5.0
 
     def summary_dict(self) -> dict[str, float]:
@@ -97,7 +94,6 @@ class AggregatedMetrics:
             "color_histogram_std": self.color_histogram_std,
             "vision_style": self.vision_style,
             "vision_subject": self.vision_subject,
-            "vision_color": self.vision_color,
             "vision_composition": self.vision_composition,
         }
 
@@ -113,8 +109,7 @@ def composite_score(m: AggregatedMetrics) -> float:
         + 0.10 * m.color_histogram_mean
         + 0.05 * (m.vision_style / 10.0)
         + 0.05 * (m.vision_subject / 10.0)
-        + 0.025 * (m.vision_color / 10.0)
-        + 0.025 * (m.vision_composition / 10.0)
+        + 0.05 * (m.vision_composition / 10.0)
     )
 
 
@@ -140,7 +135,6 @@ def adaptive_composite_score(
         ("color_hist", lambda r: r.color_histogram_mean, 1),
         ("v_style", lambda r: r.vision_style / 10.0, 1),
         ("v_subject", lambda r: r.vision_subject / 10.0, 1),
-        ("v_color", lambda r: r.vision_color / 10.0, 1),
         ("v_composition", lambda r: r.vision_composition / 10.0, 1),
     ]
 

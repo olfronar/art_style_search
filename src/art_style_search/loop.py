@@ -112,7 +112,7 @@ def _log_experiment_results(results: list[IterationResult], log_dir: Path) -> No
         save_iteration_log(r, log_dir)
         m = r.aggregated
         logger.info(
-            "Exp %d — DINO=%.3f LPIPS=%.3f SSIM=%.3f Color=%.3f HPS=%.3f Aes=%.1f V[S=%.0f Su=%.0f C=%.0f Co=%.0f] %s",
+            "Exp %d — DINO=%.3f LPIPS=%.3f SSIM=%.3f Color=%.3f HPS=%.3f Aes=%.1f V[S=%.0f Su=%.0f Co=%.0f] %s",
             r.branch_id,
             m.dino_similarity_mean,
             m.lpips_distance_mean,
@@ -122,7 +122,6 @@ def _log_experiment_results(results: list[IterationResult], log_dir: Path) -> No
             m.aesthetics_score_mean,
             m.vision_style,
             m.vision_subject,
-            m.vision_color,
             m.vision_composition,
             "KEPT" if r.kept else "discarded",
         )
@@ -285,7 +284,6 @@ async def _run_experiment(
         aggregated,
         vision_style=vision_scores.style.score,
         vision_subject=vision_scores.subject.score,
-        vision_color=vision_scores.color.score,
         vision_composition=vision_scores.composition.score,
     )
 
@@ -367,7 +365,6 @@ def _update_knowledge_base(
             "color_histogram": result.aggregated.color_histogram_mean - best_metrics.color_histogram_mean,
             "vision_style": result.aggregated.vision_style - best_metrics.vision_style,
             "vision_subject": result.aggregated.vision_subject - best_metrics.vision_subject,
-            "vision_color": result.aggregated.vision_color - best_metrics.vision_color,
             "vision_composition": result.aggregated.vision_composition - best_metrics.vision_composition,
         }
 
@@ -424,7 +421,6 @@ def _update_knowledge_base(
         vision_dims = [
             ("style", agg.vision_style, "technique"),
             ("subject", agg.vision_subject, "subject_matter"),
-            ("color", agg.vision_color, "color_palette"),
             ("composition", agg.vision_composition, "composition"),
         ]
         for dim_name, score, cat_name in vision_dims:

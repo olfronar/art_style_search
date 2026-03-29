@@ -102,7 +102,6 @@ def _aggregated_metrics_from_dict(d: dict[str, Any]) -> AggregatedMetrics:
         color_histogram_std=d.get("color_histogram_std", 0.0),
         vision_style=d.get("vision_style", 5.0),
         vision_subject=d.get("vision_subject", 5.0),
-        vision_color=d.get("vision_color", 5.0),
         vision_composition=d.get("vision_composition", 5.0),
     )
 

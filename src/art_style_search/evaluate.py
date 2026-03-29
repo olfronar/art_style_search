@@ -62,7 +62,7 @@ def _parse_vision_scores(text: str) -> VisionScores:
         dim_name = match.group(1)
         score = float(match.group(2))
         assessment = match.group(3).strip()
-        if dim_name in ("style", "subject", "color", "composition"):
+        if dim_name in ("style", "subject", "composition"):
             scores[dim_name] = VisionDimensionScore(
                 dimension=dim_name,
                 score=min(max(score, 1.0), 10.0),  # clamp to [1, 10]
@@ -72,7 +72,6 @@ def _parse_vision_scores(text: str) -> VisionScores:
     return VisionScores(
         style=scores.get("style", VisionDimensionScore("style", 5.0, "")),
         subject=scores.get("subject", VisionDimensionScore("subject", 5.0, "")),
-        color=scores.get("color", VisionDimensionScore("color", 5.0, "")),
         composition=scores.get("composition", VisionDimensionScore("composition", 5.0, "")),
     )
 

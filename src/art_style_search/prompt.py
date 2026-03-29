@@ -331,7 +331,6 @@ async def refine_template(
         "Experiment-level vision scores (from Gemini visual comparison, 1-10):\n"
         "- vision_style: art technique reproduction quality.\n"
         "- vision_subject: character/subject fidelity.\n"
-        "- vision_color: color palette accuracy.\n"
         "- vision_composition: spatial layout accuracy.\n"
         "Weights are ADAPTIVE — metrics with more variance across experiments get higher weight.\n\n"
         "## Iteration strategy\n"
