@@ -62,7 +62,7 @@ def _format_template(template: PromptTemplate) -> str:
         parts.append(f"  <negative>{template.negative_prompt}</negative>")
     if template.caption_sections:
         parts.append(f"  <caption_sections>{', '.join(template.caption_sections)}</caption_sections>")
-    if template.caption_length_target:
+    if template.caption_length_target > 0:
         parts.append(f"  <caption_length>{template.caption_length_target}</caption_length>")
     parts.append("</template>")
     return "\n".join(parts)

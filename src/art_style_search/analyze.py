@@ -169,7 +169,7 @@ def _parse_compilation(text: str, gemini_raw: str, claude_raw: str) -> tuple[Sty
     caption_sections = [s.strip() for s in caption_sections_raw.split(",") if s.strip()] if caption_sections_raw else []
 
     caption_length_raw = _extract_tag(template_block, "caption_length")
-    caption_length_target = int(caption_length_raw) if caption_length_raw.isdigit() else 500
+    caption_length_target = int(caption_length_raw) if caption_length_raw.isdigit() else 0
 
     template = PromptTemplate(
         sections=sections,
@@ -279,6 +279,8 @@ def _load_cache(cache_path: Path) -> tuple[StyleProfile, PromptTemplate] | None:
                 for s in sp.get("sections", [])
             ],
             negative_prompt=sp.get("negative_prompt"),
+            caption_sections=sp.get("caption_sections", []),
+            caption_length_target=sp.get("caption_length_target", 0),
         )
         logger.info("Loaded cached style analysis from %s", cache_path)
         return profile, template

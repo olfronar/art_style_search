@@ -282,7 +282,7 @@ class PromptTemplate:
         if self.caption_sections:
             section_list = ", ".join(f"[{s}]" for s in self.caption_sections)
             caption_parts.append(f"Format your response with these labeled sections in this order: {section_list}.")
-        if self.caption_length_target:
+        if self.caption_length_target > 0:
             caption_parts.append(f"Target length: approximately {self.caption_length_target} words.")
         if caption_parts:
             return main_block + "\n\n" + " ".join(caption_parts)

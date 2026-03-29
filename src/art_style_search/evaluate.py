@@ -153,11 +153,11 @@ def check_caption_compliance(
 
     total = len(typed)
     lines: list[str] = []
+    lowered = [c.text.lower() for c in typed]
 
     # Keyword presence check per meta-prompt section
     section_hits: dict[str, int] = {name: 0 for name in section_names}
-    for caption in typed:
-        text_lower = caption.text.lower()
+    for text_lower in lowered:
         for name in section_names:
             keywords = name.replace("_", " ").split()
             if any(kw in text_lower for kw in keywords):
@@ -173,7 +173,7 @@ def check_caption_compliance(
         marker_lines: list[str] = []
         for sec_name in caption_sections:
             marker = f"[{sec_name}]".lower()
-            hits = sum(1 for c in typed if marker in c.text.lower())
+            hits = sum(1 for tl in lowered if marker in tl)
             pct = hits / total * 100
             status = "OK" if pct >= 70 else "WEAK" if pct >= 30 else "MISSING"
             marker_lines.append(f"  [{sec_name}]: {status} ({hits}/{total} captions contain this label)")
