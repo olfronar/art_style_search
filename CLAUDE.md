@@ -69,11 +69,12 @@ uv run python -m art_style_search clean  # Remove outputs, logs, and state
 Each metric compares a generated image against its specific paired original (not all references):
 - **DINO cosine similarity** (31%): Semantic/structural match per image pair. Higher = better.
 - **LPIPS** (-14%): Perceptual distance per image pair (normalized: raw / 0.7, clamped to 1.0). Lower = better.
-- **Color histogram** (14%): HSV histogram intersection. Higher = better.
-- **Texture** (10%): Gabor filter energy cosine similarity. Higher = better.
+- **Color histogram** (15%): HSV histogram intersection. Higher = better.
+- **Texture** (5%): Gabor filter energy cosine similarity. Higher = better.
 - **SSIM** (8%): Structural similarity index for pixel-level comparison. Higher = better.
 - **HPS v2** (5%): Caption-image alignment (normalized: raw / 0.35, clamped to 1.0). Higher = better.
 - **LAION Aesthetics** (6%): Aesthetic quality predictor (1-10 scale, normalized /10). Higher = better.
+- **Style consistency** (4%): Jaccard word-overlap of [Art Style] blocks across captions. Higher = more consistent shared style guidance.
 - **Vision scores (style/subject/composition)** (4% each = 12%): Per-image Gemini ternary comparison (MATCH=1.0, PARTIAL=0.5, MISS=0.0). Higher = better.
 
 ## Code Conventions
@@ -86,14 +87,15 @@ Each metric compares a generated image against its specific paired original (not
 - `BranchState` is legacy (kept for backward compat deserialization of old state.json)
 - Hypothesis classification uses keyword matching in `classify_hypothesis()` with `_CATEGORY_SYNONYMS` — extend the synonym map when adding new categories
 - Scoring: `adaptive_composite_score` ranks experiments against each other (relative); `composite_score` is used for improvement checks against baseline (absolute, same scale, with `IMPROVEMENT_EPSILON` threshold to filter generation noise) — never compare values from different scoring functions
-- `composite_score` includes a consistency penalty (0.30 weight) based on per-image std of DINO, LPIPS, color histogram, and texture — experiments with high variance across images are penalized
+- `composite_score` includes a consistency penalty (0.30 weight) based on per-image std of DINO, LPIPS, and color histogram — experiments with high variance across images are penalized
 - All metrics in `composite_score` are normalized to [0, 1] before weighting — LPIPS via `_normalize_lpips` (ceiling 0.7), HPS via `_normalize_hps` (ceiling 0.35), aesthetics /10, vision /10
 - KB metric deltas must be computed against the pre-update baseline — `update_knowledge_base` runs BEFORE `_apply_best_result` mutates `state.best_metrics`
 - Caption quality is validated after Gemini returns — empty or too-short captions (<150 chars) raise RuntimeError
 - Open problems in KB are merged across experiments (deduplicated by text, capped at 10), not replaced — earlier experiments' problems survive
 - Vision comparison is per-image (one Gemini call per image pair) with ternary verdicts (MATCH/PARTIAL/MISS → 1.0/0.5/0.0); failures degrade to PARTIAL (0.5) neutral defaults
 - Exploration mechanism: on even plateau counts (2, 4, 6, ...), the loop adopts the second-best experiment (ranked by `adaptive_composite_score`) to escape local optima; odd counts stay greedy (alternating exploration/exploitation). Requires >= 2 experiments to trigger.
-- Meta-prompt is 800-1200 words with 8-15 sections (4-8 sentences each). Section values embed core style rules from StyleProfile as literal text that the captioner weaves into every caption.
+- Meta-prompt is 1200-1800 words with 8-15 sections (4-8 sentences each). The FIRST section must be `style_foundation` — a mandatory, non-removable section with fixed style rules from StyleProfile. The first caption output label must be `[Art Style]`.
+- Style consistency is measured via Jaccard word-overlap of [Art Style] blocks across captions and included in composite_score (4% weight).
 - Captions have labeled output sections (e.g. `[Art Style]`, `[Color Palette]`). The set of section names, their ordering, and the caption length target are all part of the optimization surface — Claude experiments with these via `caption_sections` and `caption_length_target` on `PromptTemplate`.
 - Caption compliance checking verifies both keyword coverage (meta-prompt section topics) and labeled section marker presence (`[Section Name]` in caption text).
 

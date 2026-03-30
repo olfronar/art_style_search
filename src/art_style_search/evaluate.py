@@ -183,6 +183,50 @@ def check_caption_compliance(
     return "Caption compliance with meta-prompt sections:\n" + "\n".join(lines)
 
 
+def compute_style_consistency(captions: object, section_label: str = "Art Style") -> float:
+    """Measure how consistent the [Art Style] blocks are across captions.
+
+    Extracts the text between ``[Art Style]`` and the next ``[`` marker from
+    each caption, then computes the mean pairwise word-overlap (Jaccard)
+    similarity.  Returns a float in [0, 1]; 1.0 means all style blocks are
+    identical.  Returns 0.0 if fewer than 2 captions contain the label.
+    """
+    from art_style_search.types import Caption
+
+    typed = [c for c in captions if isinstance(c, Caption)]
+    if len(typed) < 2:
+        return 0.0
+
+    import re
+
+    marker = re.escape(f"[{section_label}]")
+    # Extract text from [Art Style] up to the next [SectionName] or end
+    pattern = re.compile(marker + r"\s*(.*?)(?=\n\[|\Z)", re.DOTALL | re.IGNORECASE)
+
+    blocks: list[set[str]] = []
+    for cap in typed:
+        m = pattern.search(cap.text)
+        if m:
+            words = set(m.group(1).lower().split())
+            if words:
+                blocks.append(words)
+
+    if len(blocks) < 2:
+        return 0.0
+
+    # Mean pairwise Jaccard similarity
+    total = 0.0
+    count = 0
+    for i in range(len(blocks)):
+        for j in range(i + 1, len(blocks)):
+            intersection = len(blocks[i] & blocks[j])
+            union = len(blocks[i] | blocks[j])
+            total += intersection / union if union else 0.0
+            count += 1
+
+    return total / count if count else 0.0
+
+
 def aggregate(scores: list[MetricScores]) -> AggregatedMetrics:
     """Compute mean and std for each metric across a list of per-image scores."""
     n = len(scores)

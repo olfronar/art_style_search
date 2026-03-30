@@ -11,7 +11,13 @@ from google import genai
 
 from art_style_search.caption import caption_references
 from art_style_search.config import Config
-from art_style_search.evaluate import aggregate, check_caption_compliance, compare_vision_per_image, evaluate_images
+from art_style_search.evaluate import (
+    aggregate,
+    check_caption_compliance,
+    compare_vision_per_image,
+    compute_style_consistency,
+    evaluate_images,
+)
 from art_style_search.generate import _generate_single
 from art_style_search.models import ModelRegistry
 from art_style_search.prompt import Lessons
@@ -191,6 +197,9 @@ async def run_experiment(
         vl = f"S={verdict_label(vs.style.score)} Su={verdict_label(vs.subject.score)} Co={verdict_label(vs.composition.score)}"
         vision_parts.append(f"**{ref_path.name}** [{vl}]: {fb[:300]}")
     aggregated = aggregate(scores)
+    # Measure how consistent the [Art Style] blocks are across captions
+    style_con = compute_style_consistency(captions)
+    aggregated = replace(aggregated, style_consistency=style_con)
     vision_feedback = "\n".join(vision_parts)
 
     sorted_pairs = [pairs[i] for i in order]

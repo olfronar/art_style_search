@@ -79,7 +79,7 @@ _COMPILATION_PROMPT = (
     "- Create a COMPREHENSIVE template with 8-15 sections covering ALL visual aspects.\n"
     "- Each section value should be detailed (4-8 sentences) and EMBED the core style rules "
     "from the StyleProfile as literal text that the captioner weaves into every caption.\n"
-    "- Total rendered meta-prompt should be 800-1200 words.\n"
+    "- Total rendered meta-prompt should be 1200-1800 words.\n"
     "- The negative prompt should target common failure modes the reasoning model identified.\n"
     "- Include <caption_sections>: an ordered comma-separated list of labeled sections "
     "the captioner should produce in its output (e.g. Art Style, Color Palette, Composition, etc.).\n"

@@ -37,15 +37,16 @@ class TestCompositeScore:
             - 0.14 * min(0.3 / 0.7, 1.0)
             + 0.05 * min(0.28 / 0.35, 1.0)
             + 0.06 * (7.0 / 10.0)
-            + 0.14 * 0.0
-            + 0.10 * 0.0
+            + 0.15 * 0.0
+            + 0.05 * 0.0
             + 0.08 * 0.0
+            + 0.04 * 0.0  # style_consistency (default 0.0)
             + 0.04 * 0.5
             + 0.04 * 0.5
             + 0.04 * 0.5
         )
-        # Consistency penalty: 0.30 * (dino_std + lpips_norm_std + color_hist_std + texture_std) / 4.0
-        penalty = 0.30 * (0.01 + min(0.02 / 0.7, 1.0) + 0.0 + 0.0) / 4.0
+        # Consistency penalty: 0.30 * (dino_std + lpips_norm_std + color_hist_std) / 3.0
+        penalty = 0.30 * (0.01 + min(0.02 / 0.7, 1.0) + 0.0) / 3.0
         expected = base - penalty
         assert abs(composite_score(m) - expected) < 1e-9
 
@@ -232,6 +233,7 @@ class TestAggregatedMetricsSummaryDict:
             "texture_std",
             "ssim_mean",
             "ssim_std",
+            "style_consistency",
             "vision_style",
             "vision_style_std",
             "vision_subject",
@@ -286,7 +288,7 @@ class TestAggregatedMetricsSummaryDict:
             aesthetics_score_mean=0.0,
             aesthetics_score_std=0.0,
         )
-        assert len(m.summary_dict()) == 20
+        assert len(m.summary_dict()) == 21
 
 
 # -- ConvergenceReason --------------------------------------------------------

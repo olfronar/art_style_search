@@ -298,18 +298,29 @@ async def propose_initial_templates(
         "the captioner should weave these rules into every caption as a shared style foundation, "
         "then add per-image observations on top.\n"
         "- Each section should be 4-8 sentences of instruction.\n"
-        "- Total rendered meta-prompt should be 800-1200 words.\n"
+        "- Total rendered meta-prompt should be 1200-1800 words.\n"
         "- Include a negative section: what the captioner should tell the generator to AVOID.\n"
         "- The meta-prompt must produce captions specific enough that someone who has never "
         "seen the image could recreate it from the caption alone.\n\n"
+        "## MANDATORY: Style Foundation section\n"
+        "Every template MUST include a section named 'style_foundation' as the FIRST section. "
+        "This section instructs the captioner to open every caption with an [Art Style] block "
+        "containing FIXED, REUSABLE style rules copied verbatim from the Style Profile. "
+        "The [Art Style] block must be nearly IDENTICAL across all captions — it is the shared "
+        "style DNA that enables generating new art in the same style with different subjects. "
+        "DO NOT remove, rename, merge, or weaken this section even if recreation metrics dip — "
+        "it is a hard constraint, not subject to optimization.\n\n"
         "## Caption output structure\n"
-        "The meta-prompt must instruct the captioner to produce captions with LABELED SECTIONS "
-        "like [Art Style], [Color Palette], [Composition], etc. You decide WHICH sections and "
-        "in WHAT ORDER — this is part of the experimentation.\n"
-        "- Specify the caption output sections as a <caption_sections> tag (comma-separated list).\n"
+        "The meta-prompt must instruct the captioner to produce captions with LABELED SECTIONS. "
+        "The FIRST section must always be [Art Style] (the shared style block). "
+        "You decide the remaining sections and their order — that is part of experimentation.\n"
+        "- Specify the caption output sections as a <caption_sections> tag (comma-separated list). "
+        "The first entry MUST be 'Art Style'.\n"
         "- Specify the target caption length as a <caption_length> tag (word count).\n"
-        "- The caption sections should contain both the shared style guidance (from the Style Profile) "
-        "and per-image specific observations.\n\n"
+        "- The [Art Style] section should be IDENTICAL across captions (shared style rules). "
+        "All other sections contain per-image specific observations.\n"
+        "- A style_consistency metric measures how similar the [Art Style] blocks are across "
+        "captions — higher consistency is rewarded in the composite score.\n\n"
         "## Example of a good meta-prompt section\n"
         '<section name="colors_and_palette" description="instruct captioner on color description '
         'with embedded style rules">'
@@ -354,7 +365,7 @@ async def propose_initial_templates(
 
     logger.info("Requesting %d initial templates (%s)", num_branches, model)
 
-    text = await client.call(model=model, system=system, user=user, max_tokens=32000)
+    text = await client.call(model=model, system=system, user=user, max_tokens=48000)
 
     templates = _parse_initial_templates(text, num_branches)
 
@@ -454,13 +465,23 @@ async def propose_experiments(
         "- What to AVOID (common AI generation artifacts)\n\n"
         "The meta-prompt should be 8-15 sections, each 4-8 sentences of instruction "
         "with embedded style rules from the Style Profile. "
-        "Total rendered prompt should be 800-1200 words.\n\n"
+        "Total rendered prompt should be 1200-1800 words.\n\n"
+        "## MANDATORY: Style Foundation section\n"
+        "The template MUST include a section named 'style_foundation' as the FIRST section. "
+        "This section instructs the captioner to open every caption with an [Art Style] block "
+        "containing FIXED, REUSABLE style rules from the Style Profile. "
+        "The [Art Style] block must be nearly IDENTICAL across all captions. "
+        "DO NOT remove, rename, merge, or weaken this section even if recreation metrics dip — "
+        "it is a hard constraint, not subject to optimization. "
+        "A style_consistency metric measures cross-caption similarity of [Art Style] blocks.\n\n"
         "## Caption output structure\n"
-        "The meta-prompt must instruct the captioner to produce captions with LABELED SECTIONS "
-        "like [Art Style], [Color Palette], [Composition], etc.\n"
-        "- You decide WHICH labeled sections and in WHAT ORDER — this is part of experimentation.\n"
+        "The meta-prompt must instruct the captioner to produce captions with LABELED SECTIONS. "
+        "The FIRST section must always be [Art Style] (the shared style block). "
+        "You decide the remaining sections and their order — that is part of experimentation.\n"
         "- Specify caption sections as <caption_sections> and target length as <caption_length>.\n"
-        "- Each caption section should contain both shared style guidance and per-image observations.\n\n"
+        "- The first entry in <caption_sections> MUST be 'Art Style'.\n"
+        "- The [Art Style] section should be IDENTICAL across captions (shared style rules). "
+        "All other sections contain per-image specific observations.\n\n"
         "## Metric guidance\n"
         "Per-image metrics (each generated image vs its paired original):\n"
         "- DINO (higher=better): semantic/structural match. 0.4=similar, 0.6=good, 0.8+=very close.\n"
@@ -602,7 +623,7 @@ async def propose_experiments(
         "Requesting %d experiment proposals (%s) — context: ~%d words", num_experiments, model, len(user.split())
     )
 
-    text = await client.call(model=model, system=system, user=user, max_tokens=40000)
+    text = await client.call(model=model, system=system, user=user, max_tokens=60000)
 
     results = _parse_refinement_branches(text, num_experiments)
 
@@ -654,8 +675,10 @@ async def synthesize_templates(
         "- For each section, pick the best version from the experiments based on per-image scores.\n"
         "- If two experiments improved different aspects, combine their strengths.\n"
         "- Do NOT average or water down — pick the strongest phrasing for each section.\n"
-        "- Keep the template 8-15 sections, 800-1200 words rendered.\n"
+        "- Keep the template 8-15 sections, 1200-1800 words rendered.\n"
         "- Preserve embedded style rules in section values.\n"
+        "- MANDATORY: The first section must be 'style_foundation' with fixed style rules. "
+        "The first entry in caption_sections must be 'Art Style'. Never remove these.\n"
         "- Merge caption output structure: pick the best caption_sections ordering and caption_length "
         "from the experiments, or combine them.\n\n"
         "Response format:\n"
@@ -691,7 +714,7 @@ async def synthesize_templates(
 
     logger.info("Requesting template synthesis (%s)", model)
 
-    text = await client.call(model=model, system=system, user=user, max_tokens=16000)
+    text = await client.call(model=model, system=system, user=user, max_tokens=24000)
 
     merged = _parse_template(text)
     rationale = ""

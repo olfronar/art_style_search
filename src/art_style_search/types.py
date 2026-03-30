@@ -90,6 +90,9 @@ class AggregatedMetrics:
     ssim_mean: float = 0.0
     ssim_std: float = 0.0
 
+    # Style consistency: Jaccard similarity of [Art Style] blocks across captions [0, 1]
+    style_consistency: float = 0.0
+
     # Per-image Gemini vision scores (ternary: MATCH=1.0, PARTIAL=0.5, MISS=0.0)
     vision_style: float = 0.5
     vision_style_std: float = 0.0
@@ -115,6 +118,7 @@ class AggregatedMetrics:
             "texture_std": self.texture_std,
             "ssim_mean": self.ssim_mean,
             "ssim_std": self.ssim_std,
+            "style_consistency": self.style_consistency,
             "vision_style": self.vision_style,
             "vision_style_std": self.vision_style_std,
             "vision_subject": self.vision_subject,
@@ -145,8 +149,8 @@ def composite_score(m: AggregatedMetrics) -> float:
     """Fixed-weight composite score used for absolute quality comparison.
 
     All metrics normalized to ~[0, 1] before weighting.
-    Weights: DINO 31%, LPIPS -14%, Color 14%, Texture 10%, SSIM 8%, HPS 5%,
-    Aesthetics 6%, Vision 4%+4%+4%=12%.  Total absolute weights = 1.00.
+    Weights: DINO 31%, LPIPS -14%, Color 15%, Texture 5%, SSIM 8%, HPS 5%,
+    Aesthetics 6%, StyleConsistency 4%, Vision 4%+4%+4%=12%.  Total = 1.00.
     Includes a consistency penalty based on per-image score variance.
     """
     base = (
@@ -154,18 +158,17 @@ def composite_score(m: AggregatedMetrics) -> float:
         - 0.14 * _normalize_lpips(m.lpips_distance_mean)
         + 0.05 * _normalize_hps(m.hps_score_mean)
         + 0.06 * (m.aesthetics_score_mean / 10.0)
-        + 0.14 * m.color_histogram_mean
-        + 0.10 * m.texture_mean
+        + 0.15 * m.color_histogram_mean
+        + 0.05 * m.texture_mean
         + 0.08 * m.ssim_mean
+        + 0.04 * m.style_consistency
         + 0.04 * m.vision_style
         + 0.04 * m.vision_subject
         + 0.04 * m.vision_composition
     )
     # Penalize inconsistency: high std across images means unreliable reproduction
     variance_penalty = (
-        0.30
-        * (m.dino_similarity_std + _normalize_lpips(m.lpips_distance_std) + m.color_histogram_std + m.texture_std)
-        / 4.0
+        0.30 * (m.dino_similarity_std + _normalize_lpips(m.lpips_distance_std) + m.color_histogram_std) / 3.0
     )
     return base - variance_penalty
 
@@ -191,6 +194,7 @@ def adaptive_composite_score(
         ("color_hist", lambda r: r.color_histogram_mean, 1),
         ("texture", lambda r: r.texture_mean, 1),
         ("ssim", lambda r: r.ssim_mean, 1),
+        ("style_consistency", lambda r: r.style_consistency, 1),
         ("v_style", lambda r: r.vision_style, 1),
         ("v_subject", lambda r: r.vision_subject, 1),
         ("v_composition", lambda r: r.vision_composition, 1),
