@@ -880,7 +880,7 @@ async def review_iteration(
     user_parts: list[str] = []
     user_parts.append("## Experiments to Review\n")
 
-    for _i, (exp, prop) in enumerate(zip(experiments, proposals, strict=False)):
+    for exp, prop in zip(experiments, proposals, strict=False):
         m = exp.aggregated
         user_parts.append(
             f"### Experiment {exp.branch_id}\n"

@@ -137,6 +137,71 @@ def _build_ref_gen_pairs(result: IterationResult) -> list[tuple[Path, Path]]:
 
 
 # ---------------------------------------------------------------------------
+# Phase 3.7 + 3.9 helpers (extracted to avoid B023 loop-variable capture)
+# ---------------------------------------------------------------------------
+
+
+async def _run_pairwise_comparison(
+    exp_results: list[IterationResult],
+    adaptive_scores: dict[int, float],
+    state: LoopState,
+    gemini_client: genai.Client,
+    config: Config,
+    gemini_semaphore: asyncio.Semaphore,
+) -> None:
+    """Phase 3.7: SPO-inspired pairwise comparison of top experiments."""
+    if len(exp_results) < 2:
+        state.pairwise_feedback = ""
+        return
+    sorted_by_score = sorted(exp_results, key=lambda r: adaptive_scores[id(r)], reverse=True)
+    top_a, top_b = sorted_by_score[0], sorted_by_score[1]
+    pairs_a = _build_ref_gen_pairs(top_a)
+    pairs_b = _build_ref_gen_pairs(top_b)
+    if not pairs_a or not pairs_b:
+        state.pairwise_feedback = ""
+        return
+    pairwise_rationale, pairwise_score = await pairwise_compare_experiments(
+        pairs_a,
+        pairs_b,
+        client=gemini_client,
+        model=config.caption_model,
+        semaphore=gemini_semaphore,
+    )
+    winner = "A" if pairwise_score > 0.5 else "B" if pairwise_score < 0.5 else "TIE"
+    logger.info(
+        "Pairwise: Exp %d vs Exp %d → %s (%s)",
+        top_a.branch_id,
+        top_b.branch_id,
+        winner,
+        pairwise_rationale[:100],
+    )
+    state.pairwise_feedback = (
+        f"Top experiment {top_a.branch_id} vs runner-up {top_b.branch_id}: Winner={winner}. {pairwise_rationale}"
+    )
+
+
+async def _run_independent_review(
+    exp_results: list[IterationResult],
+    proposals: list[ExperimentProposal],
+    state: LoopState,
+    reasoning_client: ReasoningClient,
+    config: Config,
+) -> None:
+    """Phase 3.9: CycleResearcher-inspired independent review."""
+    review = await review_iteration(
+        experiments=exp_results,
+        proposals=proposals,
+        baseline_metrics=state.best_metrics,
+        knowledge_base=state.knowledge_base,
+        client=reasoning_client,
+        model=config.reasoning_model,
+    )
+    state.review_feedback = review.strategic_guidance
+    if review.strategic_guidance:
+        logger.info("Review guidance: %.200s", review.strategic_guidance)
+
+
+# ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
 
@@ -414,56 +479,19 @@ async def run(config: Config) -> LoopState:
 
             exp_results.append(synth_result)
             all_agg = [r.aggregated for r in exp_results]  # refresh after synthesis append
+            # Refresh adaptive scores to include synthesis result
+            adaptive_scores = {id(r): adaptive_composite_score(r.aggregated, all_agg) for r in exp_results}
             if merged_score > best_score:
                 best_exp = synth_result
                 best_score = merged_score
                 logger.info("Synthesis beat best individual — adopting merged template")
 
-        # Phase 3.7: Pairwise comparison of top experiments (SPO-inspired)
-        if len(exp_results) >= 2:
-            sorted_by_score = sorted(exp_results, key=lambda r: adaptive_scores.get(id(r), 0.0), reverse=True)
-            top_a, top_b = sorted_by_score[0], sorted_by_score[1]
-
-            pairs_a = _build_ref_gen_pairs(top_a)
-            pairs_b = _build_ref_gen_pairs(top_b)
-
-            if pairs_a and pairs_b:
-                pairwise_rationale, pairwise_score = await pairwise_compare_experiments(
-                    pairs_a,
-                    pairs_b,
-                    client=gemini_client,
-                    model=config.caption_model,
-                    semaphore=gemini_semaphore,
-                )
-                winner = "A" if pairwise_score > 0.5 else "B" if pairwise_score < 0.5 else "TIE"
-                logger.info(
-                    "Pairwise: Exp %d vs Exp %d → %s (%s)",
-                    top_a.branch_id,
-                    top_b.branch_id,
-                    winner,
-                    pairwise_rationale[:100],
-                )
-                state.pairwise_feedback = (
-                    f"Top experiment {top_a.branch_id} vs runner-up {top_b.branch_id}: "
-                    f"Winner={winner}. {pairwise_rationale}"
-                )
-            else:
-                state.pairwise_feedback = ""
-        else:
-            state.pairwise_feedback = ""
-
-        # Phase 3.9: Independent review of iteration results
-        review = await review_iteration(
-            experiments=exp_results,
-            proposals=proposals,
-            baseline_metrics=state.best_metrics,
-            knowledge_base=state.knowledge_base,
-            client=reasoning_client,
-            model=config.reasoning_model,
+        # Phase 3.7 + 3.9: Pairwise comparison and independent review (run in parallel)
+        pairwise_coro = _run_pairwise_comparison(
+            exp_results, adaptive_scores, state, gemini_client, config, gemini_semaphore
         )
-        state.review_feedback = review.strategic_guidance
-        if review.strategic_guidance:
-            logger.info("Review guidance: %.200s", review.strategic_guidance)
+        review_coro = _run_independent_review(exp_results, proposals, state, reasoning_client, config)
+        await asyncio.gather(pairwise_coro, review_coro)
 
         # Update state with best result (adaptive epsilon filters generation noise)
         improved = best_score > baseline_score + epsilon

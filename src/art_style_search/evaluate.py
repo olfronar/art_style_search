@@ -194,22 +194,29 @@ async def pairwise_compare_experiments(
         )
     contents.append(_PAIRWISE_COMPARE_PROMPT)
 
-    try:
-        async with semaphore:
-            response = await client.aio.models.generate_content(model=model, contents=contents)
-        text = response.text or ""
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            async with semaphore:
+                response = await client.aio.models.generate_content(model=model, contents=contents)
+            text = response.text or ""
 
-        winner_match = re.search(r"<winner>(\w+)</winner>", text)
-        rationale_match = re.search(r"<rationale>(.*?)</rationale>", text, re.DOTALL)
+            winner_match = re.search(r"<winner>(\w+)</winner>", text)
+            rationale_match = re.search(r"<rationale>(.*?)</rationale>", text, re.DOTALL)
 
-        winner = winner_match.group(1).upper() if winner_match else "TIE"
-        rationale = rationale_match.group(1).strip() if rationale_match else text[:300]
+            winner = winner_match.group(1).upper() if winner_match else "TIE"
+            rationale = rationale_match.group(1).strip() if rationale_match else text[:300]
 
-        score = {"A": 1.0, "B": 0.0, "TIE": 0.5}.get(winner, 0.5)
-        return (rationale, score)
-    except Exception as exc:
-        logger.warning("Pairwise comparison failed: %s", exc)
-        return ("Comparison failed", 0.5)
+            score = {"A": 1.0, "B": 0.0, "TIE": 0.5}.get(winner, 0.5)
+            return (rationale, score)
+        except Exception as exc:
+            last_exc = exc
+            delay = 3.0 * (2**attempt)
+            logger.warning("Pairwise comparison attempt %d/3 failed: %s — retrying in %.0fs", attempt + 1, exc, delay)
+            await asyncio.sleep(delay)
+
+    logger.error("Pairwise comparison failed after 3 retries: %s", last_exc)
+    return ("Comparison failed", 0.5)
 
 
 def _check_section_ordering(caption_text: str, expected_sections: list[str]) -> str:

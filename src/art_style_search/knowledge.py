@@ -106,16 +106,17 @@ def update_knowledge_base(
             ("composition", agg.vision_composition, "composition"),
         ]
         for dim_name, score, cat_name in vision_dims:
-            if score < 5.0:
-                assessment = f"Vision {dim_name} score: {score:.0f}/10"
-                prob_text = f"{dim_name.title()} fidelity: {assessment}"
+            # Ternary scores: MISS=0.0, PARTIAL=0.5, MATCH=1.0 — flag MISS verdicts
+            if score < 0.5:
+                label = "MISS" if score == 0.0 else "PARTIAL"
+                prob_text = f"{dim_name.title()} fidelity: Vision {dim_name} verdict {label}"
                 if not any(dim_name in p.text.lower() for p in new_problems):
                     new_problems.append(
                         OpenProblem(
                             text=prob_text,
                             category=cat_name,
-                            priority="HIGH" if score < 3.0 else "MED",
-                            metric_gap=float((5.0 - score) / 10.0),
+                            priority="HIGH" if score == 0.0 else "MED",
+                            metric_gap=float(1.0 - score),
                             since_iteration=iteration,
                         )
                     )
