@@ -139,6 +139,135 @@ async def compare_vision_per_image(
     return feedbacks, scores
 
 
+# ---------------------------------------------------------------------------
+# Pairwise experiment comparison (SPO-inspired)
+# ---------------------------------------------------------------------------
+
+_PAIRWISE_COMPARE_PROMPT = (
+    "You are comparing two sets of art reproductions against the same original reference images.\n\n"
+    "SET A and SET B each attempted to reproduce the same originals using different meta-prompt strategies.\n\n"
+    "For each image trio (original, A's version, B's version), assess which reproduction better captures:\n"
+    "- Art style and technique\n"
+    "- Color palette and mood\n"
+    "- Subject matter and composition\n"
+    "- Overall fidelity to the original\n\n"
+    "Respond with:\n"
+    "<winner>A</winner> or <winner>B</winner> or <winner>TIE</winner>\n"
+    "<rationale>1-3 sentences explaining your overall judgment across all image trios</rationale>"
+)
+
+
+async def pairwise_compare_experiments(
+    pairs_a: list[tuple[Path, Path]],
+    pairs_b: list[tuple[Path, Path]],
+    *,
+    client: genai.Client,
+    model: str,
+    semaphore: asyncio.Semaphore,
+    max_images: int = 3,
+) -> tuple[str, float]:
+    """Compare two experiments' outputs via Gemini vision.
+
+    Samples up to *max_images* representative pairs (evenly spaced) from each
+    experiment.  Returns (rationale, score_for_a) where score_for_a is 1.0 if
+    A wins, 0.0 if B wins, 0.5 for tie.
+    """
+    n = min(len(pairs_a), len(pairs_b))
+    if n == 0:
+        return ("No images to compare", 0.5)
+    step = max(1, n // max_images)
+    indices = list(range(0, n, step))[:max_images]
+
+    contents: list[object] = []
+    for idx in indices:
+        ref_a, gen_a = pairs_a[idx]
+        _, gen_b = pairs_b[idx]
+        contents.extend(
+            [
+                f"### Image {idx + 1} — ORIGINAL:",
+                image_to_gemini_part(ref_a),
+                f"### Image {idx + 1} — SET A reproduction:",
+                image_to_gemini_part(gen_a),
+                f"### Image {idx + 1} — SET B reproduction:",
+                image_to_gemini_part(gen_b),
+            ]
+        )
+    contents.append(_PAIRWISE_COMPARE_PROMPT)
+
+    try:
+        async with semaphore:
+            response = await client.aio.models.generate_content(model=model, contents=contents)
+        text = response.text or ""
+
+        winner_match = re.search(r"<winner>(\w+)</winner>", text)
+        rationale_match = re.search(r"<rationale>(.*?)</rationale>", text, re.DOTALL)
+
+        winner = winner_match.group(1).upper() if winner_match else "TIE"
+        rationale = rationale_match.group(1).strip() if rationale_match else text[:300]
+
+        score = {"A": 1.0, "B": 0.0, "TIE": 0.5}.get(winner, 0.5)
+        return (rationale, score)
+    except Exception as exc:
+        logger.warning("Pairwise comparison failed: %s", exc)
+        return ("Comparison failed", 0.5)
+
+
+def _check_section_ordering(caption_text: str, expected_sections: list[str]) -> str:
+    """Check if labeled sections appear in the expected order."""
+    positions = []
+    for section in expected_sections:
+        marker = f"[{section}]"
+        pos = caption_text.find(marker)
+        if pos >= 0:
+            positions.append((pos, section))
+
+    if len(positions) < 2:
+        return "SKIP"
+
+    sorted_by_pos = sorted(positions, key=lambda x: x[0])
+    actual_order = [s for _, s in sorted_by_pos]
+    expected_present = [s for s in expected_sections if s in {x[1] for x in positions}]
+
+    if actual_order == expected_present:
+        return "OK"
+    return f"MISORDERED (expected {expected_present[:3]}..., got {actual_order[:3]}...)"
+
+
+def _check_section_lengths(caption_text: str, expected_sections: list[str]) -> str:
+    """Check if sections have roughly proportional word counts."""
+    section_texts: dict[str, str] = {}
+    for i, section in enumerate(expected_sections):
+        start_marker = f"[{section}]"
+        start = caption_text.find(start_marker)
+        if start < 0:
+            continue
+        start += len(start_marker)
+        end = len(caption_text)
+        for next_section in expected_sections[i + 1 :]:
+            next_pos = caption_text.find(f"[{next_section}]", start)
+            if next_pos >= 0:
+                end = next_pos
+                break
+        section_texts[section] = caption_text[start:end].strip()
+
+    if not section_texts:
+        return "SKIP"
+
+    total_words = sum(len(t.split()) for t in section_texts.values())
+    if total_words == 0:
+        return "EMPTY"
+
+    issues: list[str] = []
+    for section, text in section_texts.items():
+        ratio = len(text.split()) / total_words
+        if ratio > 0.50:
+            issues.append(f"{section} too long ({ratio:.0%})")
+        elif ratio < 0.05 and len(expected_sections) <= 6:
+            issues.append(f"{section} too short ({ratio:.0%})")
+
+    return "OK" if not issues else f"IMBALANCED: {'; '.join(issues)}"
+
+
 def check_caption_compliance(
     section_names: list[str],
     captions: list[Caption],
@@ -183,6 +312,27 @@ def check_caption_compliance(
         lines.append("Labeled section markers in captions:")
         lines.extend(marker_lines)
 
+    # Section ordering check
+    if caption_sections:
+        ordering_results = [_check_section_ordering(c.text, caption_sections) for c in captions]
+        ok_count = sum(1 for r in ordering_results if r == "OK")
+        skip_count = sum(1 for r in ordering_results if r == "SKIP")
+        checked = total - skip_count
+        if checked > 0:
+            pct = ok_count / checked * 100
+            status = "OK" if pct >= 70 else "WEAK" if pct >= 30 else "MISORDERED"
+            lines.append(f"Section ordering: {status} ({ok_count}/{checked} captions in correct order)")
+
+    # Section length balance check
+    if caption_sections:
+        length_results = [_check_section_lengths(c.text, caption_sections) for c in captions]
+        ok_count = sum(1 for r in length_results if r == "OK")
+        issue_results = [r for r in length_results if r.startswith("IMBALANCED")]
+        if issue_results:
+            lines.append(f"Section balance: IMBALANCED ({len(issue_results)}/{total} captions) — {issue_results[0]}")
+        elif ok_count > 0:
+            lines.append(f"Section balance: OK ({ok_count}/{total} captions well-balanced)")
+
     return "Caption compliance with meta-prompt sections:\n" + "\n".join(lines)
 
 
@@ -226,10 +376,8 @@ def aggregate(scores: list[MetricScores]) -> AggregatedMetrics:
     n = len(scores)
     if n == 0:
         return AggregatedMetrics(
-            dino_similarity_mean=0.0,
-            dino_similarity_std=0.0,
-            lpips_distance_mean=0.0,
-            lpips_distance_std=0.0,
+            dreamsim_similarity_mean=0.0,
+            dreamsim_similarity_std=0.0,
             hps_score_mean=0.0,
             hps_score_std=0.0,
             aesthetics_score_mean=0.0,
@@ -243,8 +391,7 @@ def aggregate(scores: list[MetricScores]) -> AggregatedMetrics:
         m = _mean(vals)
         return (sum((v - m) ** 2 for v in vals) / len(vals)) ** 0.5
 
-    dino = [s.dino_similarity for s in scores]
-    lpips_vals = [s.lpips_distance for s in scores]
+    dreamsim_vals = [s.dreamsim_similarity for s in scores]
     hps = [s.hps_score for s in scores]
     aes = [s.aesthetics_score for s in scores]
     color_vals = [s.color_histogram for s in scores]
@@ -255,10 +402,8 @@ def aggregate(scores: list[MetricScores]) -> AggregatedMetrics:
     v_composition = [s.vision_composition for s in scores]
 
     return AggregatedMetrics(
-        dino_similarity_mean=_mean(dino),
-        dino_similarity_std=_std(dino),
-        lpips_distance_mean=_mean(lpips_vals),
-        lpips_distance_std=_std(lpips_vals),
+        dreamsim_similarity_mean=_mean(dreamsim_vals),
+        dreamsim_similarity_std=_std(dreamsim_vals),
         hps_score_mean=_mean(hps),
         hps_score_std=_std(hps),
         aesthetics_score_mean=_mean(aes),
@@ -284,11 +429,10 @@ def _compute_single_sync(
     references: list[Image.Image],
     prompt: str,
 ) -> MetricScores:
-    """Compute all 6 per-image metrics for one generated image (synchronous)."""
+    """Compute all per-image metrics for one generated image (synchronous)."""
     ref = references[0]  # always a single paired reference
     return MetricScores(
-        dino_similarity=registry.compute_dino(generated, references),
-        lpips_distance=registry.compute_lpips(generated, references),
+        dreamsim_similarity=registry.compute_dreamsim(generated, ref),
         hps_score=registry.compute_hps(generated, prompt),
         aesthetics_score=registry.compute_aesthetics(generated),
         color_histogram=registry.compute_color_histogram(generated, ref),

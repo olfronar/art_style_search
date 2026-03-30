@@ -179,8 +179,8 @@ async def run_experiment(
     section_names = [s.name for s in template.sections]
     compliance = check_caption_compliance(section_names, captions, caption_sections=template.caption_sections)
 
-    # Sort by DINO worst-first, merge vision scores into MetricScores, then aggregate
-    order = sorted(range(len(metric_scores)), key=lambda i: metric_scores[i].dino_similarity)
+    # Sort by DreamSim worst-first, merge vision scores into MetricScores, then aggregate
+    order = sorted(range(len(metric_scores)), key=lambda i: metric_scores[i].dreamsim_similarity)
     scores: list[MetricScores] = []
     vision_parts: list[str] = []
     for i in order:
@@ -210,19 +210,19 @@ async def run_experiment(
     prev_scores: dict[Path, float] = {}
     if prev:
         for cap, sc in zip(prev.iteration_captions, prev.per_image_scores, strict=False):
-            prev_scores[cap.image_path] = sc.dino_similarity
+            prev_scores[cap.image_path] = sc.dreamsim_similarity
 
     roundtrip_details: list[str] = []
     for idx, ((ref_p, _), sc, cap) in enumerate(zip(sorted_pairs, scores, sorted_captions_list, strict=True)):
-        prev_dino = prev_scores.get(cap.image_path)
+        prev_ds = prev_scores.get(cap.image_path)
         trend = ""
-        if prev_dino is not None:
-            arrow = "↑" if sc.dino_similarity > prev_dino else "↓" if sc.dino_similarity < prev_dino else "="
-            trend = f" [prev DINO={prev_dino:.3f} → {sc.dino_similarity:.3f} {arrow}]"
+        if prev_ds is not None:
+            arrow = "↑" if sc.dreamsim_similarity > prev_ds else "↓" if sc.dreamsim_similarity < prev_ds else "="
+            trend = f" [prev DS={prev_ds:.3f} → {sc.dreamsim_similarity:.3f} {arrow}]"
         vl = f"V[S={verdict_label(sc.vision_style)} Su={verdict_label(sc.vision_subject)} Co={verdict_label(sc.vision_composition)}]"
         caption_text = cap.text if idx < 3 else f"{cap.text[:300]}..."
         roundtrip_details.append(
-            f"Image ({ref_p.name}): DINO={sc.dino_similarity:.3f} LPIPS={sc.lpips_distance:.3f} "
+            f"Image ({ref_p.name}): DS={sc.dreamsim_similarity:.3f} "
             f"Color={sc.color_histogram:.3f} Tex={sc.texture:.3f} SSIM={sc.ssim:.3f} "
             f"HPS={sc.hps_score:.3f} Aes={sc.aesthetics_score:.1f} {vl}{trend}\n"
             f"  Caption: {caption_text}"

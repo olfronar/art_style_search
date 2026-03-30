@@ -43,8 +43,7 @@ def update_knowledge_base(
     metric_delta: dict[str, float] = {}
     if best_metrics is not None:
         metric_delta = {
-            "dino": result.aggregated.dino_similarity_mean - best_metrics.dino_similarity_mean,
-            "lpips": result.aggregated.lpips_distance_mean - best_metrics.lpips_distance_mean,
+            "dreamsim": result.aggregated.dreamsim_similarity_mean - best_metrics.dreamsim_similarity_mean,
             "hps": result.aggregated.hps_score_mean - best_metrics.hps_score_mean,
             "aesthetics": result.aggregated.aesthetics_score_mean - best_metrics.aesthetics_score_mean,
             "color_histogram": result.aggregated.color_histogram_mean - best_metrics.color_histogram_mean,
@@ -74,7 +73,7 @@ def update_knowledge_base(
 
     if proposal.open_problems:
         scores = result.per_image_scores
-        best_cat_dino = sum(sc.dino_similarity for sc in scores) / len(scores) if scores else 0.0
+        best_cat_ds = sum(sc.dreamsim_similarity for sc in scores) / len(scores) if scores else 0.0
 
         prev_problem_texts = {p.text: p.since_iteration for p in kb.open_problems}
 
@@ -92,8 +91,8 @@ def update_knowledge_base(
             else:
                 priority = "LOW"
 
-            # Gap = distance from perfect DINO (1.0) for this experiment
-            gap = 1.0 - best_cat_dino
+            # Gap = distance from perfect DreamSim (1.0) for this experiment
+            gap = 1.0 - best_cat_ds
             since = prev_problem_texts.get(prob_text, iteration)
 
             new_problems.append(

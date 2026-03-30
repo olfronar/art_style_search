@@ -21,8 +21,7 @@ class Caption:
 class MetricScores:
     """Evaluation scores for a single generated image against its paired reference."""
 
-    dino_similarity: float  # higher = better, cosine sim of DINOv2 embeddings
-    lpips_distance: float  # lower = better, perceptual distance
+    dreamsim_similarity: float  # higher = better, perceptual similarity (DreamSim, human-aligned)
     hps_score: float  # higher = better, human preference for caption-image alignment
     aesthetics_score: float  # higher = better, 1-10 scale
     color_histogram: float = 0.0  # higher = better, HSV histogram similarity [0, 1]
@@ -75,11 +74,9 @@ class VisionScores:
 class AggregatedMetrics:
     """Mean + std of per-image MetricScores, plus experiment-level vision scores."""
 
-    # Per-image metric aggregates (5 metrics x 2 = 10 fields)
-    dino_similarity_mean: float
-    dino_similarity_std: float
-    lpips_distance_mean: float
-    lpips_distance_std: float
+    # Per-image metric aggregates
+    dreamsim_similarity_mean: float
+    dreamsim_similarity_std: float
     hps_score_mean: float
     hps_score_std: float
     aesthetics_score_mean: float
@@ -105,10 +102,8 @@ class AggregatedMetrics:
     def summary_dict(self) -> dict[str, float]:
         """Flat dict for JSON serialization and reasoning model consumption."""
         return {
-            "dino_similarity_mean": self.dino_similarity_mean,
-            "dino_similarity_std": self.dino_similarity_std,
-            "lpips_distance_mean": self.lpips_distance_mean,
-            "lpips_distance_std": self.lpips_distance_std,
+            "dreamsim_similarity_mean": self.dreamsim_similarity_mean,
+            "dreamsim_similarity_std": self.dreamsim_similarity_std,
             "hps_score_mean": self.hps_score_mean,
             "hps_score_std": self.hps_score_std,
             "aesthetics_score_mean": self.aesthetics_score_mean,
@@ -130,7 +125,6 @@ class AggregatedMetrics:
 
 
 _HPS_CEILING = 0.35  # default empirical max for HPS v2 scores; used to normalize to [0, 1]
-_LPIPS_CEILING = 0.7  # empirical max for LPIPS perceptual distance; used to normalize to [0, 1]
 
 # Improvement must exceed this threshold to be accepted (filters generation noise)
 IMPROVEMENT_EPSILON = 0.005
@@ -151,26 +145,20 @@ def _normalize_hps(raw: float, ceiling: float = _HPS_CEILING) -> float:
     return min(raw / ceiling, 1.0)
 
 
-def _normalize_lpips(raw: float, ceiling: float = _LPIPS_CEILING) -> float:
-    """Normalize raw LPIPS distance to [0, 1] using the empirical ceiling."""
-    return min(raw / ceiling, 1.0)
-
-
 def composite_score(m: AggregatedMetrics) -> float:
     """Fixed-weight composite score used for absolute quality comparison.
 
     All metrics normalized to ~[0, 1] before weighting.
-    Weights: DINO 31%, LPIPS -14%, Color 15%, Texture 5%, SSIM 8%, HPS 5%,
+    Weights: DreamSim 40%, Color 18%, Texture 7%, SSIM 8%, HPS 5%,
     Aesthetics 6%, StyleConsistency 4%, Vision 4%+4%+4%=12%.  Total = 1.00.
     Includes a consistency penalty based on per-image score variance.
     """
     base = (
-        0.31 * m.dino_similarity_mean
-        - 0.14 * _normalize_lpips(m.lpips_distance_mean)
+        0.40 * m.dreamsim_similarity_mean
         + 0.05 * _normalize_hps(m.hps_score_mean)
         + 0.06 * (m.aesthetics_score_mean / 10.0)
-        + 0.15 * m.color_histogram_mean
-        + 0.05 * m.texture_mean
+        + 0.18 * m.color_histogram_mean
+        + 0.07 * m.texture_mean
         + 0.08 * m.ssim_mean
         + 0.04 * m.style_consistency
         + 0.04 * m.vision_style
@@ -178,9 +166,7 @@ def composite_score(m: AggregatedMetrics) -> float:
         + 0.04 * m.vision_composition
     )
     # Penalize inconsistency: high std across images means unreliable reproduction
-    variance_penalty = (
-        0.30 * (m.dino_similarity_std + _normalize_lpips(m.lpips_distance_std) + m.color_histogram_std) / 3.0
-    )
+    variance_penalty = 0.30 * (m.dreamsim_similarity_std + m.color_histogram_std) / 2.0
     return base - variance_penalty
 
 
@@ -198,8 +184,7 @@ def adaptive_composite_score(
 
     # Define metrics: (extractor, direction) where direction=1 means higher=better
     metric_defs: list[tuple[str, Callable[[AggregatedMetrics], float], int]] = [
-        ("dino", lambda r: r.dino_similarity_mean, 1),
-        ("lpips", lambda r: _normalize_lpips(r.lpips_distance_mean), -1),
+        ("dreamsim", lambda r: r.dreamsim_similarity_mean, 1),
         ("hps", lambda r: _normalize_hps(r.hps_score_mean), 1),
         ("aesthetics", lambda r: r.aesthetics_score_mean / 10.0, 1),
         ("color_hist", lambda r: r.color_histogram_mean, 1),
@@ -368,7 +353,7 @@ class Hypothesis:
     experiment: str  # from <experiment> tag
     category: str  # auto-classified from text
     outcome: str  # "confirmed" | "rejected" | "partial"
-    metric_delta: dict[str, float]  # {"dino": +0.02, "lpips": -0.01}
+    metric_delta: dict[str, float]  # {"dreamsim": +0.02, "hps": +0.01, ...}
     kept: bool
     lesson: str  # confirmed/rejected/insight text
 
@@ -380,7 +365,7 @@ class OpenProblem:
     text: str  # Claude's description
     category: str  # auto-classified
     priority: str  # "HIGH" | "MED" | "LOW" — set by code from metrics
-    metric_gap: float | None = None  # DINO gap vs best category
+    metric_gap: float | None = None  # DreamSim gap vs best category
     since_iteration: int = 0  # when first identified
 
 
@@ -389,7 +374,7 @@ class CategoryProgress:
     """Accumulated knowledge about one style dimension."""
 
     category: str
-    best_dino_delta: float | None = None
+    best_perceptual_delta: float | None = None
     confirmed_insights: list[str] = field(default_factory=list)
     rejected_approaches: list[str] = field(default_factory=list)
     hypothesis_ids: list[str] = field(default_factory=list)
@@ -456,15 +441,15 @@ class KnowledgeBase:
 
         max_insights = 5
 
-        dino_delta = metric_delta.get("dino", 0.0)
+        perceptual_delta = metric_delta.get("dreamsim", 0.0)
         if outcome == "confirmed" or outcome == "partial":
             if lesson and lesson not in cat.confirmed_insights:
                 cat.confirmed_insights.append(lesson)
                 # Cap: drop oldest when exceeding limit (newer insights subsume older)
                 if len(cat.confirmed_insights) > max_insights:
                     cat.confirmed_insights = cat.confirmed_insights[-max_insights:]
-            if cat.best_dino_delta is None or dino_delta > cat.best_dino_delta:
-                cat.best_dino_delta = dino_delta
+            if cat.best_perceptual_delta is None or perceptual_delta > cat.best_perceptual_delta:
+                cat.best_perceptual_delta = perceptual_delta
         if outcome == "rejected":
             short = statement[:120]
             if short not in cat.rejected_approaches:
@@ -502,7 +487,7 @@ class KnowledgeBase:
         cat_lines = ["### Per-Category Status"]
         for cat_name in sorted(self.categories):
             cat = self.categories[cat_name]
-            delta_str = f", best DINO: {cat.best_dino_delta:+.3f}" if cat.best_dino_delta is not None else ""
+            delta_str = f", best Δ: {cat.best_perceptual_delta:+.3f}" if cat.best_perceptual_delta is not None else ""
             n_conf = len(cat.confirmed_insights)
             n_rej = len(cat.rejected_approaches)
             cat_lines.append(
@@ -577,6 +562,39 @@ class KnowledgeBase:
 
         return "\n".join(result_parts)
 
+    def suggest_target_categories(self, num_targets: int, categories: list[str]) -> list[str]:
+        """Rank categories by improvement potential for diverse experiment targeting."""
+        scored: list[tuple[str, float]] = []
+        for cat in categories:
+            progress = self.categories.get(cat)
+            if not progress:
+                scored.append((cat, 1.0))  # unexplored = high priority
+                continue
+            n_confirmed = len(progress.confirmed_insights)
+            n_rejected = len(progress.rejected_approaches)
+            n_total = len(progress.hypothesis_ids)
+
+            if n_rejected >= 3 and n_confirmed == 0:
+                score = 0.1  # diminishing returns
+            elif n_confirmed > 0 and progress.best_perceptual_delta and progress.best_perceptual_delta > 0:
+                score = 0.7  # partial success, room to build
+            else:
+                score = 0.5 / max(n_total, 1)
+            scored.append((cat, score))
+
+        scored.sort(key=lambda x: -x[1])
+        return [cat for cat, _ in scored[:num_targets]]
+
+
+@dataclass
+class ReviewResult:
+    """Independent review of one iteration's experiment outcomes."""
+
+    experiment_assessments: list[str]  # per-experiment: did it achieve its hypothesis?
+    noise_vs_signal: str  # which metric movements are real vs noise?
+    strategic_guidance: str  # what should next iteration focus on?
+    recommended_categories: list[str]  # which categories to target next
+
 
 @dataclass
 class IterationResult:
@@ -640,5 +658,7 @@ class LoopState:
     plateau_counter: int = 0
     global_best_prompt: str = ""
     global_best_metrics: AggregatedMetrics | None = None
+    review_feedback: str = ""
+    pairwise_feedback: str = ""
     converged: bool = False
     convergence_reason: ConvergenceReason | None = None

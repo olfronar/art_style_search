@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from art_style_search.types import (
     AggregatedMetrics,
@@ -17,10 +18,16 @@ from art_style_search.types import (
     KnowledgeBase,
     PromptSection,
     PromptTemplate,
+    ReviewResult,
     StyleProfile,
+    classify_hypothesis,
     composite_score,
+    get_category_names,
 )
 from art_style_search.utils import ReasoningClient
+
+if TYPE_CHECKING:
+    from art_style_search.experiment import ExperimentProposal
 
 logger = logging.getLogger(__name__)
 
@@ -425,6 +432,32 @@ def _parse_refinement_branches(text: str, num_experiments: int) -> list[Refineme
     return results
 
 
+def enforce_hypothesis_diversity(
+    results: list[RefinementResult],
+    template: PromptTemplate,
+) -> list[RefinementResult]:
+    """Deduplicate experiments targeting the same category. Keep the first occurrence."""
+    seen_categories: set[str] = set()
+    diverse_results: list[RefinementResult] = []
+    category_names = get_category_names(template)
+
+    for r in results:
+        cat = classify_hypothesis(r.hypothesis, category_names)
+        if cat in seen_categories:
+            logger.warning(
+                "Dropping duplicate-category experiment (category=%s): %s",
+                cat,
+                r.hypothesis[:80],
+            )
+            continue
+        seen_categories.add(cat)
+        diverse_results.append(r)
+
+    if len(diverse_results) < len(results):
+        logger.info("Diversity filter: kept %d/%d experiments", len(diverse_results), len(results))
+    return diverse_results
+
+
 async def propose_experiments(
     style_profile: StyleProfile,
     current_template: PromptTemplate,
@@ -494,8 +527,9 @@ async def propose_experiments(
         "All other sections contain per-image specific observations.\n\n"
         "## Metric guidance\n"
         "Per-image metrics (each generated image vs its paired original):\n"
-        "- DINO (higher=better): semantic/structural match. 0.4=similar, 0.6=good, 0.8+=very close.\n"
-        "- LPIPS (lower=better): perceptual distance. 0.5=noticeable, 0.3=similar, 0.1=near identical.\n"
+        "- DreamSim similarity (higher=better): human-aligned perceptual similarity that captures semantic "
+        "content, structural layout, color, and mid-level features (pose, composition). "
+        "0.4=somewhat similar, 0.6=good reproduction, 0.8+=very close match.\n"
         "- Color histogram (higher=better): color palette match. 0.7=similar, 0.9+=very close.\n"
         "- Texture (higher=better): Gabor filter energy similarity for brush strokes/patterns. 0.7=similar, 0.9+=very close.\n"
         "- SSIM (higher=better): pixel-level structural similarity. 0.5=moderate, 0.7=good, 0.9+=near-identical.\n"
@@ -515,7 +549,7 @@ async def propose_experiments(
         "This enables clean attribution of which change helped or hurt.\n"
         "- Experiments can vary: section content, caption output section names/ordering, "
         "caption length target, balance of shared style vs per-image detail.\n"
-        "- If DINO/LPIPS are weak: the captions miss structural or color details — "
+        "- If DreamSim is weak: the captions miss structural, color, or semantic details — "
         "add instructions for the captioner to be more specific about those.\n"
         "- If per-image scores vary widely: some images are harder — consider "
         "conditional captioning instructions (e.g. 'for character images describe X; "
@@ -529,6 +563,24 @@ async def propose_experiments(
         "- Target the weakest category or build on partially confirmed hypotheses.\n"
         "- Use the Open Problems list to focus on the highest-priority gaps.\n"
         "- Update <open_problems> each iteration: add new ones, remove solved ones, re-rank.\n\n"
+        "## Optimization dynamics\n"
+        "Apply these principles when proposing changes:\n\n"
+        "**Momentum**: The Knowledge Base contains confirmed insights from prior iterations. "
+        "These are VALIDATED improvements — double down on them. If a confirmed insight "
+        "improved one aspect, explore whether the same principle applies to other sections. "
+        "Do not revisit or undo confirmed improvements unless metrics specifically regressed.\n\n"
+        "**Step size**: Adapt the magnitude of your changes to the current score level:\n"
+        "- When composite score is LOW (<0.35): make BOLD changes — restructure sections, "
+        "try very different instruction styles, experiment with caption length.\n"
+        "- When composite score is MODERATE (0.35-0.50): make TARGETED changes — refine "
+        "specific wording, adjust emphasis within sections, fine-tune constraints.\n"
+        "- When composite score is HIGH (>0.50): make SURGICAL changes — tweak individual "
+        "phrases, adjust quantitative thresholds, polish specific failure modes. "
+        "Small changes matter more here; large changes risk regression.\n\n"
+        "**Diversity pressure**: Each experiment in this batch MUST target a different "
+        "hypothesis category. If a category has 3+ rejected approaches with no confirmed "
+        "insights, DEPRIORITIZE it — focus effort where confirmed partial improvements "
+        "suggest further gains are possible.\n\n"
         "If metrics have plateaued, append [CONVERGED] at the very end of the LAST branch.\n\n"
         f"Response format — exactly {num_experiments} branches, each containing ALL required tags:\n"
         "<branch>\n"
@@ -542,6 +594,7 @@ async def propose_experiments(
         "<builds_on>H-ids this builds on, or 'none' for fresh direction</builds_on>\n"
         "<experiment>The specific change you're making to test this hypothesis</experiment>\n"
         "<changed_section>name of the SINGLE section you modified</changed_section>\n"
+        "<target_category>the primary category this experiment targets (must be unique across branches)</target_category>\n"
         "<open_problems>\n"
         "  1. Most critical remaining problem\n"
         "  2. Second most critical\n"
@@ -573,12 +626,25 @@ async def propose_experiments(
     if best_metrics:
         user_parts.append("\n\n## Best Metrics So Far\n")
         user_parts.append(_format_metrics(best_metrics))
+        score = composite_score(best_metrics)
+        regime = "LOW" if score < 0.35 else "MODERATE" if score < 0.50 else "HIGH"
+        user_parts.append(f"\nCurrent composite score: {score:.4f} ({regime} regime)\n")
 
     # Knowledge base — structured lessons from all previous experiments
     kb_text = knowledge_base.render_for_claude()
     if kb_text:
         user_parts.append("\n\n")
         user_parts.append(kb_text)
+
+    # Suggest target categories for diversity
+    if knowledge_base and knowledge_base.hypotheses:
+        category_names = get_category_names(current_template)
+        suggested = knowledge_base.suggest_target_categories(num_experiments, category_names)
+        if suggested:
+            user_parts.append(
+                "\n## Suggested Target Categories (ranked by improvement potential)\n"
+                + "\n".join(f"{i}. {cat}" for i, cat in enumerate(suggested, 1))
+            )
 
     # Show last iteration results — only the kept experiment in detail
     if last_results:
@@ -605,7 +671,7 @@ async def propose_experiments(
             if worst.per_image_scores and worst.iteration_captions:
                 idx = min(
                     range(len(worst.per_image_scores)),
-                    key=lambda i: worst.per_image_scores[i].dino_similarity,
+                    key=lambda i: worst.per_image_scores[i].dreamsim_similarity,
                 )
                 if idx < len(worst.iteration_captions):
                     cap = worst.iteration_captions[idx]
@@ -613,7 +679,7 @@ async def propose_experiments(
                     cap_text = " ".join(cap_words[:150]) + ("..." if len(cap_words) > 150 else "")
                     worst_parts.append(
                         f"Worst image ({cap.image_path.name}): "
-                        f"DINO={worst.per_image_scores[idx].dino_similarity:.3f}\n"
+                        f"DS={worst.per_image_scores[idx].dreamsim_similarity:.3f}\n"
                         f"Caption: {cap_text}\n"
                     )
             if worst.vision_feedback:
@@ -632,7 +698,7 @@ async def propose_experiments(
             user_parts.append(vision_feedback)
 
     if roundtrip_feedback:
-        user_parts.append("\n\n## Per-Image Results (sorted worst → best by DINO)\n")
+        user_parts.append("\n\n## Per-Image Results (sorted worst → best by DreamSim)\n")
         # Cap roundtrip feedback to ~800 words (full detail for worst images, metrics-only for rest)
         roundtrip_words = roundtrip_feedback.split()
         if len(roundtrip_words) > 800:
@@ -772,3 +838,87 @@ async def synthesize_templates(
         hypothesis += f" — {rationale[:200]}"
 
     return merged, hypothesis
+
+
+# ---------------------------------------------------------------------------
+# Independent review (CycleResearcher-inspired)
+# ---------------------------------------------------------------------------
+
+_REVIEW_SYSTEM = (
+    "You are a critical scientific reviewer evaluating prompt optimization experiments.\n"
+    "Your role is INDEPENDENT from the proposer — be skeptical and evidence-based.\n\n"
+    "For each experiment, assess:\n"
+    "1. Did the metric changes actually support the hypothesis? (Many metric movements are noise)\n"
+    "2. Was the hypothesis specific enough to be falsifiable?\n"
+    "3. Did the changed section actually cause the observed effects, or could it be coincidence?\n"
+    "4. Are there confounding factors (e.g., caption length changed alongside content)?\n\n"
+    "Then provide strategic guidance:\n"
+    "- Which categories have the most room for improvement based on metric gaps?\n"
+    "- Are there hypotheses that keep getting proposed but never confirmed? Flag them.\n"
+    "- What is the single most impactful thing the next iteration should try?\n\n"
+    "Be brutally honest. A confirmed improvement of +0.005 on one metric while others stayed flat "
+    "is likely noise, not a real improvement. Look for consistent patterns across multiple metrics.\n\n"
+    "Respond with:\n"
+    "<assessments>\nOne paragraph per experiment: [EXP_ID] SIGNAL|NOISE|MIXED — explanation\n</assessments>\n"
+    "<noise_vs_signal>Overall analysis of which metric movements are real</noise_vs_signal>\n"
+    "<strategic_guidance>What next iteration should focus on</strategic_guidance>\n"
+    "<recommended_categories>comma-separated list of categories to target</recommended_categories>"
+)
+
+
+async def review_iteration(
+    experiments: list[IterationResult],
+    proposals: list[ExperimentProposal],
+    baseline_metrics: AggregatedMetrics | None,
+    knowledge_base: KnowledgeBase,
+    *,
+    client: ReasoningClient,
+    model: str,
+) -> ReviewResult:
+    """Independent review of iteration results — skeptical assessment of improvements."""
+
+    user_parts: list[str] = []
+    user_parts.append("## Experiments to Review\n")
+
+    for _i, (exp, prop) in enumerate(zip(experiments, proposals, strict=False)):
+        m = exp.aggregated
+        user_parts.append(
+            f"### Experiment {exp.branch_id}\n"
+            f"Hypothesis: {prop.hypothesis}\n"
+            f"Changed section: {prop.experiment_desc}\n"
+            f"Kept: {exp.kept}\n"
+            f"Metrics: {_format_metrics(m)}\n"
+        )
+        if baseline_metrics:
+            delta_ds = m.dreamsim_similarity_mean - baseline_metrics.dreamsim_similarity_mean
+            delta_color = m.color_histogram_mean - baseline_metrics.color_histogram_mean
+            delta_hps = m.hps_score_mean - baseline_metrics.hps_score_mean
+            user_parts.append(f"Deltas vs baseline: DS={delta_ds:+.4f} Color={delta_color:+.4f} HPS={delta_hps:+.4f}\n")
+
+    if baseline_metrics:
+        user_parts.append(f"\n## Baseline Metrics\n{_format_metrics(baseline_metrics)}\n")
+
+    kb_text = knowledge_base.render_for_claude(max_words=500)
+    if kb_text:
+        user_parts.append(f"\n{kb_text}\n")
+
+    user = "\n".join(user_parts)
+    text = await client.call(model=model, system=_REVIEW_SYSTEM, user=user, max_tokens=8000)
+
+    # Parse response
+    assessments_match = re.search(r"<assessments>(.*?)</assessments>", text, re.DOTALL)
+    noise_match = re.search(r"<noise_vs_signal>(.*?)</noise_vs_signal>", text, re.DOTALL)
+    guidance_match = re.search(r"<strategic_guidance>(.*?)</strategic_guidance>", text, re.DOTALL)
+    cats_match = re.search(r"<recommended_categories>(.*?)</recommended_categories>", text, re.DOTALL)
+
+    assessments_raw = assessments_match.group(1).strip() if assessments_match else ""
+    experiment_assessments = [line.strip() for line in assessments_raw.split("\n") if line.strip()]
+
+    return ReviewResult(
+        experiment_assessments=experiment_assessments,
+        noise_vs_signal=noise_match.group(1).strip() if noise_match else "",
+        strategic_guidance=guidance_match.group(1).strip() if guidance_match else "",
+        recommended_categories=[
+            c.strip() for c in (cats_match.group(1).strip().split(",") if cats_match else []) if c.strip()
+        ],
+    )

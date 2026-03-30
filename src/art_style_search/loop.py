@@ -23,6 +23,7 @@ from google import genai
 from art_style_search.analyze import analyze_style
 from art_style_search.caption import caption_references
 from art_style_search.config import Config
+from art_style_search.evaluate import pairwise_compare_experiments
 from art_style_search.experiment import (
     ExperimentProposal,
     best_kept_result,
@@ -33,8 +34,10 @@ from art_style_search.knowledge import build_caption_diffs, update_knowledge_bas
 from art_style_search.models import ModelRegistry
 from art_style_search.prompt import (
     Lessons,
+    enforce_hypothesis_diversity,
     propose_experiments,
     propose_initial_templates,
+    review_iteration,
     synthesize_templates,
 )
 from art_style_search.state import load_state, save_iteration_log, save_state
@@ -98,10 +101,9 @@ def _log_experiment_results(results: list[IterationResult], log_dir: Path) -> No
         save_iteration_log(r, log_dir)
         m = r.aggregated
         logger.info(
-            "Exp %d — DINO=%.3f LPIPS=%.3f Color=%.3f Tex=%.3f SSIM=%.3f HPS=%.3f Aes=%.1f V[S=%.2f Su=%.2f Co=%.2f] %s",
+            "Exp %d — DS=%.3f Color=%.3f Tex=%.3f SSIM=%.3f HPS=%.3f Aes=%.1f V[S=%.2f Su=%.2f Co=%.2f] %s",
             r.branch_id,
-            m.dino_similarity_mean,
-            m.lpips_distance_mean,
+            m.dreamsim_similarity_mean,
             m.color_histogram_mean,
             m.texture_mean,
             m.ssim_mean,
@@ -112,6 +114,26 @@ def _log_experiment_results(results: list[IterationResult], log_dir: Path) -> No
             m.vision_composition,
             "KEPT" if r.kept else "discarded",
         )
+
+
+def _build_ref_gen_pairs(result: IterationResult) -> list[tuple[Path, Path]]:
+    """Reconstruct (reference, generated) pairs from an IterationResult.
+
+    Generated image filenames encode the caption index (e.g. ``05.png``
+    corresponds to ``iteration_captions[5]``).  We parse the stem to recover
+    the mapping.
+    """
+    caption_by_idx = {i: c.image_path for i, c in enumerate(result.iteration_captions)}
+    pairs: list[tuple[Path, Path]] = []
+    for gen_path in result.image_paths:
+        try:
+            idx = int(gen_path.stem)
+        except ValueError:
+            continue
+        ref = caption_by_idx.get(idx)
+        if ref is not None:
+            pairs.append((ref, gen_path))
+    return pairs
 
 
 # ---------------------------------------------------------------------------
@@ -265,10 +287,18 @@ async def run(config: Config) -> LoopState:
         if best_last and best_last.iteration_captions:
             sorted_caps = sorted(
                 zip(best_last.iteration_captions, best_last.per_image_scores, strict=False),
-                key=lambda x: x[1].dino_similarity,
+                key=lambda x: x[1].dreamsim_similarity,
             )
             worst_caps = [c for c, _ in sorted_caps[:3]]
             caption_diffs = build_caption_diffs(state.last_iteration_results, worst_caps)
+
+        # Inject review feedback from previous iteration into roundtrip context
+        if state.review_feedback:
+            roundtrip_fb = f"## Independent Review of Last Iteration\n{state.review_feedback}\n\n{roundtrip_fb}"
+
+        # Inject pairwise comparison feedback from previous iteration into vision context
+        if state.pairwise_feedback:
+            vision_fb = f"## Pairwise Experiment Comparison\n{state.pairwise_feedback}\n\n{vision_fb}"
 
         # Phase 1: Claude proposes N experiments in a single call
         refinements = await propose_experiments(
@@ -284,6 +314,8 @@ async def run(config: Config) -> LoopState:
             roundtrip_feedback=roundtrip_fb,
             caption_diffs=caption_diffs,
         )
+
+        refinements = enforce_hypothesis_diversity(refinements, state.current_template)
 
         proposals: list[ExperimentProposal] = []
         for refinement in refinements:
@@ -375,9 +407,9 @@ async def run(config: Config) -> LoopState:
             )
             merged_score = composite_score(synth_result.aggregated)
             logger.info(
-                "Synthesis result: DINO=%.4f (best individual: %.4f)",
-                synth_result.aggregated.dino_similarity_mean,
-                best_exp.aggregated.dino_similarity_mean,
+                "Synthesis result: DS=%.4f (best individual: %.4f)",
+                synth_result.aggregated.dreamsim_similarity_mean,
+                best_exp.aggregated.dreamsim_similarity_mean,
             )
 
             exp_results.append(synth_result)
@@ -386,6 +418,52 @@ async def run(config: Config) -> LoopState:
                 best_exp = synth_result
                 best_score = merged_score
                 logger.info("Synthesis beat best individual — adopting merged template")
+
+        # Phase 3.7: Pairwise comparison of top experiments (SPO-inspired)
+        if len(exp_results) >= 2:
+            sorted_by_score = sorted(exp_results, key=lambda r: adaptive_scores.get(id(r), 0.0), reverse=True)
+            top_a, top_b = sorted_by_score[0], sorted_by_score[1]
+
+            pairs_a = _build_ref_gen_pairs(top_a)
+            pairs_b = _build_ref_gen_pairs(top_b)
+
+            if pairs_a and pairs_b:
+                pairwise_rationale, pairwise_score = await pairwise_compare_experiments(
+                    pairs_a,
+                    pairs_b,
+                    client=gemini_client,
+                    model=config.caption_model,
+                    semaphore=gemini_semaphore,
+                )
+                winner = "A" if pairwise_score > 0.5 else "B" if pairwise_score < 0.5 else "TIE"
+                logger.info(
+                    "Pairwise: Exp %d vs Exp %d → %s (%s)",
+                    top_a.branch_id,
+                    top_b.branch_id,
+                    winner,
+                    pairwise_rationale[:100],
+                )
+                state.pairwise_feedback = (
+                    f"Top experiment {top_a.branch_id} vs runner-up {top_b.branch_id}: "
+                    f"Winner={winner}. {pairwise_rationale}"
+                )
+            else:
+                state.pairwise_feedback = ""
+        else:
+            state.pairwise_feedback = ""
+
+        # Phase 3.9: Independent review of iteration results
+        review = await review_iteration(
+            experiments=exp_results,
+            proposals=proposals,
+            baseline_metrics=state.best_metrics,
+            knowledge_base=state.knowledge_base,
+            client=reasoning_client,
+            model=config.reasoning_model,
+        )
+        state.review_feedback = review.strategic_guidance
+        if review.strategic_guidance:
+            logger.info("Review guidance: %.200s", review.strategic_guidance)
 
         # Update state with best result (adaptive epsilon filters generation noise)
         improved = best_score > baseline_score + epsilon
@@ -465,9 +543,8 @@ async def run(config: Config) -> LoopState:
     if state.global_best_metrics:
         m = state.global_best_metrics
         logger.info(
-            "FINAL BEST — DINO=%.4f LPIPS=%.4f HPS=%.4f Aes=%.2f",
-            m.dino_similarity_mean,
-            m.lpips_distance_mean,
+            "FINAL BEST — DS=%.4f HPS=%.4f Aes=%.2f",
+            m.dreamsim_similarity_mean,
             m.hps_score_mean,
             m.aesthetics_score_mean,
         )

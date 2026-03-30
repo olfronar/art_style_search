@@ -1,6 +1,6 @@
 """Lazily-loaded model registry for evaluation metrics.
 
-Provides thread-safe access to DINOv2, LPIPS, HPS v2, and LAION Aesthetics
+Provides thread-safe access to DreamSim, HPS v2, and LAION Aesthetics
 models.  Each model has its own ``threading.Lock`` so that different models can
 run concurrently while preventing concurrent forward passes on the same model.
 
@@ -32,7 +32,7 @@ def _auto_device() -> torch.device:
 
 @dataclass
 class ModelRegistry:
-    """Lazy-loading registry for the four evaluation models.
+    """Lazy-loading registry for evaluation models.
 
     Use the ``load_all`` class method to construct an instance.  Individual
     models are loaded on first access so that startup is fast when only a
@@ -42,12 +42,9 @@ class ModelRegistry:
     device: torch.device = field(default_factory=_auto_device)
 
     # Private lazy-init state — populated on first use via properties.
-    _dino_model: torch.nn.Module | None = field(default=None, init=False, repr=False)
-    _dino_processor: object | None = field(default=None, init=False, repr=False)
-    _dino_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
-
-    _lpips_model: torch.nn.Module | None = field(default=None, init=False, repr=False)
-    _lpips_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    _dreamsim_model: object | None = field(default=None, init=False, repr=False)
+    _dreamsim_preprocess: object | None = field(default=None, init=False, repr=False)
+    _dreamsim_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     _hps_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
@@ -56,7 +53,6 @@ class ModelRegistry:
     _aesthetics_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     _gabor_kernels: list[np.ndarray] | None = field(default=None, init=False, repr=False)
-    _lpips_transform: object | None = field(default=None, init=False, repr=False)
 
     # ------------------------------------------------------------------
     # Construction
@@ -77,23 +73,16 @@ class ModelRegistry:
     # Lazy loaders (called under the relevant lock)
     # ------------------------------------------------------------------
 
-    def _ensure_dino(self) -> None:
-        if self._dino_model is not None:
+    def _ensure_dreamsim(self) -> None:
+        if self._dreamsim_model is not None:
             return
-        from transformers import AutoImageProcessor, AutoModel
+        from dreamsim import dreamsim
 
-        model_name = "facebook/dinov2-base"
-        log.info("Loading DINOv2 (%s) ...", model_name)
-        self._dino_processor = AutoImageProcessor.from_pretrained(model_name)
-        self._dino_model = AutoModel.from_pretrained(model_name).to(self.device).eval()
-
-    def _ensure_lpips(self) -> None:
-        if self._lpips_model is not None:
-            return
-        import lpips
-
-        log.info("Loading LPIPS (alex) ...")
-        self._lpips_model = lpips.LPIPS(net="alex").to(self.device).eval()
+        log.info("Loading DreamSim (dino_vitb16) ...")
+        model, preprocess = dreamsim(pretrained=True, dreamsim_type="dino_vitb16", device=self.device)
+        model.eval()
+        self._dreamsim_model = model
+        self._dreamsim_preprocess = preprocess
 
     def _ensure_aesthetics(self) -> None:
         if self._aesthetics_model is not None:
@@ -111,52 +100,23 @@ class ModelRegistry:
     # Public compute methods
     # ------------------------------------------------------------------
 
-    def compute_dino(self, generated: Image.Image, references: list[Image.Image]) -> float:
-        """Cosine similarity of DINOv2 CLS embeddings (generated vs mean reference).
+    def compute_dreamsim(self, generated: Image.Image, reference: Image.Image) -> float:
+        """DreamSim perceptual similarity (generated vs single paired reference).
 
-        Returns a float in [-1, 1]; higher is better.
+        Returns a float in [0, 1]; higher is better.  DreamSim returns a
+        distance (lower = more similar), so we convert: 1 - clamp(dist, 0, 1).
         """
-        with self._dino_lock:
-            self._ensure_dino()
-            assert self._dino_model is not None
-            assert self._dino_processor is not None
+        with self._dreamsim_lock:
+            self._ensure_dreamsim()
+            assert self._dreamsim_model is not None
+            assert self._dreamsim_preprocess is not None
 
             with torch.no_grad():
-                # Embed the generated image.
-                gen_inputs = self._dino_processor(images=generated, return_tensors="pt").to(self.device)
-                gen_cls = self._dino_model(**gen_inputs).last_hidden_state[:, 0]  # (1, D)
-
-                # Embed each reference and compute mean embedding.
-                ref_embeddings: list[torch.Tensor] = []
-                for ref in references:
-                    ref_inputs = self._dino_processor(images=ref, return_tensors="pt").to(self.device)
-                    ref_cls = self._dino_model(**ref_inputs).last_hidden_state[:, 0]  # (1, D)
-                    ref_embeddings.append(ref_cls)
-
-                mean_ref = torch.cat(ref_embeddings, dim=0).mean(dim=0, keepdim=True)  # (1, D)
-
-                similarity = torch.nn.functional.cosine_similarity(gen_cls, mean_ref, dim=-1)  # (1,)
-                return similarity.item()
-
-    def compute_lpips(self, generated: Image.Image, references: list[Image.Image]) -> float:
-        """Mean LPIPS perceptual distance (generated vs each reference).
-
-        Returns a float >= 0; lower is better.
-        """
-        with self._lpips_lock:
-            self._ensure_lpips()
-            assert self._lpips_model is not None
-
-            with torch.no_grad():
-                gen_tensor = self._pil_to_lpips_tensor(generated)
-
-                distances: list[float] = []
-                for ref in references:
-                    ref_tensor = self._pil_to_lpips_tensor(ref)
-                    dist = self._lpips_model(gen_tensor, ref_tensor)
-                    distances.append(dist.item())
-
-                return float(np.mean(distances))
+                gen_tensor = self._dreamsim_preprocess(generated.convert("RGB")).to(self.device)
+                ref_tensor = self._dreamsim_preprocess(reference.convert("RGB")).to(self.device)
+                distance = self._dreamsim_model(gen_tensor, ref_tensor)
+                dist_val = float(distance.item()) if hasattr(distance, "item") else float(distance)
+                return max(0.0, min(1.0, 1.0 - dist_val))
 
     def compute_hps(self, generated: Image.Image, prompt: str) -> float:
         """HPS v2 score for the generated image against the prompt.
@@ -276,23 +236,3 @@ class ModelRegistry:
         gen_gray = np.array(generated.convert("L").resize((256, 256)), dtype=np.float64)
         ref_gray = np.array(reference.convert("L").resize((256, 256)), dtype=np.float64)
         return float(structural_similarity(gen_gray, ref_gray, data_range=255.0))
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    def _pil_to_lpips_tensor(self, img: Image.Image) -> torch.Tensor:
-        """Convert a PIL image to a [-1, 1] tensor suitable for LPIPS."""
-        if self._lpips_transform is None:
-            from torchvision import transforms
-
-            self._lpips_transform = transforms.Compose(
-                [
-                    transforms.Resize((256, 256)),
-                    transforms.ToTensor(),
-                    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
-                ]
-            )
-        img_rgb = img.convert("RGB")
-        tensor: torch.Tensor = self._lpips_transform(img_rgb).unsqueeze(0).to(self.device)
-        return tensor

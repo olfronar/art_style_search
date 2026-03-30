@@ -76,9 +76,12 @@ def _caption_from_dict(d: dict[str, Any]) -> Caption:
 
 
 def _metric_scores_from_dict(d: dict[str, Any]) -> MetricScores:
+    # Backward compat: old state.json had dino_similarity + lpips_distance
+    dreamsim = d.get("dreamsim_similarity", 0.0)
+    if dreamsim == 0.0 and "dino_similarity" in d:
+        dreamsim = d["dino_similarity"]  # approximate: use old DINO score as DreamSim stand-in
     return MetricScores(
-        dino_similarity=d["dino_similarity"],
-        lpips_distance=d["lpips_distance"],
+        dreamsim_similarity=dreamsim,
         hps_score=d["hps_score"],
         aesthetics_score=d["aesthetics_score"],
         color_histogram=d.get("color_histogram", 0.0),
@@ -91,11 +94,15 @@ def _metric_scores_from_dict(d: dict[str, Any]) -> MetricScores:
 
 
 def _aggregated_metrics_from_dict(d: dict[str, Any]) -> AggregatedMetrics:
+    # Backward compat: old state.json had dino_similarity + lpips_distance fields
+    ds_mean = d.get("dreamsim_similarity_mean", 0.0)
+    ds_std = d.get("dreamsim_similarity_std", 0.0)
+    if ds_mean == 0.0 and "dino_similarity_mean" in d:
+        ds_mean = d["dino_similarity_mean"]
+        ds_std = d.get("dino_similarity_std", 0.0)
     return AggregatedMetrics(
-        dino_similarity_mean=d["dino_similarity_mean"],
-        dino_similarity_std=d["dino_similarity_std"],
-        lpips_distance_mean=d["lpips_distance_mean"],
-        lpips_distance_std=d["lpips_distance_std"],
+        dreamsim_similarity_mean=ds_mean,
+        dreamsim_similarity_std=ds_std,
         hps_score_mean=d["hps_score_mean"],
         hps_score_std=d["hps_score_std"],
         aesthetics_score_mean=d["aesthetics_score_mean"],
@@ -190,7 +197,7 @@ def _open_problem_from_dict(d: dict[str, Any]) -> OpenProblem:
 def _category_progress_from_dict(d: dict[str, Any]) -> CategoryProgress:
     return CategoryProgress(
         category=d["category"],
-        best_dino_delta=d.get("best_dino_delta"),
+        best_perceptual_delta=d.get("best_perceptual_delta", d.get("best_dino_delta")),
         confirmed_insights=d.get("confirmed_insights", []),
         rejected_approaches=d.get("rejected_approaches", []),
         hypothesis_ids=d.get("hypothesis_ids", []),
@@ -248,6 +255,8 @@ def _loop_state_from_dict(d: dict[str, Any]) -> LoopState:
                 if d.get("global_best_metrics") is not None
                 else None
             ),
+            review_feedback=d.get("review_feedback", ""),
+            pairwise_feedback=d.get("pairwise_feedback", ""),
             converged=d.get("converged", False),
             convergence_reason=(
                 ConvergenceReason(d["convergence_reason"]) if d.get("convergence_reason") is not None else None
