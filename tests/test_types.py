@@ -167,6 +167,9 @@ class TestImprovementEpsilon:
     def test_at_one(self) -> None:
         assert improvement_epsilon(1.0) == 0.0
 
+    def test_above_one_clamped(self) -> None:
+        assert improvement_epsilon(1.5) == 0.0
+
     def test_monotonically_decreasing(self) -> None:
         baselines = [0.0, 0.3, 0.5, 0.7, 0.9]
         epsilons = [improvement_epsilon(b) for b in baselines]

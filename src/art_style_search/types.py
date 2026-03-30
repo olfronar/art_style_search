@@ -142,7 +142,8 @@ def improvement_epsilon(baseline: float) -> float:
     At baseline 0.45 → ~0.00275. At 0.51 → ~0.00245.
     When baseline is -inf (no prior metrics), falls back to IMPROVEMENT_EPSILON.
     """
-    return IMPROVEMENT_EPSILON * (1.0 - max(baseline, 0.0))
+    clamped = min(max(baseline, 0.0), 1.0)
+    return IMPROVEMENT_EPSILON * (1.0 - clamped)
 
 
 def _normalize_hps(raw: float, ceiling: float = _HPS_CEILING) -> float:

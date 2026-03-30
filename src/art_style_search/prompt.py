@@ -609,14 +609,16 @@ async def propose_experiments(
                 )
                 if idx < len(worst.iteration_captions):
                     cap = worst.iteration_captions[idx]
-                    cap_text = cap.text[:800] + ("..." if len(cap.text) > 800 else "")
+                    cap_words = cap.text.split()
+                    cap_text = " ".join(cap_words[:150]) + ("..." if len(cap_words) > 150 else "")
                     worst_parts.append(
                         f"Worst image ({cap.image_path.name}): "
                         f"DINO={worst.per_image_scores[idx].dino_similarity:.3f}\n"
                         f"Caption: {cap_text}\n"
                     )
             if worst.vision_feedback:
-                vf = worst.vision_feedback[:600] + ("..." if len(worst.vision_feedback) > 600 else "")
+                vf_words = worst.vision_feedback.split()
+                vf = " ".join(vf_words[:100]) + ("..." if len(vf_words) > 100 else "")
                 worst_parts.append(f"Vision feedback: {vf}\n")
             user_parts.append("".join(worst_parts))
 

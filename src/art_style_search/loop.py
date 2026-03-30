@@ -342,7 +342,8 @@ async def run(config: Config) -> LoopState:
         # Adaptive scoring ranks experiments against each other (relative).
         # composite_score is used for improvement checks (absolute, same scale).
         all_agg = [r.aggregated for r in exp_results]
-        best_exp = max(exp_results, key=lambda r: adaptive_composite_score(r.aggregated, all_agg))
+        adaptive_scores = {id(r): adaptive_composite_score(r.aggregated, all_agg) for r in exp_results}
+        best_exp = max(exp_results, key=lambda r: adaptive_scores[id(r)])
         best_score = composite_score(best_exp.aggregated)
         baseline_score = composite_score(state.best_metrics) if state.best_metrics else float("-inf")
         epsilon = improvement_epsilon(baseline_score)
@@ -350,11 +351,7 @@ async def run(config: Config) -> LoopState:
         # Phase 3.5: Synthesis — always merge top experiments to cherry-pick best sections
         synth_result: IterationResult | None = None
         if len(exp_results) >= 2:
-            ranked_for_synth = sorted(
-                exp_results,
-                key=lambda r: adaptive_composite_score(r.aggregated, all_agg),
-                reverse=True,
-            )
+            ranked_for_synth = sorted(exp_results, key=lambda r: adaptive_scores[id(r)], reverse=True)
             top_exps = ranked_for_synth[:3]
             logger.info("Synthesizing top %d experiments into merged template", len(top_exps))
 
