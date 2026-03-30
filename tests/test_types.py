@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from art_style_search.types import (
+    IMPROVEMENT_EPSILON,
     AggregatedMetrics,
     ConvergenceReason,
     KnowledgeBase,
@@ -12,6 +13,7 @@ from art_style_search.types import (
     classify_hypothesis,
     composite_score,
     get_category_names,
+    improvement_epsilon,
 )
 
 # -- composite_score ----------------------------------------------------------
@@ -144,6 +146,32 @@ class TestCompositeScore:
         # Aesthetics: 0.06 * (10.0 / 10.0) = 0.06, plus 3 vision defaults at 0.5
         expected = 0.06 * (10.0 / 10.0) + 0.04 * 0.5 + 0.04 * 0.5 + 0.04 * 0.5
         assert abs(composite_score(m) - expected) < 1e-9
+
+
+# -- improvement_epsilon ------------------------------------------------------
+
+
+class TestImprovementEpsilon:
+    def test_at_zero(self) -> None:
+        assert improvement_epsilon(0.0) == IMPROVEMENT_EPSILON
+
+    def test_at_half(self) -> None:
+        assert abs(improvement_epsilon(0.5) - IMPROVEMENT_EPSILON * 0.5) < 1e-12
+
+    def test_negative_clamped(self) -> None:
+        assert improvement_epsilon(-1.0) == IMPROVEMENT_EPSILON
+
+    def test_negative_inf_clamped(self) -> None:
+        assert improvement_epsilon(float("-inf")) == IMPROVEMENT_EPSILON
+
+    def test_at_one(self) -> None:
+        assert improvement_epsilon(1.0) == 0.0
+
+    def test_monotonically_decreasing(self) -> None:
+        baselines = [0.0, 0.3, 0.5, 0.7, 0.9]
+        epsilons = [improvement_epsilon(b) for b in baselines]
+        for i in range(len(epsilons) - 1):
+            assert epsilons[i] > epsilons[i + 1]
 
 
 # -- PromptTemplate.render ---------------------------------------------------

@@ -18,6 +18,7 @@ from art_style_search.types import (
     PromptSection,
     PromptTemplate,
     StyleProfile,
+    composite_score,
 )
 from art_style_search.utils import ReasoningClient
 
@@ -105,6 +106,7 @@ _REJECTED_RE = re.compile(r"<rejected>(.*?)</rejected>", re.DOTALL)
 _NEW_INSIGHT_RE = re.compile(r"<new_insight>(.*?)</new_insight>", re.DOTALL)
 _BUILDS_ON_RE = re.compile(r"<builds_on>(.*?)</builds_on>", re.DOTALL)
 _OPEN_PROBLEMS_RE = re.compile(r"<open_problems>(.*?)</open_problems>", re.DOTALL)
+_CHANGED_SECTION_RE = re.compile(r"<changed_section>(.*?)</changed_section>", re.DOTALL)
 
 
 def _parse_template(text: str) -> PromptTemplate:
@@ -204,6 +206,7 @@ class RefinementResult:
     lessons: Lessons
     builds_on: str | None
     open_problems: list[str]
+    changed_section: str = ""
 
 
 def _parse_lessons(text: str) -> Lessons:
@@ -215,6 +218,12 @@ def _parse_lessons(text: str) -> Lessons:
         rejected=rejected.group(1).strip() if rejected else "",
         new_insight=insight.group(1).strip() if insight else "",
     )
+
+
+def _parse_changed_section(text: str) -> str:
+    """Extract the <changed_section> tag — returns section name or empty string."""
+    m = _CHANGED_SECTION_RE.search(text)
+    return m.group(1).strip() if m else ""
 
 
 def _parse_builds_on(text: str) -> str | None:
@@ -406,6 +415,7 @@ def _parse_refinement_branches(text: str, num_experiments: int) -> list[Refineme
                 lessons=_parse_lessons(block),
                 builds_on=_parse_builds_on(block),
                 open_problems=_parse_open_problems(block),
+                changed_section=_parse_changed_section(block),
             )
         )
 
@@ -501,7 +511,8 @@ async def propose_experiments(
         "Each MUST have a DIFFERENT hypothesis targeting a DIFFERENT weakness or category.\n"
         "- There are no fixed 'branches' — shift focus freely between categories "
         "as the weakest area changes.\n"
-        "- Make 1-2 targeted changes per experiment, not wholesale rewrites.\n"
+        "- Make EXACTLY 1 section change per experiment — modify a single section's value. "
+        "This enables clean attribution of which change helped or hurt.\n"
         "- Experiments can vary: section content, caption output section names/ordering, "
         "caption length target, balance of shared style vs per-image detail.\n"
         "- If DINO/LPIPS are weak: the captions miss structural or color details — "
@@ -529,7 +540,8 @@ async def propose_experiments(
         "<hypothesis>Based on the knowledge base and current results, what is the "
         "PRIMARY remaining gap? Be specific — name the metric, the images, the visual element.</hypothesis>\n"
         "<builds_on>H-ids this builds on, or 'none' for fresh direction</builds_on>\n"
-        "<experiment>The specific 1-2 changes you're making to test this hypothesis</experiment>\n"
+        "<experiment>The specific change you're making to test this hypothesis</experiment>\n"
+        "<changed_section>name of the SINGLE section you modified</changed_section>\n"
         "<open_problems>\n"
         "  1. Most critical remaining problem\n"
         "  2. Second most critical\n"
@@ -582,6 +594,31 @@ async def propose_experiments(
                 user_parts.append(f"  Experiment: {res.experiment}\n")
         if discarded:
             user_parts.append(f"({len(discarded)} other experiments discarded)\n")
+            # Show worst experiment for negative learning
+            worst = min(discarded, key=lambda r: composite_score(r.aggregated))
+            worst_parts: list[str] = ["\n## Worst Experiment (learn from this failure)\n"]
+            if worst.hypothesis:
+                worst_parts.append(f"Hypothesis: {worst.hypothesis}\n")
+            if worst.experiment:
+                worst_parts.append(f"Experiment: {worst.experiment}\n")
+            worst_parts.append(f"Metrics:\n{_format_metrics(worst.aggregated)}\n")
+            if worst.per_image_scores and worst.iteration_captions:
+                idx = min(
+                    range(len(worst.per_image_scores)),
+                    key=lambda i: worst.per_image_scores[i].dino_similarity,
+                )
+                if idx < len(worst.iteration_captions):
+                    cap = worst.iteration_captions[idx]
+                    cap_text = cap.text[:800] + ("..." if len(cap.text) > 800 else "")
+                    worst_parts.append(
+                        f"Worst image ({cap.image_path.name}): "
+                        f"DINO={worst.per_image_scores[idx].dino_similarity:.3f}\n"
+                        f"Caption: {cap_text}\n"
+                    )
+            if worst.vision_feedback:
+                vf = worst.vision_feedback[:600] + ("..." if len(worst.vision_feedback) > 600 else "")
+                worst_parts.append(f"Vision feedback: {vf}\n")
+            user_parts.append("".join(worst_parts))
 
     if vision_feedback:
         user_parts.append("\n\n## Vision Comparison (Gemini analysis of generated vs reference images)\n")

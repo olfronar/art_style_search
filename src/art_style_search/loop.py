@@ -39,13 +39,13 @@ from art_style_search.prompt import (
 )
 from art_style_search.state import load_state, save_iteration_log, save_state
 from art_style_search.types import (
-    IMPROVEMENT_EPSILON,
     ConvergenceReason,
     IterationResult,
     KnowledgeBase,
     LoopState,
     adaptive_composite_score,
     composite_score,
+    improvement_epsilon,
 )
 from art_style_search.utils import ReasoningClient
 
@@ -165,7 +165,7 @@ async def run(config: Config) -> LoopState:
         logger.info("Resumed from iteration %d with %d fixed references", state.iteration, len(state.fixed_references))
         fixed_refs = state.fixed_references
     else:
-        fixed_refs = _sample(all_ref_paths, 10)
+        fixed_refs = _sample(all_ref_paths, config.num_fixed_refs)
         logger.info("Fixed %d reference images for optimization", len(fixed_refs))
 
         logger.info("Zero-step: captioning %d reference images...", len(fixed_refs))
@@ -345,17 +345,18 @@ async def run(config: Config) -> LoopState:
         best_exp = max(exp_results, key=lambda r: adaptive_composite_score(r.aggregated, all_agg))
         best_score = composite_score(best_exp.aggregated)
         baseline_score = composite_score(state.best_metrics) if state.best_metrics else float("-inf")
+        epsilon = improvement_epsilon(baseline_score)
 
-        # Pre-compute composite scores to avoid repeated calls
-        exp_scores = {id(r): composite_score(r.aggregated) for r in exp_results}
-
-        # Phase 3.5: Synthesis — merge top experiments if multiple improved
+        # Phase 3.5: Synthesis — always merge top experiments to cherry-pick best sections
         synth_result: IterationResult | None = None
-        improved_exps = [r for r in exp_results if exp_scores[id(r)] > baseline_score + IMPROVEMENT_EPSILON]
-        if len(improved_exps) >= 2:
-            logger.info("Synthesizing %d improved experiments into merged template", len(improved_exps))
-            improved_exps.sort(key=lambda r: exp_scores[id(r)], reverse=True)
-            top_exps = improved_exps[:3]
+        if len(exp_results) >= 2:
+            ranked_for_synth = sorted(
+                exp_results,
+                key=lambda r: adaptive_composite_score(r.aggregated, all_agg),
+                reverse=True,
+            )
+            top_exps = ranked_for_synth[:3]
+            logger.info("Synthesizing top %d experiments into merged template", len(top_exps))
 
             merged_template, merged_hypothesis = await synthesize_templates(
                 top_exps,
@@ -389,8 +390,8 @@ async def run(config: Config) -> LoopState:
                 best_score = merged_score
                 logger.info("Synthesis beat best individual — adopting merged template")
 
-        # Update state with best result (epsilon threshold filters generation noise)
-        improved = best_score > baseline_score + IMPROVEMENT_EPSILON
+        # Update state with best result (adaptive epsilon filters generation noise)
+        improved = best_score > baseline_score + epsilon
 
         # Phase 4: Update shared KB with ALL experiment results BEFORE mutating best_metrics
         # so that metric deltas are computed against the pre-update baseline.

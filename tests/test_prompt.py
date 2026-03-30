@@ -7,6 +7,7 @@ from art_style_search.prompt import (
     _format_template,
     _parse_analysis,
     _parse_builds_on,
+    _parse_changed_section,
     _parse_converged,
     _parse_initial_templates,
     _parse_open_problems,
@@ -374,3 +375,19 @@ class TestParseOpenProblems:
         result = _parse_open_problems(text)
         assert len(result) == 1
         assert result[0] == "Only one problem"
+
+
+# ---------------------------------------------------------------------------
+# _parse_changed_section
+# ---------------------------------------------------------------------------
+
+
+class TestParseChangedSection:
+    def test_present(self) -> None:
+        assert _parse_changed_section("<changed_section>colors_and_palette</changed_section>") == "colors_and_palette"
+
+    def test_absent(self) -> None:
+        assert _parse_changed_section("No tag here") == ""
+
+    def test_whitespace_trimmed(self) -> None:
+        assert _parse_changed_section("<changed_section>  mood_atmosphere  </changed_section>") == "mood_atmosphere"

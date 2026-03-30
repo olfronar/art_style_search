@@ -172,6 +172,9 @@ class TestDefaults:
     def test_max_eval_images(self, cfg: Config) -> None:
         assert cfg.max_eval_images == 10
 
+    def test_num_fixed_refs(self, cfg: Config) -> None:
+        assert cfg.num_fixed_refs == 20
+
     def test_caption_model(self, cfg: Config) -> None:
         assert cfg.caption_model == "gemini-3.1-pro-preview"
 

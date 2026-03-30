@@ -86,18 +86,23 @@ Each metric compares a generated image against its specific paired original (not
 - Iteration-to-iteration learning uses a shared `KnowledgeBase` on `LoopState` — no persistent branches, just per-iteration experiments feeding one KB
 - `BranchState` is legacy (kept for backward compat deserialization of old state.json)
 - Hypothesis classification uses keyword matching in `classify_hypothesis()` with `_CATEGORY_SYNONYMS` — extend the synonym map when adding new categories
-- Scoring: `adaptive_composite_score` ranks experiments against each other (relative); `composite_score` is used for improvement checks against baseline (absolute, same scale, with `IMPROVEMENT_EPSILON` threshold to filter generation noise) — never compare values from different scoring functions
+- Scoring: `adaptive_composite_score` ranks experiments against each other (relative); `composite_score` is used for improvement checks against baseline (absolute, same scale, with `improvement_epsilon(baseline)` adaptive threshold to filter generation noise) — never compare values from different scoring functions
+- `improvement_epsilon(baseline)` returns `IMPROVEMENT_EPSILON * (1 - max(baseline, 0))` — threshold shrinks as score climbs to prevent premature plateau
 - `composite_score` includes a consistency penalty (0.30 weight) based on per-image std of DINO, LPIPS, and color histogram — experiments with high variance across images are penalized
 - All metrics in `composite_score` are normalized to [0, 1] before weighting — LPIPS via `_normalize_lpips` (ceiling 0.7), HPS via `_normalize_hps` (ceiling 0.35), aesthetics /10, vision /10
 - KB metric deltas must be computed against the pre-update baseline — `update_knowledge_base` runs BEFORE `_apply_best_result` mutates `state.best_metrics`
 - Caption quality is validated after Gemini returns — empty or too-short captions (<150 chars) raise RuntimeError
 - Open problems in KB are merged across experiments (deduplicated by text, capped at 10), not replaced — earlier experiments' problems survive
 - Vision comparison is per-image (one Gemini call per image pair) with ternary verdicts (MATCH/PARTIAL/MISS → 1.0/0.5/0.0); failures degrade to PARTIAL (0.5) neutral defaults
+- Synthesis always runs when >= 2 experiments exist — top 2-3 by `adaptive_composite_score` are merged regardless of whether they individually beat baseline. This allows cherry-picking best sections from experiments that failed overall but improved different aspects.
 - Exploration mechanism: on even plateau counts (2, 4, 6, ...), the loop adopts the second-best experiment (ranked by `adaptive_composite_score`) to escape local optima; odd counts stay greedy (alternating exploration/exploitation). Requires >= 2 experiments to trigger.
 - Meta-prompt is 1200-1800 words with 8-15 sections (4-8 sentences each). The FIRST section must be `style_foundation` — a mandatory, non-removable section with fixed style rules from StyleProfile. The first caption output label must be `[Art Style]`.
 - Style consistency is measured via Jaccard word-overlap of [Art Style] blocks across captions and included in composite_score (4% weight).
 - Captions have labeled output sections (e.g. `[Art Style]`, `[Color Palette]`). The set of section names, their ordering, and the caption length target are all part of the optimization surface — Claude experiments with these via `caption_sections` and `caption_length_target` on `PromptTemplate`.
 - Caption compliance checking verifies both keyword coverage (meta-prompt section topics) and labeled section marker presence (`[Section Name]` in caption text).
+- Experiments must change exactly 1 section per experiment (not multiple) for clean attribution. Each experiment declares a `<changed_section>` tag identifying which section was modified.
+- The worst discarded experiment's details (hypothesis, caption, vision feedback) are shown to Claude for negative learning — helps avoid repeating failures.
+- Number of fixed reference images is configurable via `--num-fixed-refs` (default 20). On resume, existing refs from state.json are used regardless.
 
 ## Code Style
 

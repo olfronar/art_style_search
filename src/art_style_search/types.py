@@ -136,6 +136,15 @@ _LPIPS_CEILING = 0.7  # empirical max for LPIPS perceptual distance; used to nor
 IMPROVEMENT_EPSILON = 0.005
 
 
+def improvement_epsilon(baseline: float) -> float:
+    """Threshold that shrinks as baseline score climbs.
+
+    At baseline 0.45 → ~0.00275. At 0.51 → ~0.00245.
+    When baseline is -inf (no prior metrics), falls back to IMPROVEMENT_EPSILON.
+    """
+    return IMPROVEMENT_EPSILON * (1.0 - max(baseline, 0.0))
+
+
 def _normalize_hps(raw: float, ceiling: float = _HPS_CEILING) -> float:
     """Normalize raw HPS v2 score to [0, 1] using the empirical ceiling."""
     return min(raw / ceiling, 1.0)
@@ -501,7 +510,7 @@ class KnowledgeBase:
             if cat.confirmed_insights:
                 cat_lines.append(f"  Latest: {cat.confirmed_insights[-1][:120]}")
             if cat.rejected_approaches:
-                cat_lines.append(f"  Last rejected: {cat.rejected_approaches[-1][:80]}")
+                cat_lines.append(f"  Last rejected: {cat.rejected_approaches[-1][:150]}")
         cat_text = "\n".join(cat_lines)
 
         # --- Section 3: Hypothesis Chain (last 5 full, rest collapsed) ---

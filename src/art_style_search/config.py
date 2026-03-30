@@ -34,6 +34,7 @@ class Config:
     # Sampling
     max_analysis_images: int
     max_eval_images: int
+    num_fixed_refs: int
 
     # Models
     caption_model: str
@@ -82,6 +83,7 @@ def parse_args(argv: list[str] | None = None) -> Config:
     samp = parser.add_argument_group("Sampling")
     samp.add_argument("--max-analysis-images", type=int, default=10, help="Max reference images for zero-step analysis")
     samp.add_argument("--max-eval-images", type=int, default=10, help="Max reference images per evaluation iteration")
+    samp.add_argument("--num-fixed-refs", type=int, default=20, help="Fixed reference images for optimization")
 
     # Models
     models = parser.add_argument_group("Models")
@@ -150,6 +152,7 @@ def parse_args(argv: list[str] | None = None) -> Config:
         aspect_ratio=args.aspect_ratio,
         max_analysis_images=args.max_analysis_images,
         max_eval_images=args.max_eval_images,
+        num_fixed_refs=args.num_fixed_refs,
         caption_model=args.caption_model,
         generator_model=args.generator_model,
         reasoning_model=reasoning_model,
