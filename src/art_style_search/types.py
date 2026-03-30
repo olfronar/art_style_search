@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import enum
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -186,7 +187,7 @@ def adaptive_composite_score(
         return composite_score(target)
 
     # Define metrics: (extractor, direction) where direction=1 means higher=better
-    metric_defs: list[tuple[str, callable, int]] = [
+    metric_defs: list[tuple[str, Callable[[AggregatedMetrics], float], int]] = [
         ("dino", lambda r: r.dino_similarity_mean, 1),
         ("lpips", lambda r: _normalize_lpips(r.lpips_distance_mean), -1),
         ("hps", lambda r: _normalize_hps(r.hps_score_mean), 1),

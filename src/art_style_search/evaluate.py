@@ -15,6 +15,7 @@ from art_style_search.types import (
     VISION_VERDICT_DEFAULT,
     VISION_VERDICT_MAP,
     AggregatedMetrics,
+    Caption,
     MetricScores,
     VisionDimensionScore,
     VisionScores,
@@ -45,6 +46,11 @@ _VISION_SINGLE_PROMPT = (
 _VERDICT_RE = re.compile(
     r'<(\w+)\s+verdict="(\w+)">(.*?)</\1>',
     re.DOTALL,
+)
+
+_ART_STYLE_BLOCK_RE = re.compile(
+    re.escape("[Art Style]") + r"\s*(.*?)(?=\n\[|\Z)",
+    re.DOTALL | re.IGNORECASE,
 )
 
 
@@ -135,7 +141,7 @@ async def compare_vision_per_image(
 
 def check_caption_compliance(
     section_names: list[str],
-    captions: object,
+    captions: list[Caption],
     caption_sections: list[str] | None = None,
 ) -> str:
     """Check whether captions address the topics from the meta-prompt sections.
@@ -145,15 +151,12 @@ def check_caption_compliance(
 
     Returns a summary of which sections are well-covered vs missed.
     """
-    from art_style_search.types import Caption
-
-    typed = [c for c in captions if isinstance(c, Caption)]
-    if not typed or not section_names:
+    if not captions or not section_names:
         return ""
 
-    total = len(typed)
+    total = len(captions)
     lines: list[str] = []
-    lowered = [c.text.lower() for c in typed]
+    lowered = [c.text.lower() for c in captions]
 
     # Keyword presence check per meta-prompt section
     section_hits: dict[str, int] = {name: 0 for name in section_names}
@@ -183,7 +186,7 @@ def check_caption_compliance(
     return "Caption compliance with meta-prompt sections:\n" + "\n".join(lines)
 
 
-def compute_style_consistency(captions: object, section_label: str = "Art Style") -> float:
+def compute_style_consistency(captions: list[Caption]) -> float:
     """Measure how consistent the [Art Style] blocks are across captions.
 
     Extracts the text between ``[Art Style]`` and the next ``[`` marker from
@@ -191,21 +194,12 @@ def compute_style_consistency(captions: object, section_label: str = "Art Style"
     similarity.  Returns a float in [0, 1]; 1.0 means all style blocks are
     identical.  Returns 0.0 if fewer than 2 captions contain the label.
     """
-    from art_style_search.types import Caption
-
-    typed = [c for c in captions if isinstance(c, Caption)]
-    if len(typed) < 2:
+    if len(captions) < 2:
         return 0.0
 
-    import re
-
-    marker = re.escape(f"[{section_label}]")
-    # Extract text from [Art Style] up to the next [SectionName] or end
-    pattern = re.compile(marker + r"\s*(.*?)(?=\n\[|\Z)", re.DOTALL | re.IGNORECASE)
-
     blocks: list[set[str]] = []
-    for cap in typed:
-        m = pattern.search(cap.text)
+    for cap in captions:
+        m = _ART_STYLE_BLOCK_RE.search(cap.text)
         if m:
             words = set(m.group(1).lower().split())
             if words:
