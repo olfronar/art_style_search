@@ -31,6 +31,9 @@ outputs/
 logs/
 state.json
 
+# Vendored model repos
+models/
+
 # ML model caches
 *.pt
 *.pth
