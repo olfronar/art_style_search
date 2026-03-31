@@ -248,6 +248,7 @@ def _loop_state_from_dict(d: dict[str, Any]) -> LoopState:
             fixed_references=[Path(p) for p in d.get("fixed_references", [])],
             experiment_history=[_iteration_result_from_dict(r) for r in d.get("experiment_history", [])],
             last_iteration_results=[_iteration_result_from_dict(r) for r in d.get("last_iteration_results", [])],
+            prev_best_captions=[_caption_from_dict(c) for c in d.get("prev_best_captions", [])],
             plateau_counter=d.get("plateau_counter", 0),
             global_best_prompt=d.get("global_best_prompt", ""),
             global_best_metrics=(

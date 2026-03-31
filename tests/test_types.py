@@ -165,10 +165,10 @@ class TestImprovementEpsilon:
         assert improvement_epsilon(float("-inf")) == IMPROVEMENT_EPSILON
 
     def test_at_one(self) -> None:
-        assert improvement_epsilon(1.0) == 0.0
+        assert improvement_epsilon(1.0) == 0.001  # floor prevents zero epsilon
 
     def test_above_one_clamped(self) -> None:
-        assert improvement_epsilon(1.5) == 0.0
+        assert improvement_epsilon(1.5) == 0.001  # floor prevents zero epsilon
 
     def test_monotonically_decreasing(self) -> None:
         baselines = [0.0, 0.3, 0.5, 0.7, 0.9]

@@ -128,16 +128,17 @@ _HPS_CEILING = 0.35  # default empirical max for HPS v2 scores; used to normaliz
 
 # Improvement must exceed this threshold to be accepted (filters generation noise)
 IMPROVEMENT_EPSILON = 0.005
+_EPSILON_FLOOR = 0.001  # Minimum epsilon to prevent false-positive improvements at high baselines
 
 
 def improvement_epsilon(baseline: float) -> float:
-    """Threshold that shrinks as baseline score climbs.
+    """Threshold that shrinks as baseline score climbs, with a minimum floor.
 
-    At baseline 0.45 → ~0.00275. At 0.51 → ~0.00245.
+    At baseline 0.45 → ~0.00275. At 0.51 → ~0.00245. At 0.90 → 0.001 (floor).
     When baseline is -inf (no prior metrics), falls back to IMPROVEMENT_EPSILON.
     """
     clamped = min(max(baseline, 0.0), 1.0)
-    return IMPROVEMENT_EPSILON * (1.0 - clamped)
+    return max(IMPROVEMENT_EPSILON * (1.0 - clamped), _EPSILON_FLOOR)
 
 
 def _normalize_hps(raw: float, ceiling: float = _HPS_CEILING) -> float:
@@ -655,6 +656,7 @@ class LoopState:
     fixed_references: list[Path] = field(default_factory=list)
     experiment_history: list[IterationResult] = field(default_factory=list)
     last_iteration_results: list[IterationResult] = field(default_factory=list)
+    prev_best_captions: list[Caption] = field(default_factory=list)
     plateau_counter: int = 0
     global_best_prompt: str = ""
     global_best_metrics: AggregatedMetrics | None = None

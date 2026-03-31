@@ -114,6 +114,7 @@ _NEW_INSIGHT_RE = re.compile(r"<new_insight>(.*?)</new_insight>", re.DOTALL)
 _BUILDS_ON_RE = re.compile(r"<builds_on>(.*?)</builds_on>", re.DOTALL)
 _OPEN_PROBLEMS_RE = re.compile(r"<open_problems>(.*?)</open_problems>", re.DOTALL)
 _CHANGED_SECTION_RE = re.compile(r"<changed_section>(.*?)</changed_section>", re.DOTALL)
+_TARGET_CATEGORY_RE = re.compile(r"<target_category>(.*?)</target_category>", re.DOTALL)
 
 
 def _parse_template(text: str) -> PromptTemplate:
@@ -214,6 +215,7 @@ class RefinementResult:
     builds_on: str | None
     open_problems: list[str]
     changed_section: str = ""
+    target_category: str = ""
 
 
 def _parse_lessons(text: str) -> Lessons:
@@ -230,6 +232,12 @@ def _parse_lessons(text: str) -> Lessons:
 def _parse_changed_section(text: str) -> str:
     """Extract the <changed_section> tag — returns section name or empty string."""
     m = _CHANGED_SECTION_RE.search(text)
+    return m.group(1).strip() if m else ""
+
+
+def _parse_target_category(text: str) -> str:
+    """Extract the <target_category> tag — returns category name or empty string."""
+    m = _TARGET_CATEGORY_RE.search(text)
     return m.group(1).strip() if m else ""
 
 
@@ -423,6 +431,7 @@ def _parse_refinement_branches(text: str, num_experiments: int) -> list[Refineme
                 builds_on=_parse_builds_on(block),
                 open_problems=_parse_open_problems(block),
                 changed_section=_parse_changed_section(block),
+                target_category=_parse_target_category(block),
             )
         )
 
@@ -442,7 +451,8 @@ def enforce_hypothesis_diversity(
     category_names = get_category_names(template)
 
     for r in results:
-        cat = classify_hypothesis(r.hypothesis, category_names)
+        # Prefer Claude's explicit target_category; fall back to keyword classification
+        cat = r.target_category if r.target_category else classify_hypothesis(r.hypothesis, category_names)
         if cat in seen_categories:
             logger.warning(
                 "Dropping duplicate-category experiment (category=%s): %s",

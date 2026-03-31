@@ -77,13 +77,23 @@ def _sample(items: list[Path], max_count: int) -> list[Path]:
 
 
 def _apply_best_result(state: LoopState, result: IterationResult) -> None:
-    """Update state with a new best experiment result."""
+    """Update state with a genuine improvement — updates everything including global best."""
     result.kept = True
     state.current_template = result.template
     state.best_template = result.template
     state.best_metrics = result.aggregated
-    state.global_best_prompt = result.rendered_prompt
-    state.global_best_metrics = result.aggregated
+    # Only update global best if this actually beats it
+    global_score = composite_score(state.global_best_metrics) if state.global_best_metrics else float("-inf")
+    if composite_score(result.aggregated) > global_score:
+        state.global_best_prompt = result.rendered_prompt
+        state.global_best_metrics = result.aggregated
+
+
+def _apply_exploration_result(state: LoopState, result: IterationResult) -> None:
+    """Adopt a result for exploration — guides next proposals but preserves improvement baseline."""
+    result.kept = True
+    state.current_template = result.template
+    state.best_template = result.template
 
 
 def _save_best_prompt(state: LoopState, log_dir: Path) -> None:
@@ -355,7 +365,7 @@ async def run(config: Config) -> LoopState:
                 key=lambda x: x[1].dreamsim_similarity,
             )
             worst_caps = [c for c, _ in sorted_caps[:3]]
-            caption_diffs = build_caption_diffs(state.last_iteration_results, worst_caps)
+            caption_diffs = build_caption_diffs(state.prev_best_captions, worst_caps)
 
         # Inject review feedback from previous iteration into roundtrip context
         if state.review_feedback:
@@ -448,50 +458,58 @@ async def run(config: Config) -> LoopState:
         # Phase 3.5: Synthesis — always merge top experiments to cherry-pick best sections
         synth_result: IterationResult | None = None
         if len(exp_results) >= 2:
-            ranked_for_synth = sorted(exp_results, key=lambda r: adaptive_scores[id(r)], reverse=True)
-            top_exps = ranked_for_synth[:3]
-            logger.info("Synthesizing top %d experiments into merged template", len(top_exps))
+            try:
+                ranked_for_synth = sorted(exp_results, key=lambda r: adaptive_scores[id(r)], reverse=True)
+                top_exps = ranked_for_synth[:3]
+                logger.info("Synthesizing top %d experiments into merged template", len(top_exps))
 
-            merged_template, merged_hypothesis = await synthesize_templates(
-                top_exps,
-                state.style_profile,
-                client=reasoning_client,
-                model=config.reasoning_model,
-            )
+                merged_template, merged_hypothesis = await synthesize_templates(
+                    top_exps,
+                    state.style_profile,
+                    client=reasoning_client,
+                    model=config.reasoning_model,
+                )
 
-            # Validate the merged template
-            synth_result = await run_experiment(
-                experiment_id=len(exp_results),
-                template=merged_template,
-                iteration=iteration,
-                fixed_refs=fixed_refs,
-                last_results=state.last_iteration_results,
-                hypothesis=merged_hypothesis,
-                experiment_desc="Synthesis of top experiments",
-                **exp_kwargs,
-            )
-            merged_score = composite_score(synth_result.aggregated)
-            logger.info(
-                "Synthesis result: DS=%.4f (best individual: %.4f)",
-                synth_result.aggregated.dreamsim_similarity_mean,
-                best_exp.aggregated.dreamsim_similarity_mean,
-            )
+                # Validate the merged template
+                synth_result = await run_experiment(
+                    experiment_id=len(exp_results),
+                    template=merged_template,
+                    iteration=iteration,
+                    fixed_refs=fixed_refs,
+                    last_results=state.last_iteration_results,
+                    hypothesis=merged_hypothesis,
+                    experiment_desc="Synthesis of top experiments",
+                    **exp_kwargs,
+                )
+                merged_score = composite_score(synth_result.aggregated)
+                logger.info(
+                    "Synthesis result: DS=%.4f (best individual: %.4f)",
+                    synth_result.aggregated.dreamsim_similarity_mean,
+                    best_exp.aggregated.dreamsim_similarity_mean,
+                )
 
-            exp_results.append(synth_result)
-            all_agg = [r.aggregated for r in exp_results]  # refresh after synthesis append
-            # Refresh adaptive scores to include synthesis result
-            adaptive_scores = {id(r): adaptive_composite_score(r.aggregated, all_agg) for r in exp_results}
-            if merged_score > best_score:
-                best_exp = synth_result
-                best_score = merged_score
-                logger.info("Synthesis beat best individual — adopting merged template")
+                exp_results.append(synth_result)
+                all_agg = [r.aggregated for r in exp_results]  # refresh after synthesis append
+                # Refresh adaptive scores to include synthesis result
+                adaptive_scores = {id(r): adaptive_composite_score(r.aggregated, all_agg) for r in exp_results}
+                if merged_score > best_score:
+                    best_exp = synth_result
+                    best_score = merged_score
+                    logger.info("Synthesis beat best individual — adopting merged template")
+            except Exception:
+                logger.warning("Synthesis failed — continuing with individual experiments only", exc_info=True)
+                synth_result = None
 
         # Phase 3.7 + 3.9: Pairwise comparison and independent review (run in parallel)
         pairwise_coro = _run_pairwise_comparison(
             exp_results, adaptive_scores, state, gemini_client, config, gemini_semaphore
         )
         review_coro = _run_independent_review(exp_results, proposals, state, reasoning_client, config)
-        await asyncio.gather(pairwise_coro, review_coro)
+        gather_results = await asyncio.gather(pairwise_coro, review_coro, return_exceptions=True)
+        for i, result in enumerate(gather_results):
+            if isinstance(result, BaseException):
+                label = "Pairwise comparison" if i == 0 else "Independent review"
+                logger.warning("%s failed — skipping: %s", label, result)
 
         # Update state with best result (adaptive epsilon filters generation noise)
         improved = best_score > baseline_score + epsilon
@@ -524,7 +542,13 @@ async def run(config: Config) -> LoopState:
                 )
                 second_best = ranked[1]
                 logger.info("Exploration: adopting second-best experiment to escape potential local optimum")
-                _apply_best_result(state, second_best)
+                _apply_exploration_result(state, second_best)
+                state.plateau_counter = 1  # Give exploration runway before plateau termination
+
+        # Preserve current best captions for next iteration's diff (N-1 vs N-2)
+        current_best = best_kept_result(state.last_iteration_results)
+        if current_best and current_best.iteration_captions:
+            state.prev_best_captions = list(current_best.iteration_captions)
 
         state.last_iteration_results = exp_results
         state.experiment_history.extend(exp_results)
