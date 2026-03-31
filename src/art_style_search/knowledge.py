@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 
-from art_style_search.experiment import ExperimentProposal, best_kept_result
+from art_style_search.experiment import ExperimentProposal
 from art_style_search.types import (
     AggregatedMetrics,
     Caption,
@@ -128,14 +128,11 @@ def update_knowledge_base(
         kb.open_problems = sorted(existing_by_text.values(), key=lambda p: _PRIORITY_ORDER.get(p.priority, 3))[:10]
 
 
-def build_caption_diffs(last_results: list[IterationResult], worst_captions: list[Caption]) -> str:
+def build_caption_diffs(prev_captions: list[Caption], worst_captions: list[Caption]) -> str:
     """Show how captions changed for worst-performing images vs previous iteration."""
-    if not last_results or not worst_captions:
+    if not prev_captions or not worst_captions:
         return ""
-    prev = best_kept_result(last_results)
-    if not prev:
-        return ""
-    prev_by_path = {c.image_path: c.text for c in prev.iteration_captions}
+    prev_by_path = {c.image_path: c.text for c in prev_captions}
 
     diffs: list[str] = []
     for cap in worst_captions:
