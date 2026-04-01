@@ -133,9 +133,11 @@ async def compare_vision_per_image(
         _compare_vision_single(ref, gen, cap, client=client, model=model, semaphore=semaphore)
         for (ref, gen), cap in zip(pairs, captions, strict=True)
     ]
+    logger.info("Vision comparison: scoring %d image pairs", len(tasks))
     results = await asyncio.gather(*tasks)
     feedbacks = [text for text, _ in results]
     scores = [vs for _, vs in results]
+    logger.info("Vision comparison: done (%d pairs scored)", len(scores))
     return feedbacks, scores
 
 
