@@ -21,6 +21,8 @@ class Config:
     output_dir: Path
     log_dir: Path
     state_file: Path
+    run_dir: Path
+    run_name: str
 
     # Loop
     max_iterations: int
@@ -62,9 +64,9 @@ def parse_args(argv: list[str] | None = None) -> Config:
     # Paths
     paths = parser.add_argument_group("Paths")
     paths.add_argument("--reference-dir", type=Path, default=Path("reference_images"), help="Reference art directory")
-    paths.add_argument("--output-dir", type=Path, default=Path("outputs"), help="Generated images output directory")
-    paths.add_argument("--log-dir", type=Path, default=Path("logs"), help="Iteration logs directory")
-    paths.add_argument("--state-file", type=Path, default=Path("state.json"), help="State file for resume")
+    paths.add_argument("--runs-dir", type=Path, default=Path("runs"), help="Base directory for all runs")
+    paths.add_argument("--run", type=str, default=None, dest="run_name", help="Run name (auto-incremented if omitted)")
+    paths.add_argument("--new", action="store_true", help="Force new run (error if name already exists)")
 
     # Loop control
     loop = parser.add_argument_group("Loop Control")
@@ -137,14 +139,24 @@ def parse_args(argv: list[str] | None = None) -> Config:
     if not args.reference_dir.is_dir():
         parser.error(f"Reference directory does not exist: {args.reference_dir}")
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    args.log_dir.mkdir(parents=True, exist_ok=True)
+    # Resolve run directory
+    from art_style_search.runs import resolve_run_dir
+
+    run_dir = resolve_run_dir(args.runs_dir, args.run_name, args.new)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = run_dir / "outputs"
+    log_dir = run_dir / "logs"
+    state_file = run_dir / "state.json"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    log_dir.mkdir(parents=True, exist_ok=True)
 
     return Config(
         reference_dir=args.reference_dir,
-        output_dir=args.output_dir,
-        log_dir=args.log_dir,
-        state_file=args.state_file,
+        output_dir=output_dir,
+        log_dir=log_dir,
+        state_file=state_file,
+        run_dir=run_dir,
+        run_name=run_dir.name,
         max_iterations=args.max_iterations,
         plateau_window=args.plateau_window,
         num_branches=args.num_branches,

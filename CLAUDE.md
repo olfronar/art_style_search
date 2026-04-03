@@ -26,13 +26,17 @@ Self-improving loop that optimizes a meta-prompt for art-style capture and image
 ## Commands
 
 ```bash
-uv sync                                  # Install all dependencies
-uv run ruff check .                      # Lint
-uv run ruff format .                     # Format
-uv run pytest tests/                     # Run tests
-uv run python -m art_style_search        # Run the optimization loop
-uv run python -m art_style_search --help  # Show all CLI options
-uv run python -m art_style_search clean  # Remove outputs, logs, and state
+uv sync                                              # Install all dependencies
+uv run ruff check .                                  # Lint
+uv run ruff format .                                 # Format
+uv run pytest tests/                                 # Run tests
+uv run python -m art_style_search                    # New auto-named run (runs/run_001/)
+uv run python -m art_style_search --run my-test      # Resume or create named run
+uv run python -m art_style_search --run my-test --new  # Force new (error if exists)
+uv run python -m art_style_search --help             # Show all CLI options
+uv run python -m art_style_search list               # List all runs with status
+uv run python -m art_style_search clean --run NAME   # Remove a specific run
+uv run python -m art_style_search clean --all        # Remove all runs
 ```
 
 ## Environment Variables
@@ -54,6 +58,7 @@ uv run python -m art_style_search clean  # Remove outputs, logs, and state
 - `models.py` - ModelRegistry: lazy-load DreamSim/HPS/Aesthetics/Texture/SSIM with per-model locks
 - `evaluate.py` - Dispatches metrics per image via asyncio.to_thread + Gemini vision comparison
 - `utils.py` - Shared helpers: Anthropic streaming/text extraction, Gemini image part builder, MIME map
+- `runs.py` - Run directory management: resolve/create/list/clean isolated run directories under `runs/`
 - `state.py` - JSON persistence (state.json + per-iteration logs)
 - `loop.py` - Experiment-based orchestration loop (zero-step → N parallel experiments per iteration → shared KB → convergence)
 - `__main__.py` - Entry point
@@ -62,9 +67,10 @@ uv run python -m art_style_search clean  # Remove outputs, logs, and state
 
 - `src/art_style_search/` - All source code
 - `reference_images/` - User-provided reference art (not committed)
-- `outputs/` - Generated images by iteration/experiment (not committed)
-- `logs/` - Iteration logs, captions cache, style profile (not committed)
-- `state.json` - Resume state (not committed)
+- `runs/` - All run data, each run in its own subdirectory (not committed):
+  - `runs/<name>/outputs/` - Generated images by iteration/experiment
+  - `runs/<name>/logs/` - Iteration logs, captions cache, style profile
+  - `runs/<name>/state.json` - Resume state
 
 ## Evaluation Metrics
 

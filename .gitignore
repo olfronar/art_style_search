@@ -30,6 +30,7 @@ reference_images/
 outputs/
 logs/
 state.json
+runs/
 
 # Vendored model repos
 models/
