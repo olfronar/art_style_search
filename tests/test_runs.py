@@ -51,8 +51,7 @@ class TestResolveRunDir:
     def test_explicit_name_creates(self, tmp_path: Path) -> None:
         result = resolve_run_dir(tmp_path, "my-test", False)
         assert result == tmp_path / "my-test"
-        # Does NOT create directory (caller does)
-        assert not result.is_dir()
+        assert result.is_dir()
 
     def test_explicit_name_resumes(self, tmp_path: Path) -> None:
         (tmp_path / "existing").mkdir()

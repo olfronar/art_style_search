@@ -7,10 +7,12 @@ import asyncio
 import sys
 from pathlib import Path
 
+from art_style_search.runs import DEFAULT_RUNS_DIR
+
 
 def _handle_clean(argv: list[str]) -> None:
     parser = argparse.ArgumentParser(prog="art_style_search clean", description="Remove run data")
-    parser.add_argument("--runs-dir", type=Path, default=Path("runs"), help="Base directory for all runs")
+    parser.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS_DIR, help="Base directory for all runs")
     parser.add_argument("--run", type=str, default=None, help="Remove a specific run")
     parser.add_argument("--all", action="store_true", dest="remove_all", help="Remove all runs")
     args = parser.parse_args(argv)
@@ -32,7 +34,7 @@ def _handle_clean(argv: list[str]) -> None:
 
 def _handle_list(argv: list[str]) -> None:
     parser = argparse.ArgumentParser(prog="art_style_search list", description="Show all runs")
-    parser.add_argument("--runs-dir", type=Path, default=Path("runs"), help="Base directory for all runs")
+    parser.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS_DIR, help="Base directory for all runs")
     args = parser.parse_args(argv)
 
     from art_style_search.runs import list_runs
@@ -68,7 +70,7 @@ def main() -> None:
     from art_style_search.loop import run
 
     config = parse_args()
-    print(f"Run: {config.run_name} ({config.run_dir})")
+    print(f"Run: {config.run_dir.name} ({config.run_dir})")
 
     state = asyncio.run(run(config))
 

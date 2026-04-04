@@ -84,21 +84,21 @@ class TestRunNaming:
 
     def test_auto_names_first_run(self, tmp_path: Path) -> None:
         cfg = parse_args(_base_args(tmp_path))
-        assert cfg.run_name == "run_001"
+        assert cfg.run_dir.name == "run_001"
 
     def test_auto_increments(self, tmp_path: Path) -> None:
         (tmp_path / "runs" / "run_001").mkdir(parents=True)
         cfg = parse_args(_base_args(tmp_path))
-        assert cfg.run_name == "run_002"
+        assert cfg.run_dir.name == "run_002"
 
     def test_explicit_name(self, tmp_path: Path) -> None:
         cfg = parse_args([*_base_args(tmp_path), "--run", "my-experiment"])
-        assert cfg.run_name == "my-experiment"
+        assert cfg.run_dir.name == "my-experiment"
         assert cfg.run_dir == tmp_path / "runs" / "my-experiment"
 
     def test_new_flag_creates(self, tmp_path: Path) -> None:
         cfg = parse_args([*_base_args(tmp_path), "--run", "fresh", "--new"])
-        assert cfg.run_name == "fresh"
+        assert cfg.run_dir.name == "fresh"
 
     def test_new_flag_errors_if_exists(self, tmp_path: Path) -> None:
         (tmp_path / "runs" / "taken").mkdir(parents=True)
