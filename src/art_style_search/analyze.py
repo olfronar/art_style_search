@@ -5,13 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 from pathlib import Path
 
 from google import genai
 
 from art_style_search.types import Caption, PromptSection, PromptTemplate, StyleProfile
-from art_style_search.utils import ReasoningClient, image_to_gemini_part
+from art_style_search.utils import ReasoningClient, extract_xml_tag, image_to_gemini_part
 
 logger = logging.getLogger(__name__)
 
@@ -130,17 +129,13 @@ _COMPILATION_PROMPT = (
 # ---------------------------------------------------------------------------
 
 
-def _extract_tag(xml: str, tag: str) -> str:
-    """Extract text content between <tag> and </tag>."""
-    pattern = rf"<{tag}>(.*?)</{tag}>"
-    match = re.search(pattern, xml, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-    return ""
+_extract_tag = extract_xml_tag  # local alias for tests that import it
 
 
 def _parse_sections(xml: str) -> list[PromptSection]:
     """Parse all <section name="..." description="...">value</section> tags."""
+    import re
+
     pattern = r'<section\s+name="([^"]+)"\s+description="([^"]+)">(.*?)</section>'
     matches = re.findall(pattern, xml, re.DOTALL)
     return [
@@ -261,27 +256,11 @@ def _load_cache(cache_path: Path) -> tuple[StyleProfile, PromptTemplate] | None:
         return None
 
     try:
+        from art_style_search.state import _prompt_template_from_dict, _style_profile_from_dict
+
         data = json.loads(cache_path.read_text(encoding="utf-8"))
-        profile = StyleProfile(
-            color_palette=data["style_profile"]["color_palette"],
-            composition=data["style_profile"]["composition"],
-            technique=data["style_profile"]["technique"],
-            mood_atmosphere=data["style_profile"]["mood_atmosphere"],
-            subject_matter=data["style_profile"]["subject_matter"],
-            influences=data["style_profile"]["influences"],
-            gemini_raw_analysis=data["style_profile"]["gemini_raw_analysis"],
-            claude_raw_analysis=data["style_profile"]["claude_raw_analysis"],
-        )
-        sp = data["prompt_template"]
-        template = PromptTemplate(
-            sections=[
-                PromptSection(name=s["name"], description=s["description"], value=s["value"])
-                for s in sp.get("sections", [])
-            ],
-            negative_prompt=sp.get("negative_prompt"),
-            caption_sections=sp.get("caption_sections", []),
-            caption_length_target=sp.get("caption_length_target", 0),
-        )
+        profile = _style_profile_from_dict(data["style_profile"])
+        template = _prompt_template_from_dict(data["prompt_template"])
         logger.info("Loaded cached style analysis from %s", cache_path)
         return profile, template
     except (json.JSONDecodeError, KeyError, TypeError) as exc:

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import TypeVar
 
 import anthropic
 from anthropic.types import Message
@@ -25,6 +28,48 @@ MIME_MAP: dict[str, str] = {
 }
 
 IMAGE_EXTENSIONS: frozenset[str] = frozenset(MIME_MAP)
+
+
+def extract_xml_tag(text: str, tag: str) -> str:
+    """Extract text content between <tag> and </tag>, stripped. Returns '' if absent."""
+    match = re.search(rf"<{tag}>(.*?)</{tag}>", text, re.DOTALL)
+    return match.group(1).strip() if match else ""
+
+
+T = TypeVar("T")
+
+
+async def async_retry(
+    coro_fn: Callable[[], Awaitable[T]],
+    *,
+    max_retries: int = 3,
+    base_delay: float = 3.0,
+    label: str = "",
+) -> T:
+    """Generic async retry with exponential backoff.
+
+    Calls `coro_fn()` up to `max_retries` times. Raises RuntimeError after exhaustion.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            return await coro_fn()
+        except Exception as exc:
+            last_exc = exc
+            delay = base_delay * (2**attempt)
+            logger.warning(
+                "%s attempt %d/%d failed: %s: %s — retrying in %.0fs",
+                label or "Retry",
+                attempt + 1,
+                max_retries,
+                type(exc).__name__,
+                exc,
+                delay,
+            )
+            await asyncio.sleep(delay)
+
+    msg = f"{label or 'Operation'} failed after {max_retries} retries"
+    raise RuntimeError(msg) from last_exc
 
 
 def image_to_gemini_part(path: Path) -> genai_types.Part:

@@ -10,7 +10,7 @@ from pathlib import Path
 from google import genai
 
 from art_style_search.types import Caption
-from art_style_search.utils import image_to_gemini_part
+from art_style_search.utils import async_retry, image_to_gemini_part
 
 logger = logging.getLogger(__name__)
 
@@ -61,35 +61,18 @@ async def _caption_single(
     # Cache miss — call Gemini with retry on transient errors
     logger.info("Captioning %s via %s", image_path.name, model)
 
-    last_exc: Exception | None = None
-    for attempt in range(3):
-        try:
-            async with semaphore:
-                response = await client.aio.models.generate_content(
-                    model=model,
-                    contents=[
-                        image_to_gemini_part(image_path),
-                        prompt,
-                    ],
-                )
-            break
-        except Exception as exc:
-            last_exc = exc
-            delay = 3.0 * (2**attempt)
-            logger.warning(
-                "Caption %s attempt %d/3 failed: %s: %s — retrying in %.0fs",
-                image_path.name,
-                attempt + 1,
-                type(exc).__name__,
-                exc,
-                delay,
+    async def _call() -> str:
+        async with semaphore:
+            resp = await client.aio.models.generate_content(
+                model=model,
+                contents=[
+                    image_to_gemini_part(image_path),
+                    prompt,
+                ],
             )
-            await asyncio.sleep(delay)
-    else:
-        msg = f"Captioning {image_path.name} failed after 3 retries"
-        raise RuntimeError(msg) from last_exc
+        return resp.text
 
-    caption_text = response.text
+    caption_text: str = await async_retry(_call, label=f"Caption {image_path.name}")
 
     # Validate caption quality — empty or very short captions waste downstream cycles
     min_caption_length = 150

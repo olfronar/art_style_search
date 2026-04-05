@@ -24,7 +24,7 @@ from art_style_search.types import (
     composite_score,
     get_category_names,
 )
-from art_style_search.utils import ReasoningClient
+from art_style_search.utils import ReasoningClient, extract_xml_tag
 
 if TYPE_CHECKING:
     from art_style_search.experiment import ExperimentProposal
@@ -100,21 +100,7 @@ _SECTION_RE_LOOSE = re.compile(
     r"[^>]*>(?P<value>.*?)</section>",
     re.DOTALL,
 )
-_NEGATIVE_RE = re.compile(r"<negative>(.*?)</negative>", re.DOTALL)
-_CAPTION_SECTIONS_RE = re.compile(r"<caption_sections>(.*?)</caption_sections>", re.DOTALL)
-_CAPTION_LENGTH_RE = re.compile(r"<caption_length>\s*(\d+)\s*</caption_length>", re.DOTALL)
-_ANALYSIS_RE = re.compile(r"<analysis>(.*?)</analysis>", re.DOTALL)
-_TEMPLATE_CHANGES_RE = re.compile(r"<template_changes>(.*?)</template_changes>", re.DOTALL)
 _CONVERGED_RE = re.compile(r"\[CONVERGED\]")
-_HYPOTHESIS_RE = re.compile(r"<hypothesis>(.*?)</hypothesis>", re.DOTALL)
-_EXPERIMENT_RE = re.compile(r"<experiment>(.*?)</experiment>", re.DOTALL)
-_CONFIRMED_RE = re.compile(r"<confirmed>(.*?)</confirmed>", re.DOTALL)
-_REJECTED_RE = re.compile(r"<rejected>(.*?)</rejected>", re.DOTALL)
-_NEW_INSIGHT_RE = re.compile(r"<new_insight>(.*?)</new_insight>", re.DOTALL)
-_BUILDS_ON_RE = re.compile(r"<builds_on>(.*?)</builds_on>", re.DOTALL)
-_OPEN_PROBLEMS_RE = re.compile(r"<open_problems>(.*?)</open_problems>", re.DOTALL)
-_CHANGED_SECTION_RE = re.compile(r"<changed_section>(.*?)</changed_section>", re.DOTALL)
-_TARGET_CATEGORY_RE = re.compile(r"<target_category>(.*?)</target_category>", re.DOTALL)
 
 
 def _parse_template(text: str) -> PromptTemplate:
@@ -145,20 +131,14 @@ def _parse_template(text: str) -> PromptTemplate:
         if sections:
             logger.warning("Parsed %d sections with loose regex fallback", len(sections))
 
-    negative = None
-    neg_match = _NEGATIVE_RE.search(text)
-    if neg_match:
-        negative = neg_match.group(1).strip() or None
+    neg_raw = extract_xml_tag(text, "negative")
+    negative = neg_raw or None
 
-    caption_sections: list[str] = []
-    cs_match = _CAPTION_SECTIONS_RE.search(text)
-    if cs_match:
-        caption_sections = [s.strip() for s in cs_match.group(1).split(",") if s.strip()]
+    cs_raw = extract_xml_tag(text, "caption_sections")
+    caption_sections = [s.strip() for s in cs_raw.split(",") if s.strip()] if cs_raw else []
 
-    caption_length_target = 0
-    cl_match = _CAPTION_LENGTH_RE.search(text)
-    if cl_match:
-        caption_length_target = int(cl_match.group(1))
+    cl_raw = extract_xml_tag(text, "caption_length")
+    caption_length_target = int(cl_raw) if cl_raw.isdigit() else 0
 
     return PromptTemplate(
         sections=sections,
@@ -169,13 +149,11 @@ def _parse_template(text: str) -> PromptTemplate:
 
 
 def _parse_analysis(text: str) -> str:
-    m = _ANALYSIS_RE.search(text)
-    return m.group(1).strip() if m else ""
+    return extract_xml_tag(text, "analysis")
 
 
 def _parse_template_changes(text: str) -> str:
-    m = _TEMPLATE_CHANGES_RE.search(text)
-    return m.group(1).strip() if m else ""
+    return extract_xml_tag(text, "template_changes")
 
 
 def _parse_converged(text: str) -> bool:
@@ -183,13 +161,11 @@ def _parse_converged(text: str) -> bool:
 
 
 def _parse_hypothesis(text: str) -> str:
-    m = _HYPOTHESIS_RE.search(text)
-    return m.group(1).strip() if m else ""
+    return extract_xml_tag(text, "hypothesis")
 
 
 def _parse_experiment(text: str) -> str:
-    m = _EXPERIMENT_RE.search(text)
-    return m.group(1).strip() if m else ""
+    return extract_xml_tag(text, "experiment")
 
 
 @dataclass
@@ -219,43 +195,36 @@ class RefinementResult:
 
 
 def _parse_lessons(text: str) -> Lessons:
-    confirmed = _CONFIRMED_RE.search(text)
-    rejected = _REJECTED_RE.search(text)
-    insight = _NEW_INSIGHT_RE.search(text)
     return Lessons(
-        confirmed=confirmed.group(1).strip() if confirmed else "",
-        rejected=rejected.group(1).strip() if rejected else "",
-        new_insight=insight.group(1).strip() if insight else "",
+        confirmed=extract_xml_tag(text, "confirmed"),
+        rejected=extract_xml_tag(text, "rejected"),
+        new_insight=extract_xml_tag(text, "new_insight"),
     )
 
 
 def _parse_changed_section(text: str) -> str:
     """Extract the <changed_section> tag — returns section name or empty string."""
-    m = _CHANGED_SECTION_RE.search(text)
-    return m.group(1).strip() if m else ""
+    return extract_xml_tag(text, "changed_section")
 
 
 def _parse_target_category(text: str) -> str:
     """Extract the <target_category> tag — returns category name or empty string."""
-    m = _TARGET_CATEGORY_RE.search(text)
-    return m.group(1).strip() if m else ""
+    return extract_xml_tag(text, "target_category")
 
 
 def _parse_builds_on(text: str) -> str | None:
     """Extract the <builds_on> tag — returns hypothesis IDs or None."""
-    m = _BUILDS_ON_RE.search(text)
-    if not m:
+    val = extract_xml_tag(text, "builds_on")
+    if not val:
         return None
-    val = m.group(1).strip()
     return val if val.lower() != "none" else None
 
 
 def _parse_open_problems(text: str) -> list[str]:
     """Extract numbered open problems from <open_problems> tag."""
-    m = _OPEN_PROBLEMS_RE.search(text)
-    if not m:
+    raw = extract_xml_tag(text, "open_problems")
+    if not raw:
         return []
-    raw = m.group(1).strip()
     # Split on numbered lines: "1. ...", "2. ..." etc.
     items = re.split(r"\n\s*\d+\.\s+", "\n" + raw)
     return [item.strip() for item in items if item.strip()]

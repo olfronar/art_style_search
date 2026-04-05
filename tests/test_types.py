@@ -22,42 +22,38 @@ from art_style_search.types import (
 class TestCompositeScore:
     def test_known_values(self) -> None:
         m = AggregatedMetrics(
-            dino_similarity_mean=0.8,
-            dino_similarity_std=0.01,
-            lpips_distance_mean=0.3,
-            lpips_distance_std=0.02,
+            dreamsim_similarity_mean=0.8,
+            dreamsim_similarity_std=0.01,
             hps_score_mean=0.28,
             hps_score_std=0.03,
             aesthetics_score_mean=7.0,
             aesthetics_score_std=0.5,
         )
-        # 9-metric formula; color_histogram/texture/ssim default to 0.0, vision_* default to 5.0
+        # Current formula: DreamSim 40%, Color 18%, Texture 7%, SSIM 8%, HPS 5%,
+        # Aesthetics 6%, StyleConsistency 4%, Vision 4%+4%+4%=12%.
+        # color_histogram/texture/ssim default to 0.0, vision_* default to 0.5
         # HPS normalized: min(0.28/0.35, 1.0) = 0.8
-        # LPIPS normalized: min(0.3/0.7, 1.0) = 0.3/0.7
         base = (
-            0.31 * 0.8
-            - 0.14 * min(0.3 / 0.7, 1.0)
+            0.40 * 0.8
             + 0.05 * min(0.28 / 0.35, 1.0)
             + 0.06 * (7.0 / 10.0)
-            + 0.15 * 0.0
-            + 0.05 * 0.0
-            + 0.08 * 0.0
-            + 0.04 * 0.0  # style_consistency (default 0.0)
-            + 0.04 * 0.5
-            + 0.04 * 0.5
-            + 0.04 * 0.5
+            + 0.18 * 0.0  # color_histogram
+            + 0.07 * 0.0  # texture
+            + 0.08 * 0.0  # ssim
+            + 0.04 * 0.0  # style_consistency
+            + 0.04 * 0.5  # vision_style
+            + 0.04 * 0.5  # vision_subject
+            + 0.04 * 0.5  # vision_composition
         )
-        # Consistency penalty: 0.30 * (dino_std + lpips_norm_std + color_hist_std) / 3.0
-        penalty = 0.30 * (0.01 + min(0.02 / 0.7, 1.0) + 0.0) / 3.0
+        # Consistency penalty: 0.30 * (dreamsim_std + color_histogram_std) / 2.0
+        penalty = 0.30 * (0.01 + 0.0) / 2.0
         expected = base - penalty
         assert abs(composite_score(m) - expected) < 1e-9
 
     def test_zero_metrics(self) -> None:
         m = AggregatedMetrics(
-            dino_similarity_mean=0.0,
-            dino_similarity_std=0.0,
-            lpips_distance_mean=0.0,
-            lpips_distance_std=0.0,
+            dreamsim_similarity_mean=0.0,
+            dreamsim_similarity_std=0.0,
             hps_score_mean=0.0,
             hps_score_std=0.0,
             aesthetics_score_mean=0.0,
@@ -67,45 +63,40 @@ class TestCompositeScore:
         expected = 0.04 * 0.5 + 0.04 * 0.5 + 0.04 * 0.5
         assert abs(composite_score(m) - expected) < 1e-9
 
-    def test_higher_dino_yields_higher_score(self) -> None:
+    def test_higher_dreamsim_yields_higher_score(self) -> None:
         base = dict(
-            dino_similarity_std=0.0,
-            lpips_distance_mean=0.0,
-            lpips_distance_std=0.0,
+            dreamsim_similarity_std=0.0,
             hps_score_mean=0.0,
             hps_score_std=0.0,
             aesthetics_score_mean=0.0,
             aesthetics_score_std=0.0,
         )
-        low = AggregatedMetrics(dino_similarity_mean=0.2, **base)
-        high = AggregatedMetrics(dino_similarity_mean=0.9, **base)
+        low = AggregatedMetrics(dreamsim_similarity_mean=0.2, **base)
+        high = AggregatedMetrics(dreamsim_similarity_mean=0.9, **base)
         assert composite_score(high) > composite_score(low)
 
-    def test_higher_lpips_lowers_score(self) -> None:
+    def test_higher_color_histogram_yields_higher_score(self) -> None:
         base = dict(
-            dino_similarity_mean=0.5,
-            dino_similarity_std=0.0,
-            lpips_distance_std=0.0,
+            dreamsim_similarity_mean=0.5,
+            dreamsim_similarity_std=0.0,
             hps_score_mean=0.0,
             hps_score_std=0.0,
             aesthetics_score_mean=0.0,
             aesthetics_score_std=0.0,
         )
-        low_lpips = AggregatedMetrics(lpips_distance_mean=0.1, **base)
-        high_lpips = AggregatedMetrics(lpips_distance_mean=0.9, **base)
-        assert composite_score(low_lpips) > composite_score(high_lpips)
+        low_color = AggregatedMetrics(color_histogram_mean=0.1, **base)
+        high_color = AggregatedMetrics(color_histogram_mean=0.9, **base)
+        assert composite_score(high_color) > composite_score(low_color)
 
     def test_weights_sum_to_one(self) -> None:
-        """Verify the coefficient magnitudes sum to 1.0 (9 metrics)."""
-        assert abs((0.31 + 0.14 + 0.05 + 0.06 + 0.14 + 0.10 + 0.08 + 0.04 + 0.04 + 0.04) - 1.0) < 1e-9
+        """Verify the coefficient magnitudes sum to 1.0 (10 metrics)."""
+        assert abs((0.40 + 0.05 + 0.06 + 0.18 + 0.07 + 0.08 + 0.04 + 0.04 + 0.04 + 0.04) - 1.0) < 1e-9
 
     def test_hps_normalized(self) -> None:
         """HPS v2 scores (~0.25-0.35) should be normalized to [0,1] via /0.35 ceiling."""
         m = AggregatedMetrics(
-            dino_similarity_mean=0.0,
-            dino_similarity_std=0.0,
-            lpips_distance_mean=0.0,
-            lpips_distance_std=0.0,
+            dreamsim_similarity_mean=0.0,
+            dreamsim_similarity_std=0.0,
             hps_score_mean=0.35,
             hps_score_std=0.0,
             aesthetics_score_mean=0.0,
@@ -118,10 +109,8 @@ class TestCompositeScore:
     def test_hps_clamped_above_ceiling(self) -> None:
         """HPS values above 0.35 should clamp to 1.0 contribution."""
         m = AggregatedMetrics(
-            dino_similarity_mean=0.0,
-            dino_similarity_std=0.0,
-            lpips_distance_mean=0.0,
-            lpips_distance_std=0.0,
+            dreamsim_similarity_mean=0.0,
+            dreamsim_similarity_std=0.0,
             hps_score_mean=0.50,
             hps_score_std=0.0,
             aesthetics_score_mean=0.0,
@@ -134,10 +123,8 @@ class TestCompositeScore:
     def test_aesthetics_divided_by_ten(self) -> None:
         """Aesthetics is on a 1-10 scale and should be normalized to 0-1."""
         m = AggregatedMetrics(
-            dino_similarity_mean=0.0,
-            dino_similarity_std=0.0,
-            lpips_distance_mean=0.0,
-            lpips_distance_std=0.0,
+            dreamsim_similarity_mean=0.0,
+            dreamsim_similarity_std=0.0,
             hps_score_mean=0.0,
             hps_score_std=0.0,
             aesthetics_score_mean=10.0,
@@ -239,10 +226,8 @@ class TestPromptTemplateRender:
 class TestAggregatedMetricsSummaryDict:
     def test_all_keys_present(self) -> None:
         m = AggregatedMetrics(
-            dino_similarity_mean=0.1,
-            dino_similarity_std=0.2,
-            lpips_distance_mean=0.3,
-            lpips_distance_std=0.4,
+            dreamsim_similarity_mean=0.1,
+            dreamsim_similarity_std=0.2,
             hps_score_mean=0.5,
             hps_score_std=0.6,
             aesthetics_score_mean=0.7,
@@ -250,10 +235,8 @@ class TestAggregatedMetricsSummaryDict:
         )
         d = m.summary_dict()
         expected_keys = {
-            "dino_similarity_mean",
-            "dino_similarity_std",
-            "lpips_distance_mean",
-            "lpips_distance_std",
+            "dreamsim_similarity_mean",
+            "dreamsim_similarity_std",
             "hps_score_mean",
             "hps_score_std",
             "aesthetics_score_mean",
@@ -276,20 +259,16 @@ class TestAggregatedMetricsSummaryDict:
 
     def test_values_match_fields(self) -> None:
         m = AggregatedMetrics(
-            dino_similarity_mean=0.85,
-            dino_similarity_std=0.02,
-            lpips_distance_mean=0.15,
-            lpips_distance_std=0.01,
+            dreamsim_similarity_mean=0.85,
+            dreamsim_similarity_std=0.02,
             hps_score_mean=0.42,
             hps_score_std=0.03,
             aesthetics_score_mean=6.5,
             aesthetics_score_std=0.7,
         )
         d = m.summary_dict()
-        assert d["dino_similarity_mean"] == 0.85
-        assert d["dino_similarity_std"] == 0.02
-        assert d["lpips_distance_mean"] == 0.15
-        assert d["lpips_distance_std"] == 0.01
+        assert d["dreamsim_similarity_mean"] == 0.85
+        assert d["dreamsim_similarity_std"] == 0.02
         assert d["hps_score_mean"] == 0.42
         assert d["hps_score_std"] == 0.03
         assert d["aesthetics_score_mean"] == 6.5
@@ -297,10 +276,8 @@ class TestAggregatedMetricsSummaryDict:
 
     def test_returns_plain_dict(self) -> None:
         m = AggregatedMetrics(
-            dino_similarity_mean=0.0,
-            dino_similarity_std=0.0,
-            lpips_distance_mean=0.0,
-            lpips_distance_std=0.0,
+            dreamsim_similarity_mean=0.0,
+            dreamsim_similarity_std=0.0,
             hps_score_mean=0.0,
             hps_score_std=0.0,
             aesthetics_score_mean=0.0,
@@ -308,18 +285,16 @@ class TestAggregatedMetricsSummaryDict:
         )
         assert isinstance(m.summary_dict(), dict)
 
-    def test_exactly_fifteen_entries(self) -> None:
+    def test_exactly_nineteen_entries(self) -> None:
         m = AggregatedMetrics(
-            dino_similarity_mean=0.0,
-            dino_similarity_std=0.0,
-            lpips_distance_mean=0.0,
-            lpips_distance_std=0.0,
+            dreamsim_similarity_mean=0.0,
+            dreamsim_similarity_std=0.0,
             hps_score_mean=0.0,
             hps_score_std=0.0,
             aesthetics_score_mean=0.0,
             aesthetics_score_std=0.0,
         )
-        assert len(m.summary_dict()) == 21
+        assert len(m.summary_dict()) == 19
 
 
 # -- ConvergenceReason --------------------------------------------------------
@@ -419,7 +394,7 @@ class TestKnowledgeBase:
             experiment="add hex",
             category="color_palette",
             kept=True,
-            metric_delta={"dino": 0.02},
+            metric_delta={"dreamsim": 0.02},
             lesson="hex codes work",
             confirmed="hex codes work",
             rejected="",
@@ -431,7 +406,7 @@ class TestKnowledgeBase:
             experiment="add grain",
             category="texture",
             kept=False,
-            metric_delta={"dino": -0.01},
+            metric_delta={"dreamsim": -0.01},
             lesson="grain too much",
             confirmed="",
             rejected="grain doesn't help",
@@ -449,14 +424,14 @@ class TestKnowledgeBase:
             experiment="add hex",
             category="color_palette",
             kept=True,
-            metric_delta={"dino": 0.03},
+            metric_delta={"dreamsim": 0.03},
             lesson="hex codes work",
             confirmed="hex codes work",
             rejected="",
         )
         cat = kb.categories["color_palette"]
         assert "hex codes work" in cat.confirmed_insights
-        assert cat.best_dino_delta == 0.03
+        assert cat.best_perceptual_delta == 0.03
         assert "H1" in cat.hypothesis_ids
 
     def test_rejected_hypothesis_updates_category(self) -> None:
@@ -468,7 +443,7 @@ class TestKnowledgeBase:
             experiment="elaborate vocab",
             category="technique",
             kept=False,
-            metric_delta={"dino": -0.01},
+            metric_delta={"dreamsim": -0.01},
             lesson="too verbose",
             confirmed="",
             rejected="brushstrokes ignored",
@@ -520,7 +495,7 @@ class TestKnowledgeBase:
             experiment="add hex codes",
             category="color_palette",
             kept=True,
-            metric_delta={"dino": 0.02},
+            metric_delta={"dreamsim": 0.02},
             lesson="hex codes work",
             confirmed="hex codes work",
             rejected="",
@@ -532,7 +507,7 @@ class TestKnowledgeBase:
             experiment="add warm/cool descriptors",
             category="color_palette",
             kept=True,
-            metric_delta={"dino": 0.01},
+            metric_delta={"dreamsim": 0.01},
             lesson="temperature helps",
             confirmed="temperature helps",
             rejected="",
@@ -584,7 +559,7 @@ class TestKnowledgeBase:
             experiment="elaborate vocab",
             category="technique",
             kept=False,
-            metric_delta={"dino": -0.01},
+            metric_delta={"dreamsim": -0.01},
             lesson="too verbose",
             confirmed="",
             rejected="brushstrokes ignored",

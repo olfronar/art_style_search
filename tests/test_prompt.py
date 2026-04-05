@@ -278,10 +278,8 @@ class TestFormatTemplate:
 class TestFormatMetrics:
     def test_all_metrics_present(self) -> None:
         metrics = AggregatedMetrics(
-            dino_similarity_mean=0.7234,
-            dino_similarity_std=0.0123,
-            lpips_distance_mean=0.4567,
-            lpips_distance_std=0.0234,
+            dreamsim_similarity_mean=0.7234,
+            dreamsim_similarity_std=0.0123,
             hps_score_mean=0.2789,
             hps_score_std=0.0045,
             aesthetics_score_mean=6.1234,
@@ -297,10 +295,8 @@ class TestFormatMetrics:
 
     def test_format_uses_dash_prefix(self) -> None:
         metrics = AggregatedMetrics(
-            dino_similarity_mean=0.5,
-            dino_similarity_std=0.1,
-            lpips_distance_mean=0.3,
-            lpips_distance_std=0.05,
+            dreamsim_similarity_mean=0.5,
+            dreamsim_similarity_std=0.1,
             hps_score_mean=0.2,
             hps_score_std=0.01,
             aesthetics_score_mean=5.0,
@@ -308,7 +304,7 @@ class TestFormatMetrics:
         )
         output = _format_metrics(metrics)
         lines = output.strip().split("\n")
-        assert len(lines) == 21
+        assert len(lines) == 19
         for line in lines:
             assert line.startswith("- ")
 

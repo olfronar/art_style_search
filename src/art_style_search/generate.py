@@ -68,20 +68,7 @@ async def _generate_single(
             msg = f"Image {index}: no image data found in response parts"
             raise RuntimeError(msg)
 
-        except genai.errors.ClientError as exc:
-            last_exc = exc
-            delay = _BASE_DELAY * (2**attempt)
-            logger.warning(
-                "Image %d: ClientError on attempt %d/%d, retrying in %.1fs: %s",
-                index,
-                attempt + 1,
-                _MAX_RETRIES,
-                delay,
-                exc,
-            )
-            await asyncio.sleep(delay)
         except Exception as exc:
-            # Catch rate-limit or transient errors
             last_exc = exc
             delay = _BASE_DELAY * (2**attempt)
             logger.warning(

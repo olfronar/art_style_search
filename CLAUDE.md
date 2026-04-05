@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Self-improving loop that optimizes a meta-prompt for art-style capture and image recreation. The meta-prompt (800-1200 words) instructs a captioner (Gemini Pro) how to describe images with labeled style-guidance sections so that: (a) a generator (Gemini Flash) can recreate them from the captions, and (b) the style guidance can be reused to generate new art in the same style. Inspired by karpathy/autoresearch.
+Self-improving loop that optimizes a meta-prompt for art-style capture and image recreation. The meta-prompt (1200-1800 words) instructs a captioner (Gemini Pro) how to describe images with labeled style-guidance sections so that: (a) a generator (Gemini Flash) can recreate them from the captions, and (b) the style guidance can be reused to generate new art in the same style. Inspired by karpathy/autoresearch.
 
 ## Architecture
 
@@ -14,7 +14,7 @@ Self-improving loop that optimizes a meta-prompt for art-style capture and image
 
 ## Loop Flow
 
-0. **Zero-step**: Fix 10 reference images. Caption them, analyze style → `StyleProfile` + N diverse initial meta-prompts. Evaluate all, pick best.
+0. **Zero-step**: Fix 20 reference images. Caption them, analyze style → `StyleProfile` + N diverse initial meta-prompts. Evaluate all, pick best.
 1. Claude proposes N experiments in a single batched call (hypothesis-driven template variants, `<branch>` tags) from shared KB, each with a different hypothesis
 2. Each experiment in parallel: meta-prompt + reference → caption → generate → evaluate
 3. Compare each (original, generated) pair: per-image paired metrics (DreamSim, HPS, aesthetics) + Gemini vision comparison (style + subject fidelity)
@@ -57,7 +57,7 @@ uv run python -m art_style_search clean --all        # Remove all runs
 - `knowledge.py` - Knowledge Base maintenance (hypothesis tracking, open problems, caption diffs)
 - `models.py` - ModelRegistry: lazy-load DreamSim/HPS/Aesthetics/Texture/SSIM with per-model locks
 - `evaluate.py` - Dispatches metrics per image via asyncio.to_thread + Gemini vision comparison
-- `utils.py` - Shared helpers: Anthropic streaming/text extraction, Gemini image part builder, MIME map
+- `utils.py` - Shared helpers: Anthropic streaming/text extraction, Gemini image part builder, MIME map, XML tag extraction, async retry
 - `runs.py` - Run directory management: resolve/create/list/clean isolated run directories under `runs/`
 - `state.py` - JSON persistence (state.json + per-iteration logs)
 - `loop.py` - Experiment-based orchestration loop (zero-step → N parallel experiments per iteration → shared KB → convergence)

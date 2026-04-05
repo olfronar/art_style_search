@@ -20,7 +20,7 @@ from art_style_search.types import (
     VisionDimensionScore,
     VisionScores,
 )
-from art_style_search.utils import image_to_gemini_part
+from art_style_search.utils import async_retry, image_to_gemini_part
 
 logger = logging.getLogger(__name__)
 
@@ -93,28 +93,17 @@ async def _compare_vision_single(
         _VISION_SINGLE_PROMPT.format(caption=caption[:600]),
     ]
 
-    last_exc: Exception | None = None
-    for attempt in range(3):
-        try:
-            async with semaphore:
-                response = await client.aio.models.generate_content(model=model, contents=contents)
-            text = response.text or ""
-            scores = _parse_vision_verdicts(text)
-            return text, scores
-        except Exception as exc:
-            last_exc = exc
-            delay = 3.0 * (2**attempt)
-            logger.warning(
-                "Vision %s attempt %d/3 failed: %s — retrying in %.0fs",
-                ref_path.name,
-                attempt + 1,
-                exc,
-                delay,
-            )
-            await asyncio.sleep(delay)
+    async def _call() -> tuple[str, VisionScores]:
+        async with semaphore:
+            response = await client.aio.models.generate_content(model=model, contents=contents)
+        text = response.text or ""
+        return text, _parse_vision_verdicts(text)
 
-    logger.error("Vision %s failed after 3 retries: %s — using neutral defaults", ref_path.name, last_exc)
-    return "", VisionScores.default()
+    try:
+        return await async_retry(_call, label=f"Vision {ref_path.name}")
+    except RuntimeError:
+        logger.error("Vision %s failed after retries — using neutral defaults", ref_path.name)
+        return "", VisionScores.default()
 
 
 async def compare_vision_per_image(
@@ -196,29 +185,22 @@ async def pairwise_compare_experiments(
         )
     contents.append(_PAIRWISE_COMPARE_PROMPT)
 
-    last_exc: Exception | None = None
-    for attempt in range(3):
-        try:
-            async with semaphore:
-                response = await client.aio.models.generate_content(model=model, contents=contents)
-            text = response.text or ""
+    async def _call() -> tuple[str, float]:
+        async with semaphore:
+            response = await client.aio.models.generate_content(model=model, contents=contents)
+        text = response.text or ""
+        winner_match = re.search(r"<winner>(\w+)</winner>", text)
+        rationale_match = re.search(r"<rationale>(.*?)</rationale>", text, re.DOTALL)
+        winner = winner_match.group(1).upper() if winner_match else "TIE"
+        rationale = rationale_match.group(1).strip() if rationale_match else text[:300]
+        score = {"A": 1.0, "B": 0.0, "TIE": 0.5}.get(winner, 0.5)
+        return (rationale, score)
 
-            winner_match = re.search(r"<winner>(\w+)</winner>", text)
-            rationale_match = re.search(r"<rationale>(.*?)</rationale>", text, re.DOTALL)
-
-            winner = winner_match.group(1).upper() if winner_match else "TIE"
-            rationale = rationale_match.group(1).strip() if rationale_match else text[:300]
-
-            score = {"A": 1.0, "B": 0.0, "TIE": 0.5}.get(winner, 0.5)
-            return (rationale, score)
-        except Exception as exc:
-            last_exc = exc
-            delay = 3.0 * (2**attempt)
-            logger.warning("Pairwise comparison attempt %d/3 failed: %s — retrying in %.0fs", attempt + 1, exc, delay)
-            await asyncio.sleep(delay)
-
-    logger.error("Pairwise comparison failed after 3 retries: %s", last_exc)
-    return ("Comparison failed", 0.5)
+    try:
+        return await async_retry(_call, label="Pairwise comparison")
+    except RuntimeError:
+        logger.error("Pairwise comparison failed after retries")
+        return ("Comparison failed", 0.5)
 
 
 def _check_section_ordering(caption_text: str, expected_sections: list[str]) -> str:

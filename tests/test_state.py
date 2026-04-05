@@ -49,8 +49,7 @@ def make_caption(*, index: int = 0) -> Caption:
 
 def make_metric_scores(*, seed: float = 0.0) -> MetricScores:
     return MetricScores(
-        dino_similarity=0.72 + seed * 0.01,
-        lpips_distance=0.35 - seed * 0.005,
+        dreamsim_similarity=0.72 + seed * 0.01,
         hps_score=0.26 + seed * 0.002,
         aesthetics_score=6.1 + seed * 0.1,
     )
@@ -58,10 +57,8 @@ def make_metric_scores(*, seed: float = 0.0) -> MetricScores:
 
 def make_aggregated_metrics(*, seed: float = 0.0) -> AggregatedMetrics:
     return AggregatedMetrics(
-        dino_similarity_mean=0.71 + seed * 0.01,
-        dino_similarity_std=0.03,
-        lpips_distance_mean=0.36 - seed * 0.005,
-        lpips_distance_std=0.02,
+        dreamsim_similarity_mean=0.71 + seed * 0.01,
+        dreamsim_similarity_std=0.03,
         hps_score_mean=0.25 + seed * 0.002,
         hps_score_std=0.01,
         aesthetics_score_mean=5.9 + seed * 0.1,
@@ -176,8 +173,7 @@ class TestToDict:
         ms = make_metric_scores(seed=2.0)
         d = _to_dict(ms)
         assert set(d.keys()) == {
-            "dino_similarity",
-            "lpips_distance",
+            "dreamsim_similarity",
             "hps_score",
             "aesthetics_score",
             "color_histogram",
@@ -232,7 +228,7 @@ class TestToDict:
         d = {"a": make_caption(), "b": [make_metric_scores()]}
         result = _to_dict(d)
         assert isinstance(result["a"]["image_path"], str)
-        assert isinstance(result["b"][0]["dino_similarity"], float)
+        assert isinstance(result["b"][0]["dreamsim_similarity"], float)
 
 
 # ---------------------------------------------------------------------------
@@ -491,7 +487,7 @@ def _make_knowledge_base() -> KnowledgeBase:
         experiment="Add hex codes",
         category="color_palette",
         kept=True,
-        metric_delta={"dino": 0.03, "lpips": -0.01},
+        metric_delta={"dreamsim": 0.03},
         lesson="Hex codes improve color matching",
         confirmed="Hex codes improve color matching",
         rejected="",
@@ -503,7 +499,7 @@ def _make_knowledge_base() -> KnowledgeBase:
         experiment="Add warm/cool descriptors",
         category="color_palette",
         kept=False,
-        metric_delta={"dino": -0.005},
+        metric_delta={"dreamsim": -0.005},
         lesson="Temperature terms not followed",
         confirmed="",
         rejected="Temperature terms ignored by generator",
