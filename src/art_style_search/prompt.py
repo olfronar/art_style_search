@@ -389,7 +389,7 @@ async def propose_initial_templates(
 
     logger.info("Requesting %d initial templates (%s)", num_branches, model)
 
-    text = await client.call(model=model, system=system, user=user, max_tokens=48000)
+    text = await client.call(model=model, system=system, user=user, max_tokens=24000)
 
     templates = _parse_initial_templates(text, num_branches)
 
@@ -738,7 +738,7 @@ async def propose_experiments(
         "Requesting %d experiment proposals (%s) — context: ~%d words", num_experiments, model, len(user.split())
     )
 
-    text = await client.call(model=model, system=system, user=user, max_tokens=60000)
+    text = await client.call(model=model, system=system, user=user, max_tokens=30000)
 
     results = _parse_refinement_branches(text, num_experiments)
 
@@ -829,7 +829,7 @@ async def synthesize_templates(
 
     logger.info("Requesting template synthesis (%s)", model)
 
-    text = await client.call(model=model, system=system, user=user, max_tokens=24000)
+    text = await client.call(model=model, system=system, user=user, max_tokens=12000)
 
     merged = _parse_template(text)
     rationale = ""
@@ -913,7 +913,7 @@ async def review_iteration(
         user_parts.append(f"\n{kb_text}\n")
 
     user = "\n".join(user_parts)
-    text = await client.call(model=model, system=_REVIEW_SYSTEM, user=user, max_tokens=8000)
+    text = await client.call(model=model, system=_REVIEW_SYSTEM, user=user, max_tokens=6000)
 
     # Parse response
     assessments_match = re.search(r"<assessments>(.*?)</assessments>", text, re.DOTALL)
