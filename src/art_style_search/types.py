@@ -183,26 +183,24 @@ def adaptive_composite_score(
     if len(all_results) < 2:
         return composite_score(target)
 
-    # Define metrics: (extractor, direction) where direction=1 means higher=better
-    metric_defs: list[tuple[str, Callable[[AggregatedMetrics], float], int]] = [
-        ("dreamsim", lambda r: r.dreamsim_similarity_mean, 1),
-        ("hps", lambda r: _normalize_hps(r.hps_score_mean), 1),
-        ("aesthetics", lambda r: r.aesthetics_score_mean / 10.0, 1),
-        ("color_hist", lambda r: r.color_histogram_mean, 1),
-        ("texture", lambda r: r.texture_mean, 1),
-        ("ssim", lambda r: r.ssim_mean, 1),
-        ("style_consistency", lambda r: r.style_consistency, 1),
-        ("v_style", lambda r: r.vision_style, 1),
-        ("v_subject", lambda r: r.vision_subject, 1),
-        ("v_composition", lambda r: r.vision_composition, 1),
+    # All metrics are higher=better after normalization
+    metric_extractors: list[Callable[[AggregatedMetrics], float]] = [
+        lambda r: r.dreamsim_similarity_mean,
+        lambda r: _normalize_hps(r.hps_score_mean),
+        lambda r: r.aesthetics_score_mean / 10.0,
+        lambda r: r.color_histogram_mean,
+        lambda r: r.texture_mean,
+        lambda r: r.ssim_mean,
+        lambda r: r.style_consistency,
+        lambda r: r.vision_style,
+        lambda r: r.vision_subject,
+        lambda r: r.vision_composition,
     ]
-
-    # Compute stddev and normalized value for each metric
 
     weighted_sum = 0.0
     total_weight = 0.0
 
-    for _name, extractor, direction in metric_defs:
+    for extractor in metric_extractors:
         values = [extractor(r) for r in all_results]
         target_val = extractor(target)
 
@@ -210,16 +208,13 @@ def adaptive_composite_score(
         std = math.sqrt(sum((v - mean) ** 2 for v in values) / len(values))
 
         if std < 1e-8:
-            continue  # metric is identical across experiments — not informative
+            continue
 
-        # Normalize target value to [0, 1] using min/max
         vmin, vmax = min(values), max(values)
         rng = vmax - vmin
         if rng < 1e-8:
             continue
         normalized = (target_val - vmin) / rng
-        if direction < 0:
-            normalized = 1.0 - normalized
 
         weighted_sum += std * normalized
         total_weight += std

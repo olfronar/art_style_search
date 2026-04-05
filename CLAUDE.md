@@ -51,7 +51,7 @@ uv run python -m art_style_search clean --all        # Remove all runs
 - `config.py` - CLI argument parsing → Config dataclass
 - `analyze.py` - Zero-step: parallel Gemini+Claude style analysis → StyleProfile + initial PromptTemplate
 - `caption.py` - Gemini Pro captioning with disk cache
-- `prompt.py` - Claude meta-prompt proposal/refinement (template structure + values); `propose_experiments` batches N proposals in one call using `<branch>` tags; `refine_template` exists for single-experiment use; `RefinementResult` dataclass for structured returns; `review_iteration` provides independent CycleResearcher-inspired review of experiment outcomes
+- `prompt.py` - Claude meta-prompt proposal/refinement (template structure + values); `propose_experiments` batches N proposals in one call using `<branch>` tags; `RefinementResult` dataclass for structured returns; `review_iteration` provides independent CycleResearcher-inspired review of experiment outcomes
 - `generate.py` - Gemini Flash image generation with semaphore + retry
 - `experiment.py` - Single-experiment execution (caption + generate + evaluate), `ExperimentProposal` dataclass, result collection helpers
 - `knowledge.py` - Knowledge Base maintenance (hypothesis tracking, open problems, caption diffs)

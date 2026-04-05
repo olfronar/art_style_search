@@ -50,19 +50,16 @@ async def _caption_single(
         cache_file = cache_dir / f"{image_path.stem}.json"
         current_mtime = image_path.stat().st_mtime
 
-        if cache_file.exists():
-            try:
-                cached = json.loads(cache_file.read_text(encoding="utf-8"))
-                if cached.get("mtime") == current_mtime and cached.get("cache_key", "") == cache_key:
-                    logger.debug("Cache hit for %s", image_path.name)
-                    return Caption(image_path=Path(cached["image_path"]), text=cached["text"])
-            except (json.JSONDecodeError, KeyError):
-                logger.warning("Corrupt cache file %s, will re-caption", cache_file)
+        try:
+            cached = json.loads(cache_file.read_text(encoding="utf-8"))
+            if cached.get("mtime") == current_mtime and cached.get("cache_key", "") == cache_key:
+                logger.debug("Cache hit for %s", image_path.name)
+                return Caption(image_path=Path(cached["image_path"]), text=cached["text"])
+        except (FileNotFoundError, json.JSONDecodeError, KeyError):
+            pass
 
     # Cache miss — call Gemini with retry on transient errors
     logger.info("Captioning %s via %s", image_path.name, model)
-
-    import asyncio as _asyncio
 
     last_exc: Exception | None = None
     for attempt in range(3):
@@ -87,7 +84,7 @@ async def _caption_single(
                 exc,
                 delay,
             )
-            await _asyncio.sleep(delay)
+            await asyncio.sleep(delay)
     else:
         msg = f"Captioning {image_path.name} failed after 3 retries"
         raise RuntimeError(msg) from last_exc
@@ -109,7 +106,7 @@ async def _caption_single(
         cache_data = {
             "image_path": str(image_path),
             "text": caption_text,
-            "mtime": image_path.stat().st_mtime,
+            "mtime": current_mtime,
             "cache_key": cache_key,
         }
         cache_file = cache_dir / f"{image_path.stem}.json"

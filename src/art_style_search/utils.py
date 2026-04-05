@@ -24,6 +24,8 @@ MIME_MAP: dict[str, str] = {
     ".bmp": "image/bmp",
 }
 
+IMAGE_EXTENSIONS: frozenset[str] = frozenset(MIME_MAP)
+
 
 def image_to_gemini_part(path: Path) -> genai_types.Part:
     """Read an image file and return a Gemini Part with correct MIME type."""
@@ -44,7 +46,6 @@ async def stream_message(client: anthropic.AsyncAnthropic, **kwargs: object) -> 
 
     Retries on transient connection errors (dropped connections, incomplete reads).
     """
-    import asyncio
 
     last_exc: Exception | None = None
     for attempt in range(_STREAM_MAX_RETRIES):

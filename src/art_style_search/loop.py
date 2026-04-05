@@ -50,11 +50,9 @@ from art_style_search.types import (
     composite_score,
     improvement_epsilon,
 )
-from art_style_search.utils import ReasoningClient
+from art_style_search.utils import IMAGE_EXTENSIONS, ReasoningClient
 
 logger = logging.getLogger(__name__)
-
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 
 
 # ---------------------------------------------------------------------------
