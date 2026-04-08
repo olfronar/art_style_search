@@ -10,7 +10,7 @@ from pathlib import Path
 from google import genai
 
 from art_style_search.types import Caption, PromptSection, PromptTemplate, StyleProfile
-from art_style_search.utils import ReasoningClient, extract_xml_tag, image_to_gemini_part
+from art_style_search.utils import ReasoningClient, async_retry, extract_xml_tag, image_to_gemini_part
 
 logger = logging.getLogger(__name__)
 
@@ -196,8 +196,12 @@ async def _gemini_analyze(
     contents.append(_GEMINI_ANALYSIS_PROMPT)
 
     logger.info("Sending %d images to Gemini (%s) for style analysis", len(reference_paths), model)
-    response = await client.aio.models.generate_content(model=model, contents=contents)
-    return response.text
+
+    async def _call() -> str:
+        response = await client.aio.models.generate_content(model=model, contents=contents)
+        return response.text
+
+    return await async_retry(_call, label="Gemini style analysis")
 
 
 async def _claude_analyze(
