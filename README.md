@@ -23,7 +23,7 @@ Reference Image + Meta-Prompt
         |
         v
   Compare with Original
-  (DreamSim, Color, Texture, SSIM, HPS, Aesthetics + Gemini vision)
+  (DreamSim, Color, SSIM, HPS, Aesthetics + Gemini vision)
         |
         v
   Claude (optimizer)
@@ -106,9 +106,8 @@ Each metric compares a generated image against its specific paired original:
 | Metric | Weight | Measures | Better |
 |--------|--------|----------|--------|
 | **DreamSim** | 40% | Human-aligned perceptual similarity | Higher |
-| **Color histogram** | 18% | HSV histogram intersection | Higher |
-| **SSIM** | 8% | Structural similarity index | Higher |
-| **Texture** | 7% | Gabor filter energy cosine similarity | Higher |
+| **Color histogram** | 22% | HSV histogram intersection | Higher |
+| **SSIM** | 11% | Structural similarity index | Higher |
 | **Aesthetics** | 6% | Visual quality (LAION predictor, 1-10) | Higher |
 | **HPS v2** | 5% | Caption-image alignment | Higher |
 | **Style consistency** | 4% | Jaccard overlap of [Art Style] blocks | Higher |
@@ -129,7 +128,7 @@ src/art_style_search/
   experiment.py  Single-experiment execution pipeline
   evaluate.py    Per-image paired metrics + Gemini vision comparison
   knowledge.py   Knowledge Base maintenance (hypothesis tracking)
-  models.py      Lazy-loaded DreamSim/HPS/Aesthetics/Texture/SSIM models
+  models.py      Lazy-loaded DreamSim/HPS/Aesthetics/SSIM models
   runs.py        Run directory management (isolation, listing, cleanup)
   types.py       Shared dataclasses + KnowledgeBase
   config.py      CLI argument parsing

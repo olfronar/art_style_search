@@ -223,7 +223,7 @@ async def run_experiment(
         caption_text = cap.text if idx < 3 else f"{cap.text[:300]}..."
         roundtrip_details.append(
             f"Image ({ref_p.name}): DS={sc.dreamsim_similarity:.3f} "
-            f"Color={sc.color_histogram:.3f} Tex={sc.texture:.3f} SSIM={sc.ssim:.3f} "
+            f"Color={sc.color_histogram:.3f} SSIM={sc.ssim:.3f} "
             f"HPS={sc.hps_score:.3f} Aes={sc.aesthetics_score:.1f} {vl}{trend}\n"
             f"  Caption: {caption_text}"
         )

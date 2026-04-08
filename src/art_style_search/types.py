@@ -25,7 +25,6 @@ class MetricScores:
     hps_score: float  # higher = better, human preference for caption-image alignment
     aesthetics_score: float  # higher = better, 1-10 scale
     color_histogram: float = 0.0  # higher = better, HSV histogram similarity [0, 1]
-    texture: float = 0.0  # higher = better, Gabor filter energy cosine similarity [0, 1]
     ssim: float = 0.0  # higher = better, structural similarity index [0, 1]
     vision_style: float = 0.5  # higher = better, ternary: MATCH=1.0, PARTIAL=0.5, MISS=0.0
     vision_subject: float = 0.5  # higher = better, ternary: MATCH=1.0, PARTIAL=0.5, MISS=0.0
@@ -83,8 +82,6 @@ class AggregatedMetrics:
     aesthetics_score_std: float
     color_histogram_mean: float = 0.0
     color_histogram_std: float = 0.0
-    texture_mean: float = 0.0
-    texture_std: float = 0.0
     ssim_mean: float = 0.0
     ssim_std: float = 0.0
 
@@ -110,8 +107,6 @@ class AggregatedMetrics:
             "aesthetics_score_std": self.aesthetics_score_std,
             "color_histogram_mean": self.color_histogram_mean,
             "color_histogram_std": self.color_histogram_std,
-            "texture_mean": self.texture_mean,
-            "texture_std": self.texture_std,
             "ssim_mean": self.ssim_mean,
             "ssim_std": self.ssim_std,
             "style_consistency": self.style_consistency,
@@ -150,7 +145,7 @@ def composite_score(m: AggregatedMetrics) -> float:
     """Fixed-weight composite score used for absolute quality comparison.
 
     All metrics normalized to ~[0, 1] before weighting.
-    Weights: DreamSim 40%, Color 18%, Texture 7%, SSIM 8%, HPS 5%,
+    Weights: DreamSim 40%, Color 22%, SSIM 11%, HPS 5%,
     Aesthetics 6%, StyleConsistency 4%, Vision 4%+4%+4%=12%.  Total = 1.00.
     Includes a consistency penalty based on per-image score variance.
     """
@@ -158,9 +153,8 @@ def composite_score(m: AggregatedMetrics) -> float:
         0.40 * m.dreamsim_similarity_mean
         + 0.05 * _normalize_hps(m.hps_score_mean)
         + 0.06 * (m.aesthetics_score_mean / 10.0)
-        + 0.18 * m.color_histogram_mean
-        + 0.07 * m.texture_mean
-        + 0.08 * m.ssim_mean
+        + 0.22 * m.color_histogram_mean
+        + 0.11 * m.ssim_mean
         + 0.04 * m.style_consistency
         + 0.04 * m.vision_style
         + 0.04 * m.vision_subject
@@ -189,7 +183,6 @@ def adaptive_composite_score(
         lambda r: _normalize_hps(r.hps_score_mean),
         lambda r: r.aesthetics_score_mean / 10.0,
         lambda r: r.color_histogram_mean,
-        lambda r: r.texture_mean,
         lambda r: r.ssim_mean,
         lambda r: r.style_consistency,
         lambda r: r.vision_style,

@@ -29,17 +29,16 @@ class TestCompositeScore:
             aesthetics_score_mean=7.0,
             aesthetics_score_std=0.5,
         )
-        # Current formula: DreamSim 40%, Color 18%, Texture 7%, SSIM 8%, HPS 5%,
+        # Current formula: DreamSim 40%, Color 22%, SSIM 11%, HPS 5%,
         # Aesthetics 6%, StyleConsistency 4%, Vision 4%+4%+4%=12%.
-        # color_histogram/texture/ssim default to 0.0, vision_* default to 0.5
+        # color_histogram/ssim default to 0.0, vision_* default to 0.5
         # HPS normalized: min(0.28/0.35, 1.0) = 0.8
         base = (
             0.40 * 0.8
             + 0.05 * min(0.28 / 0.35, 1.0)
             + 0.06 * (7.0 / 10.0)
-            + 0.18 * 0.0  # color_histogram
-            + 0.07 * 0.0  # texture
-            + 0.08 * 0.0  # ssim
+            + 0.22 * 0.0  # color_histogram
+            + 0.11 * 0.0  # ssim
             + 0.04 * 0.0  # style_consistency
             + 0.04 * 0.5  # vision_style
             + 0.04 * 0.5  # vision_subject
@@ -89,8 +88,8 @@ class TestCompositeScore:
         assert composite_score(high_color) > composite_score(low_color)
 
     def test_weights_sum_to_one(self) -> None:
-        """Verify the coefficient magnitudes sum to 1.0 (10 metrics)."""
-        assert abs((0.40 + 0.05 + 0.06 + 0.18 + 0.07 + 0.08 + 0.04 + 0.04 + 0.04 + 0.04) - 1.0) < 1e-9
+        """Verify the coefficient magnitudes sum to 1.0 (9 metrics)."""
+        assert abs((0.40 + 0.05 + 0.06 + 0.22 + 0.11 + 0.04 + 0.04 + 0.04 + 0.04) - 1.0) < 1e-9
 
     def test_hps_normalized(self) -> None:
         """HPS v2 scores (~0.25-0.35) should be normalized to [0,1] via /0.35 ceiling."""
@@ -243,8 +242,6 @@ class TestAggregatedMetricsSummaryDict:
             "aesthetics_score_std",
             "color_histogram_mean",
             "color_histogram_std",
-            "texture_mean",
-            "texture_std",
             "ssim_mean",
             "ssim_std",
             "style_consistency",
@@ -294,7 +291,7 @@ class TestAggregatedMetricsSummaryDict:
             aesthetics_score_mean=0.0,
             aesthetics_score_std=0.0,
         )
-        assert len(m.summary_dict()) == 19
+        assert len(m.summary_dict()) == 17
 
 
 # -- ConvergenceReason --------------------------------------------------------

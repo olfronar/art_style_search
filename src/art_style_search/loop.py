@@ -109,11 +109,10 @@ def _log_experiment_results(results: list[IterationResult], log_dir: Path) -> No
         save_iteration_log(r, log_dir)
         m = r.aggregated
         logger.info(
-            "Exp %d — DS=%.3f Color=%.3f Tex=%.3f SSIM=%.3f HPS=%.3f Aes=%.1f V[S=%.2f Su=%.2f Co=%.2f] %s",
+            "Exp %d — DS=%.3f Color=%.3f SSIM=%.3f HPS=%.3f Aes=%.1f V[S=%.2f Su=%.2f Co=%.2f] %s",
             r.branch_id,
             m.dreamsim_similarity_mean,
             m.color_histogram_mean,
-            m.texture_mean,
             m.ssim_mean,
             m.hps_score_mean,
             m.aesthetics_score_mean,

@@ -55,7 +55,7 @@ uv run python -m art_style_search clean --all        # Remove all runs
 - `generate.py` - Gemini Flash image generation with semaphore + retry
 - `experiment.py` - Single-experiment execution (caption + generate + evaluate), `ExperimentProposal` dataclass, result collection helpers
 - `knowledge.py` - Knowledge Base maintenance (hypothesis tracking, open problems, caption diffs)
-- `models.py` - ModelRegistry: lazy-load DreamSim/HPS/Aesthetics/Texture/SSIM with per-model locks
+- `models.py` - ModelRegistry: lazy-load DreamSim/HPS/Aesthetics/SSIM with per-model locks
 - `evaluate.py` - Dispatches metrics per image via asyncio.to_thread + Gemini vision comparison
 - `utils.py` - Shared helpers: Anthropic streaming/text extraction, Gemini image part builder, MIME map, XML tag extraction, async retry
 - `runs.py` - Run directory management: resolve/create/list/clean isolated run directories under `runs/`
@@ -76,9 +76,8 @@ uv run python -m art_style_search clean --all        # Remove all runs
 
 Each metric compares a generated image against its specific paired original (not all references):
 - **DreamSim** (40%): Human-aligned perceptual similarity capturing semantic content, layout, color, pose (replaces DINO + LPIPS). Higher = better.
-- **Color histogram** (18%): HSV histogram intersection. Higher = better.
-- **Texture** (7%): Gabor filter energy cosine similarity. Higher = better.
-- **SSIM** (8%): Structural similarity index for pixel-level comparison. Higher = better.
+- **Color histogram** (22%): HSV histogram intersection. Higher = better.
+- **SSIM** (11%): Structural similarity index for pixel-level comparison. Higher = better.
 - **HPS v2** (5%): Caption-image alignment (normalized: raw / 0.35, clamped to 1.0). Higher = better.
 - **LAION Aesthetics** (6%): Aesthetic quality predictor (1-10 scale, normalized /10). Higher = better.
 - **Style consistency** (4%): Jaccard word-overlap of [Art Style] blocks across captions. Higher = more consistent shared style guidance.

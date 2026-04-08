@@ -510,7 +510,6 @@ async def propose_experiments(
         "content, structural layout, color, and mid-level features (pose, composition). "
         "0.4=somewhat similar, 0.6=good reproduction, 0.8+=very close match.\n"
         "- Color histogram (higher=better): color palette match. 0.7=similar, 0.9+=very close.\n"
-        "- Texture (higher=better): Gabor filter energy similarity for brush strokes/patterns. 0.7=similar, 0.9+=very close.\n"
         "- SSIM (higher=better): pixel-level structural similarity. 0.5=moderate, 0.7=good, 0.9+=near-identical.\n"
         "- HPS v2 (higher=better): caption-image alignment. Range 0.20-0.30.\n"
         "- Aesthetics (higher=better, 1-10): visual quality. 5=mediocre, 7=good, 8+=excellent.\n"

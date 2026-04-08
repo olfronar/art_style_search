@@ -386,7 +386,6 @@ def aggregate(scores: list[MetricScores]) -> AggregatedMetrics:
     hps = [s.hps_score for s in scores]
     aes = [s.aesthetics_score for s in scores]
     color_vals = [s.color_histogram for s in scores]
-    texture_vals = [s.texture for s in scores]
     ssim_vals = [s.ssim for s in scores]
     v_style = [s.vision_style for s in scores]
     v_subject = [s.vision_subject for s in scores]
@@ -401,8 +400,6 @@ def aggregate(scores: list[MetricScores]) -> AggregatedMetrics:
         aesthetics_score_std=_std(aes),
         color_histogram_mean=_mean(color_vals),
         color_histogram_std=_std(color_vals),
-        texture_mean=_mean(texture_vals),
-        texture_std=_std(texture_vals),
         ssim_mean=_mean(ssim_vals),
         ssim_std=_std(ssim_vals),
         vision_style=_mean(v_style),
@@ -427,7 +424,6 @@ def _compute_single_sync(
         hps_score=registry.compute_hps(generated, prompt),
         aesthetics_score=registry.compute_aesthetics(generated),
         color_histogram=registry.compute_color_histogram(generated, ref),
-        texture=registry.compute_texture(generated, ref),
         ssim=registry.compute_ssim(generated, ref),
     )
 

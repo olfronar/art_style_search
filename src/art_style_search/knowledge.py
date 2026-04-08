@@ -47,7 +47,6 @@ def update_knowledge_base(
             "hps": result.aggregated.hps_score_mean - best_metrics.hps_score_mean,
             "aesthetics": result.aggregated.aesthetics_score_mean - best_metrics.aesthetics_score_mean,
             "color_histogram": result.aggregated.color_histogram_mean - best_metrics.color_histogram_mean,
-            "texture": result.aggregated.texture_mean - best_metrics.texture_mean,
             "ssim": result.aggregated.ssim_mean - best_metrics.ssim_mean,
             "vision_style": result.aggregated.vision_style - best_metrics.vision_style,
             "vision_subject": result.aggregated.vision_subject - best_metrics.vision_subject,

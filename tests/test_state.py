@@ -177,7 +177,6 @@ class TestToDict:
             "hps_score",
             "aesthetics_score",
             "color_histogram",
-            "texture",
             "ssim",
             "vision_style",
             "vision_subject",
