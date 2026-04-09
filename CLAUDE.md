@@ -25,6 +25,8 @@ Self-improving loop that optimizes a meta-prompt for art-style capture and image
 
 ## Commands
 
+This project uses [**uv**](https://docs.astral.sh/uv/) as its package and tool manager. Every Python command goes through `uv run`, dependencies are installed with `uv sync`, and external CLI tools (e.g. `pre-commit`) should be installed via `uv tool install <name>` — not `pipx` or `brew`.
+
 ```bash
 uv sync                                              # Install all dependencies
 uv run ruff check .                                  # Lint
@@ -37,6 +39,7 @@ uv run python -m art_style_search --help             # Show all CLI options
 uv run python -m art_style_search list               # List all runs with status
 uv run python -m art_style_search clean --run NAME   # Remove a specific run
 uv run python -m art_style_search clean --all        # Remove all runs
+uv tool install pre-commit                           # Install the pre-commit CLI (optional)
 ```
 
 ## Environment Variables

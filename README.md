@@ -169,7 +169,10 @@ src/art_style_search/
 
 ## Development
 
+This project uses [`uv`](https://docs.astral.sh/uv/) as the package and tool manager. Every Python command goes through `uv run`, and external CLI tools should be installed via `uv tool install <name>` so they stay isolated from your system Python.
+
 ```bash
+uv sync                  # Install/update dependencies
 uv run ruff check .      # Lint
 uv run ruff format .     # Format
 uv run pytest tests/     # Run tests
@@ -177,7 +180,12 @@ uv run pytest tests/     # Run tests
 
 Ruff handles both linting and formatting (config in `pyproject.toml`, line length 120).
 
-Optional: install [pre-commit](https://pre-commit.com/) and run `pre-commit install` to enable the `gitleaks` hook from `.pre-commit-config.yaml`, which scans staged changes for accidentally-committed secrets.
+Optional — enable the [`gitleaks`](https://github.com/gitleaks/gitleaks) secret-scanning hook from `.pre-commit-config.yaml` so accidentally-staged API keys are caught before they reach history:
+
+```bash
+uv tool install pre-commit   # Install the pre-commit CLI (isolated via uv)
+pre-commit install           # Wire it into .git/hooks/pre-commit
+```
 
 ## Acknowledgements
 
