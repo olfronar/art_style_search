@@ -4,10 +4,18 @@ The loop optimizes a **meta-prompt** — instructions for how to caption images
 so that the captions can recreate the originals via image generation.
 
 Each iteration:
-1. Claude proposes N diverse experiments (hypothesis-driven template variants)
+1. The reasoning model proposes N diverse experiments (hypothesis-driven template variants)
 2. Each experiment: caption + generate + evaluate in parallel
-3. Best experiment updates the shared state; all results feed into the Knowledge Base
-4. Check convergence (plateau / Claude stop / max iterations)
+3. Top experiments are synthesised; pairwise vision comparison and independent review run
+4. Best experiment updates the shared state; all results feed into the Knowledge Base
+5. Check convergence (plateau / reasoning-model stop / max iterations)
+
+``run()`` is intentionally thin — it orchestrates a pipeline of named phase
+helpers (``_setup_run_context`` → ``_zero_step`` → per-iteration pipeline →
+``_finalize_run``).  Each helper owns one responsibility and can be audited
+in isolation.  The per-iteration helpers communicate via a small
+``IterationRanking`` dataclass so no mutable state is captured through
+closure.
 """
 
 from __future__ import annotations
@@ -16,7 +24,9 @@ import asyncio
 import concurrent.futures
 import logging
 import random
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from google import genai
 
@@ -43,6 +53,7 @@ from art_style_search.prompt import (
 from art_style_search.scoring import adaptive_composite_score, composite_score, improvement_epsilon
 from art_style_search.state import load_state, save_iteration_log, save_state
 from art_style_search.types import (
+    AggregatedMetrics,
     ConvergenceReason,
     IterationResult,
     KnowledgeBase,
@@ -141,24 +152,78 @@ def _build_ref_gen_pairs(result: IterationResult) -> list[tuple[Path, Path]]:
     return pairs
 
 
+# Max experiment results to persist in state.json (older ones are in iteration logs)
+_MAX_PERSISTED_HISTORY = 30
+
+
+# ---------------------------------------------------------------------------
+# Per-run and per-iteration data carriers
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class RunContext:
+    """Immutable per-run dependencies passed to iteration helpers.
+
+    Holds clients, semaphores, registry, and config so per-phase helpers
+    don't need 8-parameter signatures.  ``fixed_refs`` lives on ``LoopState``
+    (authoritative, persisted) and is not duplicated here.
+    """
+
+    config: Config
+    gemini_client: genai.Client
+    reasoning_client: ReasoningClient
+    registry: ModelRegistry
+    gemini_semaphore: asyncio.Semaphore
+    eval_semaphore: asyncio.Semaphore
+
+    @property
+    def experiment_kwargs(self) -> dict[str, Any]:
+        """Kwargs passed to ``run_experiment`` by every phase that runs experiments."""
+        return {
+            "config": self.config,
+            "gemini_client": self.gemini_client,
+            "registry": self.registry,
+            "gemini_semaphore": self.gemini_semaphore,
+            "eval_semaphore": self.eval_semaphore,
+        }
+
+
+@dataclass
+class IterationRanking:
+    """Ranking state that crosses phase boundaries within one iteration.
+
+    Bundled so phase-3 → 3.5 → 3.7 → 4 can pass it explicitly instead of
+    capturing locals via closure.  ``_synthesize_top_experiments`` mutates
+    ``exp_results`` and re-computes ``all_agg``/``adaptive_scores``, then
+    returns the updated ``IterationRanking`` to callers.
+    """
+
+    exp_results: list[IterationResult]
+    all_agg: list[AggregatedMetrics]
+    adaptive_scores: dict[int, float] = field(default_factory=dict)
+    best_exp: IterationResult | None = None
+    best_score: float = float("-inf")
+    baseline_score: float = float("-inf")
+    epsilon: float = 0.0
+
+
 # ---------------------------------------------------------------------------
 # Phase 3.7 + 3.9 helpers (extracted to avoid B023 loop-variable capture)
 # ---------------------------------------------------------------------------
 
 
 async def _run_pairwise_comparison(
-    exp_results: list[IterationResult],
-    adaptive_scores: dict[int, float],
+    ranking: IterationRanking,
     state: LoopState,
-    gemini_client: genai.Client,
-    config: Config,
-    gemini_semaphore: asyncio.Semaphore,
+    ctx: RunContext,
 ) -> None:
     """Phase 3.7: SPO-inspired pairwise comparison of top experiments."""
+    exp_results = ranking.exp_results
     if len(exp_results) < 2:
         state.pairwise_feedback = ""
         return
-    sorted_by_score = sorted(exp_results, key=lambda r: adaptive_scores[id(r)], reverse=True)
+    sorted_by_score = sorted(exp_results, key=lambda r: ranking.adaptive_scores[id(r)], reverse=True)
     top_a, top_b = sorted_by_score[0], sorted_by_score[1]
     pairs_a = _build_ref_gen_pairs(top_a)
     pairs_b = _build_ref_gen_pairs(top_b)
@@ -168,9 +233,9 @@ async def _run_pairwise_comparison(
     pairwise_rationale, pairwise_score = await pairwise_compare_experiments(
         pairs_a,
         pairs_b,
-        client=gemini_client,
-        model=config.caption_model,
-        semaphore=gemini_semaphore,
+        client=ctx.gemini_client,
+        model=ctx.config.caption_model,
+        semaphore=ctx.gemini_semaphore,
     )
     winner = "A" if pairwise_score > 0.5 else "B" if pairwise_score < 0.5 else "TIE"
     logger.info(
@@ -186,36 +251,50 @@ async def _run_pairwise_comparison(
 
 
 async def _run_independent_review(
-    exp_results: list[IterationResult],
+    ranking: IterationRanking,
     proposals: list[ExperimentProposal],
     state: LoopState,
-    reasoning_client: ReasoningClient,
-    config: Config,
+    ctx: RunContext,
 ) -> None:
     """Phase 3.9: CycleResearcher-inspired independent review."""
     review = await review_iteration(
-        experiments=exp_results,
+        experiments=ranking.exp_results,
         proposals=proposals,
         baseline_metrics=state.best_metrics,
         knowledge_base=state.knowledge_base,
-        client=reasoning_client,
-        model=config.reasoning_model,
+        client=ctx.reasoning_client,
+        model=ctx.config.reasoning_model,
     )
     state.review_feedback = review.strategic_guidance
     if review.strategic_guidance:
         logger.info("Review guidance: %.200s", review.strategic_guidance)
 
 
+async def _run_pairwise_and_review(
+    ranking: IterationRanking,
+    proposals: list[ExperimentProposal],
+    state: LoopState,
+    ctx: RunContext,
+) -> None:
+    """Run phases 3.7 and 3.9 in parallel, logging failures but not raising."""
+    gather_results = await asyncio.gather(
+        _run_pairwise_comparison(ranking, state, ctx),
+        _run_independent_review(ranking, proposals, state, ctx),
+        return_exceptions=True,
+    )
+    for i, result in enumerate(gather_results):
+        if isinstance(result, BaseException):
+            label = "Pairwise comparison" if i == 0 else "Independent review"
+            logger.warning("%s failed — skipping: %s", label, result)
+
+
 # ---------------------------------------------------------------------------
-# Main loop
+# Setup / teardown
 # ---------------------------------------------------------------------------
 
-# Max experiment results to persist in state.json (older ones are in iteration logs)
-_MAX_PERSISTED_HISTORY = 30
 
-
-async def run(config: Config) -> LoopState:
-    """Run the full optimization loop."""
+async def _setup_run_context(config: Config) -> RunContext:
+    """Configure logging, executor, clients, semaphores and load eval models."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     logging.getLogger("google_genai").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -237,355 +316,20 @@ async def run(config: Config) -> LoopState:
     logger.info("Loading evaluation models...")
     registry = await asyncio.to_thread(ModelRegistry.load_all)
 
-    all_ref_paths = _discover_images(config.reference_dir)
-    if not all_ref_paths:
-        msg = f"No images found in {config.reference_dir}"
-        raise FileNotFoundError(msg)
-    logger.info("Found %d reference images", len(all_ref_paths))
+    return RunContext(
+        config=config,
+        gemini_client=gemini_client,
+        reasoning_client=reasoning_client,
+        registry=registry,
+        gemini_semaphore=gemini_semaphore,
+        eval_semaphore=eval_semaphore,
+    )
 
-    # Shared kwargs for run_experiment
-    exp_kwargs = {
-        "config": config,
-        "gemini_client": gemini_client,
-        "registry": registry,
-        "gemini_semaphore": gemini_semaphore,
-        "eval_semaphore": eval_semaphore,
-    }
 
-    # Try to resume from state
-    state = load_state(config.state_file)
-    if state is not None:
-        logger.info("Resumed from iteration %d with %d fixed references", state.iteration, len(state.fixed_references))
-        fixed_refs = state.fixed_references
-    else:
-        fixed_refs = _sample(all_ref_paths, config.num_fixed_refs)
-        logger.info("Fixed %d reference images for optimization", len(fixed_refs))
-
-        logger.info("Zero-step: captioning %d reference images...", len(fixed_refs))
-        captions = await caption_references(
-            fixed_refs,
-            model=config.caption_model,
-            client=gemini_client,
-            cache_dir=config.log_dir / "captions",
-            semaphore=gemini_semaphore,
-            cache_key="initial",
-        )
-
-        logger.info("Zero-step: analyzing art style...")
-        style_profile, initial_template = await analyze_style(
-            fixed_refs,
-            captions,
-            gemini_client=gemini_client,
-            reasoning_client=reasoning_client,
-            caption_model=config.caption_model,
-            reasoning_model=config.reasoning_model,
-            cache_path=config.log_dir / "style_profile.json",
-        )
-
-        logger.info("Zero-step: proposing %d initial meta-prompts...", config.num_branches)
-        initial_templates = await propose_initial_templates(
-            style_profile,
-            config.num_branches,
-            client=reasoning_client,
-            model=config.reasoning_model,
-        )
-
-        for i, t in enumerate(initial_templates):
-            if not t.sections:
-                initial_templates[i] = initial_template
-
-        state = LoopState(
-            iteration=0,
-            current_template=initial_templates[0],
-            best_template=initial_templates[0],
-            best_metrics=None,
-            knowledge_base=KnowledgeBase(),
-            captions=captions,
-            style_profile=style_profile,
-            fixed_references=fixed_refs,
-        )
-
-        # Save state before evaluation so a crash doesn't lose analysis work
-        save_state(state, config.state_file)
-
-        # Evaluate initial templates as iteration 0
-        logger.info("=== Iteration 0 — evaluating %d initial templates ===", len(initial_templates))
-        try:
-            init_tasks = [
-                run_experiment(
-                    experiment_id=i,
-                    template=t,
-                    iteration=0,
-                    fixed_refs=fixed_refs,
-                    last_results=[],
-                    hypothesis=f"Initial template {i}",
-                    experiment_desc="Zero-step diverse template",
-                    **exp_kwargs,
-                )
-                for i, t in enumerate(initial_templates)
-            ]
-
-            init_results = collect_experiment_results(
-                await asyncio.gather(*init_tasks, return_exceptions=True), "Initial experiment"
-            )
-        except Exception:
-            logger.exception("Zero-step evaluation failed — partial state saved for resume")
-            raise
-
-        if init_results:
-            best_init = max(init_results, key=lambda r: composite_score(r.aggregated))
-            _apply_best_result(state, best_init)
-            state.last_iteration_results = init_results
-            state.experiment_history = list(init_results)
-            _log_experiment_results(init_results, config.log_dir)
-
-        state.iteration = 1
-        save_state(state, config.state_file)
-        _save_best_prompt(state, config.log_dir)
-
-    # Main optimization loop
-    for iteration in range(state.iteration, config.max_iterations):
-        state.iteration = iteration
-
-        logger.info("=== Iteration %d/%d ===", iteration + 1, config.max_iterations)
-
-        # Use the best experiment's feedback from last iteration
-        best_last = best_kept_result(state.last_iteration_results)
-        vision_fb = best_last.vision_feedback if best_last else ""
-        roundtrip_fb = best_last.roundtrip_feedback if best_last else ""
-
-        caption_diffs = ""
-        if best_last and best_last.iteration_captions:
-            sorted_caps = sorted(
-                zip(best_last.iteration_captions, best_last.per_image_scores, strict=False),
-                key=lambda x: x[1].dreamsim_similarity,
-            )
-            worst_caps = [c for c, _ in sorted_caps[:3]]
-            caption_diffs = build_caption_diffs(state.prev_best_captions, worst_caps)
-
-        # Inject review feedback from previous iteration into roundtrip context
-        if state.review_feedback:
-            roundtrip_fb = f"## Independent Review of Last Iteration\n{state.review_feedback}\n\n{roundtrip_fb}"
-
-        # Inject pairwise comparison feedback from previous iteration into vision context
-        if state.pairwise_feedback:
-            vision_fb = f"## Pairwise Experiment Comparison\n{state.pairwise_feedback}\n\n{vision_fb}"
-
-        # Phase 1: Claude proposes N experiments in a single call
-        refinements = await propose_experiments(
-            state.style_profile,
-            state.current_template,
-            state.knowledge_base,
-            state.best_metrics,
-            state.last_iteration_results,
-            client=reasoning_client,
-            model=config.reasoning_model,
-            num_experiments=config.num_branches,
-            vision_feedback=vision_fb,
-            roundtrip_feedback=roundtrip_fb,
-            caption_diffs=caption_diffs,
-        )
-
-        refinements = enforce_hypothesis_diversity(refinements, state.current_template)
-
-        proposals: list[ExperimentProposal] = []
-        for refinement in refinements:
-            if refinement.should_stop:
-                logger.info("Claude signaled convergence")
-                state.converged = True
-                state.convergence_reason = ConvergenceReason.CLAUDE_STOP
-                break
-            proposals.append(
-                ExperimentProposal(
-                    template=refinement.template,
-                    hypothesis=refinement.hypothesis,
-                    experiment_desc=refinement.experiment,
-                    builds_on=refinement.builds_on,
-                    open_problems=refinement.open_problems,
-                    lessons=refinement.lessons,
-                )
-            )
-
-        if state.converged:
-            break
-
-        if not proposals:
-            logger.warning("No experiments proposed — stopping")
-            state.converged = True
-            state.convergence_reason = ConvergenceReason.CLAUDE_STOP
-            break
-
-        # Phase 2: Run all experiments in parallel
-        exp_tasks = [
-            run_experiment(
-                experiment_id=i,
-                template=p.template,
-                iteration=iteration,
-                fixed_refs=fixed_refs,
-                last_results=state.last_iteration_results,
-                hypothesis=p.hypothesis,
-                experiment_desc=p.experiment_desc,
-                **exp_kwargs,
-            )
-            for i, p in enumerate(proposals)
-        ]
-
-        exp_results = collect_experiment_results(await asyncio.gather(*exp_tasks, return_exceptions=True), "Experiment")
-
-        if not exp_results:
-            logger.warning("All experiments failed this iteration")
-            state.plateau_counter += 1
-            if state.plateau_counter >= config.plateau_window:
-                state.converged = True
-                state.convergence_reason = ConvergenceReason.PLATEAU
-                break
-            continue
-
-        # Phase 3: Find best experiment
-        # Adaptive scoring ranks experiments against each other (relative).
-        # composite_score is used for improvement checks (absolute, same scale).
-        all_agg = [r.aggregated for r in exp_results]
-        adaptive_scores = {id(r): adaptive_composite_score(r.aggregated, all_agg) for r in exp_results}
-        best_exp = max(exp_results, key=lambda r: adaptive_scores[id(r)])
-        best_score = composite_score(best_exp.aggregated)
-        baseline_score = composite_score(state.best_metrics) if state.best_metrics else float("-inf")
-        epsilon = improvement_epsilon(baseline_score)
-
-        # Phase 3.5: Synthesis — always merge top experiments to cherry-pick best sections
-        synth_result: IterationResult | None = None
-        if len(exp_results) >= 2:
-            try:
-                ranked_for_synth = sorted(exp_results, key=lambda r: adaptive_scores[id(r)], reverse=True)
-                top_exps = ranked_for_synth[:3]
-                logger.info("Synthesizing top %d experiments into merged template", len(top_exps))
-
-                merged_template, merged_hypothesis = await synthesize_templates(
-                    top_exps,
-                    state.style_profile,
-                    client=reasoning_client,
-                    model=config.reasoning_model,
-                )
-
-                # Validate the merged template
-                synth_result = await run_experiment(
-                    experiment_id=len(exp_results),
-                    template=merged_template,
-                    iteration=iteration,
-                    fixed_refs=fixed_refs,
-                    last_results=state.last_iteration_results,
-                    hypothesis=merged_hypothesis,
-                    experiment_desc="Synthesis of top experiments",
-                    **exp_kwargs,
-                )
-                merged_score = composite_score(synth_result.aggregated)
-                logger.info(
-                    "Synthesis result: DS=%.4f (best individual: %.4f)",
-                    synth_result.aggregated.dreamsim_similarity_mean,
-                    best_exp.aggregated.dreamsim_similarity_mean,
-                )
-
-                exp_results.append(synth_result)
-                all_agg = [r.aggregated for r in exp_results]  # refresh after synthesis append
-                # Refresh adaptive scores to include synthesis result
-                adaptive_scores = {id(r): adaptive_composite_score(r.aggregated, all_agg) for r in exp_results}
-                if merged_score > best_score:
-                    best_exp = synth_result
-                    best_score = merged_score
-                    logger.info("Synthesis beat best individual — adopting merged template")
-            except Exception:
-                logger.warning("Synthesis failed — continuing with individual experiments only", exc_info=True)
-                synth_result = None
-
-        # Phase 3.7 + 3.9: Pairwise comparison and independent review (run in parallel)
-        pairwise_coro = _run_pairwise_comparison(
-            exp_results, adaptive_scores, state, gemini_client, config, gemini_semaphore
-        )
-        review_coro = _run_independent_review(exp_results, proposals, state, reasoning_client, config)
-        gather_results = await asyncio.gather(pairwise_coro, review_coro, return_exceptions=True)
-        for i, result in enumerate(gather_results):
-            if isinstance(result, BaseException):
-                label = "Pairwise comparison" if i == 0 else "Independent review"
-                logger.warning("%s failed — skipping: %s", label, result)
-
-        # Update state with best result (adaptive epsilon filters generation noise)
-        improved = best_score > baseline_score + epsilon
-
-        # Phase 4: Update shared KB with ALL experiment results BEFORE mutating best_metrics
-        # so that metric deltas are computed against the pre-update baseline.
-        pre_update_metrics = state.best_metrics
-        for exp_result, proposal in zip(exp_results, proposals, strict=False):
-            update_knowledge_base(
-                state.knowledge_base,
-                exp_result,
-                exp_result.template,
-                pre_update_metrics,
-                proposal,
-                iteration,
-            )
-
-        if improved:
-            _apply_best_result(state, best_exp)
-            state.plateau_counter = 0
-        else:
-            state.plateau_counter += 1
-
-            # Exploration: on even plateau counts, adopt second-best to escape local optima
-            if state.plateau_counter >= 2 and state.plateau_counter % 2 == 0 and len(exp_results) >= 2:
-                ranked = sorted(
-                    exp_results,
-                    key=lambda r: adaptive_composite_score(r.aggregated, all_agg),
-                    reverse=True,
-                )
-                second_best = ranked[1]
-                logger.info("Exploration: adopting second-best experiment to escape potential local optimum")
-                _apply_exploration_result(state, second_best)
-                state.plateau_counter = 1  # Give exploration runway before plateau termination
-
-        # Preserve current best captions for next iteration's diff (N-1 vs N-2)
-        current_best = best_kept_result(state.last_iteration_results)
-        if current_best and current_best.iteration_captions:
-            state.prev_best_captions = list(current_best.iteration_captions)
-
-        state.last_iteration_results = exp_results
-        state.experiment_history.extend(exp_results)
-        # Cap persisted history to avoid unbounded state.json growth
-        if len(state.experiment_history) > _MAX_PERSISTED_HISTORY:
-            state.experiment_history = state.experiment_history[-_MAX_PERSISTED_HISTORY:]
-        # Record synthesis experiment separately (it has no matching proposal)
-        if synth_result is not None:
-            synth_proposal = ExperimentProposal(
-                template=synth_result.template,
-                hypothesis=synth_result.hypothesis,
-                experiment_desc=synth_result.experiment,
-                builds_on=None,
-                open_problems=[],
-                lessons=Lessons(),
-            )
-            update_knowledge_base(
-                state.knowledge_base,
-                synth_result,
-                synth_result.template,
-                pre_update_metrics,
-                synth_proposal,
-                iteration,
-            )
-
-        _log_experiment_results(exp_results, config.log_dir)
-        save_state(state, config.state_file)
-        _save_best_prompt(state, config.log_dir)
-
-        if state.plateau_counter >= config.plateau_window:
-            logger.info("Plateau detected (%d iterations without improvement)", state.plateau_counter)
-            state.converged = True
-            state.convergence_reason = ConvergenceReason.PLATEAU
-            break
-
-    else:
-        state.converged = True
-        state.convergence_reason = ConvergenceReason.MAX_ITERATIONS
-
-    save_state(state, config.state_file)
-    _save_best_prompt(state, config.log_dir)
+def _finalize_run(state: LoopState, ctx: RunContext) -> LoopState:
+    """Persist final state, write best prompt, and log the summary banner."""
+    save_state(state, ctx.config.state_file)
+    _save_best_prompt(state, ctx.config.log_dir)
 
     logger.info("=" * 60)
     if state.global_best_metrics:
@@ -602,3 +346,465 @@ async def run(config: Config) -> LoopState:
     logger.info("KB: %d hypotheses", len(state.knowledge_base.hypotheses))
 
     return state
+
+
+# ---------------------------------------------------------------------------
+# Zero-step (fix refs → caption → analyze → initial templates → eval → apply)
+# ---------------------------------------------------------------------------
+
+
+async def _zero_step(ctx: RunContext, all_ref_paths: list[Path]) -> LoopState:
+    """Zero-step: fix refs, caption, analyze style, propose N initial templates, evaluate, apply best."""
+    config = ctx.config
+    fixed_refs = _sample(all_ref_paths, config.num_fixed_refs)
+    logger.info("Fixed %d reference images for optimization", len(fixed_refs))
+
+    logger.info("Zero-step: captioning %d reference images...", len(fixed_refs))
+    captions = await caption_references(
+        fixed_refs,
+        model=config.caption_model,
+        client=ctx.gemini_client,
+        cache_dir=config.log_dir / "captions",
+        semaphore=ctx.gemini_semaphore,
+        cache_key="initial",
+    )
+
+    logger.info("Zero-step: analyzing art style...")
+    style_profile, initial_template = await analyze_style(
+        fixed_refs,
+        captions,
+        gemini_client=ctx.gemini_client,
+        reasoning_client=ctx.reasoning_client,
+        caption_model=config.caption_model,
+        reasoning_model=config.reasoning_model,
+        cache_path=config.log_dir / "style_profile.json",
+    )
+
+    logger.info("Zero-step: proposing %d initial meta-prompts...", config.num_branches)
+    initial_templates = await propose_initial_templates(
+        style_profile,
+        config.num_branches,
+        client=ctx.reasoning_client,
+        model=config.reasoning_model,
+    )
+
+    for i, t in enumerate(initial_templates):
+        if not t.sections:
+            initial_templates[i] = initial_template
+
+    state = LoopState(
+        iteration=0,
+        current_template=initial_templates[0],
+        best_template=initial_templates[0],
+        best_metrics=None,
+        knowledge_base=KnowledgeBase(),
+        captions=captions,
+        style_profile=style_profile,
+        fixed_references=fixed_refs,
+    )
+
+    # Save state before evaluation so a crash doesn't lose analysis work
+    save_state(state, config.state_file)
+
+    # Evaluate initial templates as iteration 0
+    logger.info("=== Iteration 0 — evaluating %d initial templates ===", len(initial_templates))
+    try:
+        init_tasks = [
+            run_experiment(
+                experiment_id=i,
+                template=t,
+                iteration=0,
+                fixed_refs=fixed_refs,
+                last_results=[],
+                hypothesis=f"Initial template {i}",
+                experiment_desc="Zero-step diverse template",
+                **ctx.experiment_kwargs,
+            )
+            for i, t in enumerate(initial_templates)
+        ]
+
+        init_results = collect_experiment_results(
+            await asyncio.gather(*init_tasks, return_exceptions=True), "Initial experiment"
+        )
+    except Exception:
+        logger.exception("Zero-step evaluation failed — partial state saved for resume")
+        raise
+
+    if init_results:
+        best_init = max(init_results, key=lambda r: composite_score(r.aggregated))
+        _apply_best_result(state, best_init)
+        state.last_iteration_results = init_results
+        state.experiment_history = list(init_results)
+        _log_experiment_results(init_results, config.log_dir)
+
+    state.iteration = 1
+    save_state(state, config.state_file)
+    _save_best_prompt(state, config.log_dir)
+    return state
+
+
+# ---------------------------------------------------------------------------
+# Per-iteration phases
+# ---------------------------------------------------------------------------
+
+
+def _build_iteration_context(state: LoopState) -> tuple[str, str, str]:
+    """Phase 0 of an iteration: build (vision_fb, roundtrip_fb, caption_diffs).
+
+    Injects review and pairwise feedback from the previous iteration into the
+    feedback strings so the reasoning model can incorporate them.
+    """
+    best_last = best_kept_result(state.last_iteration_results)
+    vision_fb = best_last.vision_feedback if best_last else ""
+    roundtrip_fb = best_last.roundtrip_feedback if best_last else ""
+
+    caption_diffs = ""
+    if best_last and best_last.iteration_captions:
+        sorted_caps = sorted(
+            zip(best_last.iteration_captions, best_last.per_image_scores, strict=False),
+            key=lambda x: x[1].dreamsim_similarity,
+        )
+        worst_caps = [c for c, _ in sorted_caps[:3]]
+        caption_diffs = build_caption_diffs(state.prev_best_captions, worst_caps)
+
+    if state.review_feedback:
+        roundtrip_fb = f"## Independent Review of Last Iteration\n{state.review_feedback}\n\n{roundtrip_fb}"
+    if state.pairwise_feedback:
+        vision_fb = f"## Pairwise Experiment Comparison\n{state.pairwise_feedback}\n\n{vision_fb}"
+
+    return vision_fb, roundtrip_fb, caption_diffs
+
+
+async def _propose_iteration_experiments(
+    state: LoopState,
+    ctx: RunContext,
+    vision_fb: str,
+    roundtrip_fb: str,
+    caption_diffs: str,
+) -> tuple[list[ExperimentProposal], bool]:
+    """Phase 1: propose N experiments, dedup by category, convert to ExperimentProposal.
+
+    Returns ``(proposals, converged)``.  ``converged`` is True when the
+    reasoning model signalled stop via ``<CONVERGED>`` or no valid proposals
+    parsed.
+    """
+    refinements = await propose_experiments(
+        state.style_profile,
+        state.current_template,
+        state.knowledge_base,
+        state.best_metrics,
+        state.last_iteration_results,
+        client=ctx.reasoning_client,
+        model=ctx.config.reasoning_model,
+        num_experiments=ctx.config.num_branches,
+        vision_feedback=vision_fb,
+        roundtrip_feedback=roundtrip_fb,
+        caption_diffs=caption_diffs,
+    )
+
+    refinements = enforce_hypothesis_diversity(refinements, state.current_template)
+
+    proposals: list[ExperimentProposal] = []
+    for refinement in refinements:
+        if refinement.should_stop:
+            logger.info("Reasoning model signaled convergence")
+            state.converged = True
+            state.convergence_reason = ConvergenceReason.CLAUDE_STOP
+            return [], True
+        proposals.append(
+            ExperimentProposal(
+                template=refinement.template,
+                hypothesis=refinement.hypothesis,
+                experiment_desc=refinement.experiment,
+                builds_on=refinement.builds_on,
+                open_problems=refinement.open_problems,
+                lessons=refinement.lessons,
+            )
+        )
+
+    if not proposals:
+        logger.warning("No experiments proposed — stopping")
+        state.converged = True
+        state.convergence_reason = ConvergenceReason.CLAUDE_STOP
+        return [], True
+
+    return proposals, False
+
+
+async def _run_experiments_parallel(
+    state: LoopState,
+    ctx: RunContext,
+    proposals: list[ExperimentProposal],
+    iteration: int,
+) -> list[IterationResult]:
+    """Phase 2: gather all experiment runs in parallel.
+
+    Returns the collected results (may be empty if all failed).
+    """
+    exp_tasks = [
+        run_experiment(
+            experiment_id=i,
+            template=p.template,
+            iteration=iteration,
+            fixed_refs=state.fixed_references,
+            last_results=state.last_iteration_results,
+            hypothesis=p.hypothesis,
+            experiment_desc=p.experiment_desc,
+            **ctx.experiment_kwargs,
+        )
+        for i, p in enumerate(proposals)
+    ]
+
+    return collect_experiment_results(await asyncio.gather(*exp_tasks, return_exceptions=True), "Experiment")
+
+
+def _score_and_rank(exp_results: list[IterationResult], state: LoopState) -> IterationRanking:
+    """Phase 3: compute aggregates, adaptive scores, pick best, return bundled ranking."""
+    all_agg = [r.aggregated for r in exp_results]
+    adaptive_scores = {id(r): adaptive_composite_score(r.aggregated, all_agg) for r in exp_results}
+    best_exp = max(exp_results, key=lambda r: adaptive_scores[id(r)])
+    best_score = composite_score(best_exp.aggregated)
+    baseline_score = composite_score(state.best_metrics) if state.best_metrics else float("-inf")
+    return IterationRanking(
+        exp_results=exp_results,
+        all_agg=all_agg,
+        adaptive_scores=adaptive_scores,
+        best_exp=best_exp,
+        best_score=best_score,
+        baseline_score=baseline_score,
+        epsilon=improvement_epsilon(baseline_score),
+    )
+
+
+async def _synthesize_top_experiments(
+    ranking: IterationRanking,
+    state: LoopState,
+    ctx: RunContext,
+    iteration: int,
+) -> IterationResult | None:
+    """Phase 3.5: merge top experiments into one template, validate, append to exp_results.
+
+    Mutates ``ranking.exp_results``, ``ranking.all_agg``, ``ranking.adaptive_scores``,
+    and — if the synthesis beats the best individual — ``ranking.best_exp`` /
+    ``ranking.best_score``.  Returns the ``IterationResult`` produced by the
+    synthesis (or ``None`` on failure / fewer than 2 experiments).
+    """
+    if len(ranking.exp_results) < 2:
+        return None
+
+    try:
+        ranked_for_synth = sorted(ranking.exp_results, key=lambda r: ranking.adaptive_scores[id(r)], reverse=True)
+        top_exps = ranked_for_synth[:3]
+        logger.info("Synthesizing top %d experiments into merged template", len(top_exps))
+
+        merged_template, merged_hypothesis = await synthesize_templates(
+            top_exps,
+            state.style_profile,
+            client=ctx.reasoning_client,
+            model=ctx.config.reasoning_model,
+        )
+
+        synth_result = await run_experiment(
+            experiment_id=len(ranking.exp_results),
+            template=merged_template,
+            iteration=iteration,
+            fixed_refs=state.fixed_references,
+            last_results=state.last_iteration_results,
+            hypothesis=merged_hypothesis,
+            experiment_desc="Synthesis of top experiments",
+            **ctx.experiment_kwargs,
+        )
+        merged_score = composite_score(synth_result.aggregated)
+        logger.info(
+            "Synthesis result: DS=%.4f (best individual: %.4f)",
+            synth_result.aggregated.dreamsim_similarity_mean,
+            ranking.best_exp.aggregated.dreamsim_similarity_mean if ranking.best_exp else float("nan"),
+        )
+
+        ranking.exp_results.append(synth_result)
+        ranking.all_agg = [r.aggregated for r in ranking.exp_results]
+        ranking.adaptive_scores = {
+            id(r): adaptive_composite_score(r.aggregated, ranking.all_agg) for r in ranking.exp_results
+        }
+        if merged_score > ranking.best_score:
+            ranking.best_exp = synth_result
+            ranking.best_score = merged_score
+            logger.info("Synthesis beat best individual — adopting merged template")
+    except Exception:
+        logger.warning("Synthesis failed — continuing with individual experiments only", exc_info=True)
+        return None
+    else:
+        return synth_result
+
+
+def _update_knowledge_base_for_iteration(
+    state: LoopState,
+    ranking: IterationRanking,
+    proposals: list[ExperimentProposal],
+    iteration: int,
+) -> AggregatedMetrics | None:
+    """Phase 4 (KB): snapshot pre-update baseline and update KB with all experiments.
+
+    Returned ``pre_update_metrics`` is the snapshot of ``state.best_metrics``
+    taken BEFORE any mutation, so that ``_record_iteration_state`` can reuse
+    it for the late synthesis KB update.
+    """
+    pre_update_metrics = state.best_metrics
+    # Synthesis result (if any) is appended to exp_results but has no matching
+    # proposal — zip() with strict=False stops at the shorter of the two.
+    for exp_result, proposal in zip(ranking.exp_results, proposals, strict=False):
+        update_knowledge_base(
+            state.knowledge_base,
+            exp_result,
+            exp_result.template,
+            pre_update_metrics,
+            proposal,
+            iteration,
+        )
+    return pre_update_metrics
+
+
+def _apply_iteration_result(state: LoopState, ranking: IterationRanking) -> None:
+    """Decide improvement vs plateau and update state accordingly.
+
+    On a genuine improvement: call ``_apply_best_result`` and reset plateau.
+    On plateau: increment counter.  On even plateau counts with ≥2 experiments,
+    adopt second-best via ``_apply_exploration_result`` and reset plateau to 1
+    to give exploration runway.
+    """
+    if ranking.best_exp is None:
+        return
+
+    improved = ranking.best_score > ranking.baseline_score + ranking.epsilon
+
+    if improved:
+        _apply_best_result(state, ranking.best_exp)
+        state.plateau_counter = 0
+        return
+
+    state.plateau_counter += 1
+    # Exploration: on even plateau counts, adopt second-best to escape local optima
+    if state.plateau_counter >= 2 and state.plateau_counter % 2 == 0 and len(ranking.exp_results) >= 2:
+        ranked = sorted(
+            ranking.exp_results,
+            key=lambda r: adaptive_composite_score(r.aggregated, ranking.all_agg),
+            reverse=True,
+        )
+        second_best = ranked[1]
+        logger.info("Exploration: adopting second-best experiment to escape potential local optimum")
+        _apply_exploration_result(state, second_best)
+        state.plateau_counter = 1  # Give exploration runway before plateau termination
+
+
+def _record_iteration_state(
+    state: LoopState,
+    ranking: IterationRanking,
+    synth_result: IterationResult | None,
+    pre_update_metrics: AggregatedMetrics | None,
+    iteration: int,
+    ctx: RunContext,
+) -> None:
+    """Persist iteration results: prev captions, history, synth KB update, logs, save_state."""
+    # Preserve current best captions for next iteration's diff (N-1 vs N-2)
+    current_best = best_kept_result(state.last_iteration_results)
+    if current_best and current_best.iteration_captions:
+        state.prev_best_captions = list(current_best.iteration_captions)
+
+    state.last_iteration_results = ranking.exp_results
+    state.experiment_history.extend(ranking.exp_results)
+    # Cap persisted history to avoid unbounded state.json growth
+    if len(state.experiment_history) > _MAX_PERSISTED_HISTORY:
+        state.experiment_history = state.experiment_history[-_MAX_PERSISTED_HISTORY:]
+
+    # Record synthesis experiment separately (it has no matching proposal)
+    if synth_result is not None:
+        synth_proposal = ExperimentProposal(
+            template=synth_result.template,
+            hypothesis=synth_result.hypothesis,
+            experiment_desc=synth_result.experiment,
+            builds_on=None,
+            open_problems=[],
+            lessons=Lessons(),
+        )
+        update_knowledge_base(
+            state.knowledge_base,
+            synth_result,
+            synth_result.template,
+            pre_update_metrics,
+            synth_proposal,
+            iteration,
+        )
+
+    _log_experiment_results(ranking.exp_results, ctx.config.log_dir)
+    save_state(state, ctx.config.state_file)
+    _save_best_prompt(state, ctx.config.log_dir)
+
+
+def _check_plateau_convergence(state: LoopState, ctx: RunContext) -> bool:
+    """Return True if the plateau window has been hit. Sets convergence fields."""
+    if state.plateau_counter >= ctx.config.plateau_window:
+        logger.info("Plateau detected (%d iterations without improvement)", state.plateau_counter)
+        state.converged = True
+        state.convergence_reason = ConvergenceReason.PLATEAU
+        return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+
+
+async def run(config: Config) -> LoopState:
+    """Run the full optimization loop."""
+    ctx = await _setup_run_context(config)
+
+    all_ref_paths = _discover_images(config.reference_dir)
+    if not all_ref_paths:
+        msg = f"No images found in {config.reference_dir}"
+        raise FileNotFoundError(msg)
+    logger.info("Found %d reference images", len(all_ref_paths))
+
+    # Resume from disk, or run zero-step
+    state = load_state(config.state_file)
+    if state is not None:
+        logger.info("Resumed from iteration %d with %d fixed references", state.iteration, len(state.fixed_references))
+    else:
+        state = await _zero_step(ctx, all_ref_paths)
+
+    # Main optimization loop
+    for iteration in range(state.iteration, config.max_iterations):
+        state.iteration = iteration
+        logger.info("=== Iteration %d/%d ===", iteration + 1, config.max_iterations)
+
+        vision_fb, roundtrip_fb, caption_diffs = _build_iteration_context(state)
+
+        proposals, converged = await _propose_iteration_experiments(state, ctx, vision_fb, roundtrip_fb, caption_diffs)
+        if converged:
+            break
+
+        exp_results = await _run_experiments_parallel(state, ctx, proposals, iteration)
+        if not exp_results:
+            logger.warning("All experiments failed this iteration")
+            state.plateau_counter += 1
+            if state.plateau_counter >= config.plateau_window:
+                state.converged = True
+                state.convergence_reason = ConvergenceReason.PLATEAU
+                break
+            continue
+
+        ranking = _score_and_rank(exp_results, state)
+        synth_result = await _synthesize_top_experiments(ranking, state, ctx, iteration)
+        await _run_pairwise_and_review(ranking, proposals, state, ctx)
+
+        pre_update_metrics = _update_knowledge_base_for_iteration(state, ranking, proposals, iteration)
+        _apply_iteration_result(state, ranking)
+        _record_iteration_state(state, ranking, synth_result, pre_update_metrics, iteration, ctx)
+
+        if _check_plateau_convergence(state, ctx):
+            break
+    else:
+        state.converged = True
+        state.convergence_reason = ConvergenceReason.MAX_ITERATIONS
+
+    return _finalize_run(state, ctx)
