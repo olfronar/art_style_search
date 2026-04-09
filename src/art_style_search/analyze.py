@@ -40,7 +40,7 @@ _GEMINI_ANALYSIS_PROMPT = (
     "Identify patterns across MULTIPLE images. This feeds into crafting a text-to-image prompt."
 )
 
-_CLAUDE_ANALYSIS_PROMPT = (
+_REASONING_ANALYSIS_PROMPT = (
     "Below are detailed text descriptions of reference images that share a common art style. "
     "You are the REASONING specialist — focus on abstract patterns, underlying principles, and stylistic rules.\n\n"
     "{captions}\n\n"
@@ -63,7 +63,7 @@ _CLAUDE_ANALYSIS_PROMPT = (
 _COMPILATION_PROMPT = (
     "You received two independent analyses of the same set of reference images.\n\n"
     "## Analysis from visual model (Gemini — saw the actual images):\n{gemini_analysis}\n\n"
-    "## Analysis from reasoning model (Claude — read detailed captions):\n{claude_analysis}\n\n"
+    "## Analysis from reasoning model (read detailed captions):\n{reasoning_analysis}\n\n"
     "Synthesize BOTH analyses into:\n"
     "1. A structured **StyleProfile** with 6 sections.\n"
     "2. An initial **PromptTemplate** — a set of prompt sections that instruct a captioner "
@@ -143,8 +143,8 @@ def _parse_sections(xml: str) -> list[PromptSection]:
     ]
 
 
-def _parse_compilation(text: str, gemini_raw: str, claude_raw: str) -> tuple[StyleProfile, PromptTemplate]:
-    """Parse the Claude compilation response into StyleProfile + PromptTemplate."""
+def _parse_compilation(text: str, gemini_raw: str, reasoning_raw: str) -> tuple[StyleProfile, PromptTemplate]:
+    """Parse the reasoning-model compilation response into StyleProfile + PromptTemplate."""
     profile = StyleProfile(
         color_palette=_extract_tag(text, "color_palette"),
         composition=_extract_tag(text, "composition"),
@@ -153,7 +153,7 @@ def _parse_compilation(text: str, gemini_raw: str, claude_raw: str) -> tuple[Sty
         subject_matter=_extract_tag(text, "subject_matter"),
         influences=_extract_tag(text, "influences"),
         gemini_raw_analysis=gemini_raw,
-        claude_raw_analysis=claude_raw,
+        claude_raw_analysis=reasoning_raw,
     )
 
     template_block = _extract_tag(text, "initial_template")
@@ -204,7 +204,7 @@ async def _gemini_analyze(
     return await async_retry(_call, label="Gemini style analysis")
 
 
-async def _claude_analyze(
+async def _reasoning_analyze(
     captions: list[Caption],
     *,
     client: ReasoningClient,
@@ -212,15 +212,15 @@ async def _claude_analyze(
 ) -> str:
     """Send all captions to the reasoning model for style analysis."""
     captions_text = "\n\n---\n\n".join(f"**Image: {cap.image_path.name}**\n{cap.text}" for cap in captions)
-    user = _CLAUDE_ANALYSIS_PROMPT.format(captions=captions_text)
+    user = _REASONING_ANALYSIS_PROMPT.format(captions=captions_text)
 
     logger.info("Sending %d captions to %s for style analysis", len(captions), model)
     return await client.call(model=model, system=_ANALYSIS_SYSTEM, user=user, max_tokens=32000)
 
 
-async def _claude_compile(
+async def _reasoning_compile(
     gemini_analysis: str,
-    claude_analysis: str,
+    reasoning_analysis: str,
     *,
     client: ReasoningClient,
     model: str,
@@ -228,12 +228,12 @@ async def _claude_compile(
     """Synthesize both analyses into a StyleProfile and PromptTemplate."""
     user = _COMPILATION_PROMPT.format(
         gemini_analysis=gemini_analysis,
-        claude_analysis=claude_analysis,
+        reasoning_analysis=reasoning_analysis,
     )
 
     logger.info("Compiling style profile via %s", model)
     raw_text = await client.call(model=model, system=_ANALYSIS_SYSTEM, user=user, max_tokens=32000)
-    return _parse_compilation(raw_text, gemini_raw=gemini_analysis, claude_raw=claude_analysis)
+    return _parse_compilation(raw_text, gemini_raw=gemini_analysis, reasoning_raw=reasoning_analysis)
 
 
 # ---------------------------------------------------------------------------
@@ -290,8 +290,8 @@ async def analyze_style(
     """Perform zero-step style analysis: build a StyleProfile and initial PromptTemplate.
 
     1. Check cache — return early if valid.
-    2. Run Gemini vision analysis and Claude text analysis in parallel.
-    3. Have Claude compile both into structured outputs.
+    2. Run Gemini vision analysis and reasoning-model text analysis in parallel.
+    3. Have the reasoning model compile both into structured outputs.
     4. Cache result to disk.
     """
     cached = _load_cache(cache_path)
@@ -299,15 +299,15 @@ async def analyze_style(
         return cached
 
     # Run both analyses in parallel
-    gemini_result, claude_result = await asyncio.gather(
+    gemini_result, reasoning_result = await asyncio.gather(
         _gemini_analyze(reference_paths, client=gemini_client, model=caption_model),
-        _claude_analyze(captions, client=reasoning_client, model=reasoning_model),
+        _reasoning_analyze(captions, client=reasoning_client, model=reasoning_model),
     )
 
     # Compile into structured output
-    profile, template = await _claude_compile(
+    profile, template = await _reasoning_compile(
         gemini_result,
-        claude_result,
+        reasoning_result,
         client=reasoning_client,
         model=reasoning_model,
     )

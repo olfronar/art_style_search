@@ -101,7 +101,7 @@ async def stream_message(client: anthropic.AsyncAnthropic, **kwargs: object) -> 
             last_exc = exc
             delay = _STREAM_BASE_DELAY * (2**attempt)
             logger.warning(
-                "Claude stream attempt %d/%d failed: %s — retrying in %.0fs",
+                "Anthropic stream attempt %d/%d failed: %s — retrying in %.0fs",
                 attempt + 1,
                 _STREAM_MAX_RETRIES,
                 exc,
@@ -123,7 +123,7 @@ async def stream_message(client: anthropic.AsyncAnthropic, **kwargs: object) -> 
                 last_exc = exc
                 delay = _STREAM_BASE_DELAY * (2**attempt)
                 logger.warning(
-                    "Claude stream attempt %d/%d failed: %s: %s — retrying in %.0fs",
+                    "Anthropic stream attempt %d/%d failed: %s: %s — retrying in %.0fs",
                     attempt + 1,
                     _STREAM_MAX_RETRIES,
                     type(exc).__name__,
@@ -134,7 +134,7 @@ async def stream_message(client: anthropic.AsyncAnthropic, **kwargs: object) -> 
             else:
                 raise
 
-    msg = f"Claude stream failed after {_STREAM_MAX_RETRIES} retries"
+    msg = f"Anthropic stream failed after {_STREAM_MAX_RETRIES} retries"
     raise RuntimeError(msg) from last_exc
 
 

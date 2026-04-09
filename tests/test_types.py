@@ -303,7 +303,7 @@ class TestConvergenceReason:
     def test_enum_values(self) -> None:
         assert ConvergenceReason.MAX_ITERATIONS.value == "max_iterations"
         assert ConvergenceReason.PLATEAU.value == "plateau"
-        assert ConvergenceReason.CLAUDE_STOP.value == "claude_stop"
+        assert ConvergenceReason.REASONING_STOP.value == "reasoning_stop"
 
     def test_enum_has_exactly_three_members(self) -> None:
         assert len(ConvergenceReason) == 3
@@ -311,7 +311,7 @@ class TestConvergenceReason:
     def test_members_accessible_by_value(self) -> None:
         assert ConvergenceReason("max_iterations") is ConvergenceReason.MAX_ITERATIONS
         assert ConvergenceReason("plateau") is ConvergenceReason.PLATEAU
-        assert ConvergenceReason("claude_stop") is ConvergenceReason.CLAUDE_STOP
+        assert ConvergenceReason("reasoning_stop") is ConvergenceReason.REASONING_STOP
 
 
 # -- classify_hypothesis ------------------------------------------------------
@@ -483,7 +483,7 @@ class TestKnowledgeBase:
 
     def test_render_empty_kb(self) -> None:
         kb = KnowledgeBase()
-        assert kb.render_for_claude() == ""
+        assert kb.render_for_reasoning_model() == ""
 
     def test_render_includes_hypothesis_chain(self) -> None:
         kb = KnowledgeBase()
@@ -511,7 +511,7 @@ class TestKnowledgeBase:
             confirmed="temperature helps",
             rejected="",
         )
-        output = kb.render_for_claude()
+        output = kb.render_for_reasoning_model()
         assert "H1" in output
         assert "H2" in output
         assert "builds on H1" in output
@@ -543,7 +543,7 @@ class TestKnowledgeBase:
             confirmed="yes",
             rejected="",
         )
-        output = kb.render_for_claude()
+        output = kb.render_for_reasoning_model()
         assert "Open Problems" in output
         assert "HIGH" in output
         assert "Color matching on dark palettes" in output
@@ -563,7 +563,7 @@ class TestKnowledgeBase:
             confirmed="",
             rejected="brushstrokes ignored",
         )
-        output = kb.render_for_claude()
+        output = kb.render_for_reasoning_model()
         assert "REJECTED" in output
         assert "detailed brushstrokes" in output
         assert "Do NOT Repeat" not in output  # merged into tree

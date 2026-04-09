@@ -375,14 +375,14 @@ class TestSaveLoadState:
         assert loaded.best_metrics is None
 
     def test_convergence_reason_survives(self, tmp_path: Path) -> None:
-        state = make_loop_state(convergence_reason=ConvergenceReason.CLAUDE_STOP)
+        state = make_loop_state(convergence_reason=ConvergenceReason.REASONING_STOP)
         state_file = tmp_path / "state.json"
 
         save_state(state, state_file)
         loaded = load_state(state_file)
 
         assert loaded is not None
-        assert loaded.convergence_reason == ConvergenceReason.CLAUDE_STOP
+        assert loaded.convergence_reason == ConvergenceReason.REASONING_STOP
 
 
 # ---------------------------------------------------------------------------

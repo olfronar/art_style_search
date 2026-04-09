@@ -23,7 +23,7 @@ def _format_style_profile(profile: StyleProfile, compact: bool = False) -> str:
         result += (
             "\n\n### Gemini raw analysis\n"
             f"{profile.gemini_raw_analysis}\n\n"
-            "### Claude raw analysis\n"
+            "### Reasoning-model raw analysis\n"
             f"{profile.claude_raw_analysis}"
         )
     return result

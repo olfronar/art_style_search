@@ -126,7 +126,7 @@ class TestParseCompilation:
     )
 
     def test_style_profile_fields(self) -> None:
-        profile, _ = _parse_compilation(self.FULL_RESPONSE, gemini_raw="gemini text", claude_raw="claude text")
+        profile, _ = _parse_compilation(self.FULL_RESPONSE, gemini_raw="gemini text", reasoning_raw="claude text")
         assert profile.color_palette == "Muted earth tones with occasional cobalt blue accents"
         assert profile.composition == "Centered subjects with generous negative space"
         assert profile.technique == "Loose watercolor washes layered with fine ink linework"
@@ -135,12 +135,12 @@ class TestParseCompilation:
         assert profile.influences == "Japanese sumi-e, Winslow Homer, Edward Hopper"
 
     def test_raw_analyses_stored(self) -> None:
-        profile, _ = _parse_compilation(self.FULL_RESPONSE, gemini_raw="gemini output", claude_raw="claude output")
+        profile, _ = _parse_compilation(self.FULL_RESPONSE, gemini_raw="gemini output", reasoning_raw="claude output")
         assert profile.gemini_raw_analysis == "gemini output"
         assert profile.claude_raw_analysis == "claude output"
 
     def test_template_sections(self) -> None:
-        _, template = _parse_compilation(self.FULL_RESPONSE, gemini_raw="", claude_raw="")
+        _, template = _parse_compilation(self.FULL_RESPONSE, gemini_raw="", reasoning_raw="")
         assert len(template.sections) == 3
         assert template.sections[0].name == "medium"
         assert template.sections[0].description == "artistic medium and technique"
@@ -149,7 +149,7 @@ class TestParseCompilation:
         assert template.sections[2].name == "subject"
 
     def test_template_negative_prompt(self) -> None:
-        _, template = _parse_compilation(self.FULL_RESPONSE, gemini_raw="", claude_raw="")
+        _, template = _parse_compilation(self.FULL_RESPONSE, gemini_raw="", reasoning_raw="")
         assert template.negative_prompt == "photorealistic, digital art, vibrant neon colors"
 
     def test_missing_negative_gives_none(self) -> None:
@@ -166,7 +166,7 @@ class TestParseCompilation:
             '  <section name="style" description="style">oil painting</section>\n'
             "</initial_template>"
         )
-        _, template = _parse_compilation(text, gemini_raw="", claude_raw="")
+        _, template = _parse_compilation(text, gemini_raw="", reasoning_raw="")
         assert template.negative_prompt is None
 
     def test_missing_style_profile_fields_give_empty_strings(self) -> None:
@@ -178,7 +178,7 @@ class TestParseCompilation:
             '  <section name="s" description="d">v</section>\n'
             "</initial_template>"
         )
-        profile, _ = _parse_compilation(text, gemini_raw="g", claude_raw="c")
+        profile, _ = _parse_compilation(text, gemini_raw="g", reasoning_raw="c")
         assert profile.color_palette == "warm tones"
         # Missing fields should be empty strings
         assert profile.composition == ""
@@ -199,6 +199,6 @@ class TestParseCompilation:
             "</style_profile>\n"
             "<initial_template></initial_template>"
         )
-        _, template = _parse_compilation(text, gemini_raw="", claude_raw="")
+        _, template = _parse_compilation(text, gemini_raw="", reasoning_raw="")
         assert template.sections == []
         assert template.negative_prompt is None

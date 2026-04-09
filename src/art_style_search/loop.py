@@ -524,7 +524,7 @@ async def _propose_iteration_experiments(
         if refinement.should_stop:
             logger.info("Reasoning model signaled convergence")
             state.converged = True
-            state.convergence_reason = ConvergenceReason.CLAUDE_STOP
+            state.convergence_reason = ConvergenceReason.REASONING_STOP
             return [], True
         proposals.append(
             ExperimentProposal(
@@ -540,7 +540,7 @@ async def _propose_iteration_experiments(
     if not proposals:
         logger.warning("No experiments proposed — stopping")
         state.converged = True
-        state.convergence_reason = ConvergenceReason.CLAUDE_STOP
+        state.convergence_reason = ConvergenceReason.REASONING_STOP
         return [], True
 
     return proposals, False

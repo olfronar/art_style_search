@@ -150,7 +150,7 @@ class PromptTemplate:
 
     The template defines WHAT sections exist and their purpose.
     Values fill the sections with specific style descriptions.
-    Claude can propose changes to either the template or the values.
+    The reasoning model can propose changes to either the template or the values.
 
     ``caption_sections`` lists the labeled output sections the captioner
     should produce (e.g. ``["Art Style", "Color Palette", …]``).  Their
@@ -184,7 +184,7 @@ class PromptTemplate:
 class ConvergenceReason(enum.Enum):
     MAX_ITERATIONS = "max_iterations"
     PLATEAU = "plateau"
-    CLAUDE_STOP = "claude_stop"
+    REASONING_STOP = "reasoning_stop"
 
 
 # ---------------------------------------------------------------------------
@@ -218,9 +218,9 @@ class Hypothesis:
 
 @dataclass
 class OpenProblem:
-    """A ranked open problem — proposed by Claude, validated by code."""
+    """A ranked open problem — proposed by the reasoning model, validated by code."""
 
-    text: str  # Claude's description
+    text: str  # reasoning model's description
     category: str  # auto-classified
     priority: str  # "HIGH" | "MED" | "LOW" — set by code from metrics
     metric_gap: float | None = None  # DreamSim gap vs best category
@@ -317,7 +317,7 @@ class KnowledgeBase:
 
         return hyp
 
-    def render_for_claude(self, max_words: int = 1500) -> str:
+    def render_for_reasoning_model(self, max_words: int = 1500) -> str:
         """Produce a structured, budget-enforced prompt section for the reasoning model.
 
         Priority order (fill until budget exhausted):

@@ -66,7 +66,7 @@ async def review_iteration(
     if baseline_metrics:
         user_parts.append(f"\n## Baseline Metrics\n{_format_metrics(baseline_metrics)}\n")
 
-    kb_text = knowledge_base.render_for_claude(max_words=500)
+    kb_text = knowledge_base.render_for_reasoning_model(max_words=500)
     if kb_text:
         user_parts.append(f"\n{kb_text}\n")
 

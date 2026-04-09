@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ExperimentProposal:
-    """Holds Claude's proposed experiment before it's executed."""
+    """Holds the reasoning model's proposed experiment before it's executed."""
 
     template: PromptTemplate
     hypothesis: str
@@ -140,7 +140,7 @@ async def run_experiment(
     hypothesis: str = "",
     experiment_desc: str = "",
 ) -> IterationResult:
-    """Execute one experiment: caption -> generate -> evaluate (no Claude call here)."""
+    """Execute one experiment: caption -> generate -> evaluate (no reasoning-model call here)."""
     meta_prompt = template.render()
     logger.info("Exp %d iter %d — meta-prompt: %.100s...", experiment_id, iteration, meta_prompt)
 

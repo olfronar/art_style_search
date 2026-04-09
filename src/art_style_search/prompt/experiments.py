@@ -229,7 +229,7 @@ async def propose_experiments(
         user_parts.append(f"\nCurrent composite score: {score:.4f} ({regime} regime)\n")
 
     # Knowledge base — structured lessons from all previous experiments
-    kb_text = knowledge_base.render_for_claude()
+    kb_text = knowledge_base.render_for_reasoning_model()
     if kb_text:
         user_parts.append("\n\n")
         user_parts.append(kb_text)

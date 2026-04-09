@@ -1,6 +1,6 @@
 # Art Style Search
 
-Self-improving loop that finds the best prompt to define and follow an art style from reference images. A meta-prompt instructs a captioner (Gemini Pro) how to describe images so a generator (Gemini Flash) can recreate them from the captions. Claude optimizes the meta-prompt through hypothesis-driven experiments.
+Self-improving loop that finds the best prompt to define and follow an art style from reference images. A meta-prompt instructs a captioner (Gemini Pro) how to describe images so a generator (Gemini Flash) can recreate them from the captions. A reasoning model (Claude, GLM-5.1, or GPT-5.4 — swappable via `--reasoning-provider`) optimizes the meta-prompt through hypothesis-driven experiments.
 
 Inspired by [karpathy/autoresearch](https://github.com/karpathy/autoresearch).
 
@@ -26,7 +26,7 @@ Reference Image + Meta-Prompt
   (DreamSim, Color, SSIM, HPS, Aesthetics + Gemini vision)
         |
         v
-  Claude (optimizer)
+  Reasoning model (optimizer)
   Refines the meta-prompt
 ```
 
@@ -152,8 +152,8 @@ A consistency penalty (30% weight on per-image std of DreamSim and color) penali
 src/art_style_search/
   __main__.py    Entry point + list/clean subcommands
   loop.py        Experiment-based orchestration loop
-  prompt.py      Claude meta-prompt proposal/refinement
-  analyze.py     Zero-step: parallel Gemini+Claude style analysis
+  prompt/        Meta-prompt proposal/refinement package (reasoning-model calls)
+  analyze.py     Zero-step: parallel Gemini vision + reasoning-model style analysis
   caption.py     Gemini Pro captioning with disk cache
   generate.py    Gemini Flash image generation with retry
   experiment.py  Single-experiment execution pipeline
