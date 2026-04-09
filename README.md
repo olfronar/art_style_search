@@ -34,11 +34,31 @@ The meta-prompt is the only thing being optimized. It tells the captioner *how* 
 
 ### Optimization Loop
 
-0. **Zero-step**: Fix 20 reference images. Caption them, run parallel style analysis (Gemini vision + Claude reasoning) to build a `StyleProfile` and N diverse initial meta-prompts.
-1. Claude proposes N experiments per iteration, each testing a different hypothesis about what to change in the meta-prompt.
-2. Each experiment runs in parallel: caption all references with the proposed meta-prompt, generate images from captions, evaluate against originals.
-3. The best experiment's template becomes the new baseline. All results feed into a shared Knowledge Base that tracks hypothesis chains, per-category progress, and open problems.
-4. Repeat until convergence (max iterations, plateau, or Claude signals stop).
+0. **Zero-step**: Fix the reference images. Caption them, run parallel style analysis (Gemini vision + reasoning model) to build a `StyleProfile` and N diverse initial meta-prompts.
+1. **Propose**: the reasoning model proposes N experiments per iteration, each testing a different hypothesis about what to change in the meta-prompt (one section per experiment for clean attribution).
+2. **Run**: each experiment runs in parallel -- caption all references with the proposed meta-prompt, generate images from captions, evaluate against originals.
+3. **Rank & synthesize**: experiments are ranked by an adaptive composite score; the top 2-3 are merged into a synthesized template (picks the best section from each) even if none individually beat the baseline.
+4. **Pairwise vision comparison** (SPO-inspired): the top two experiments' reproductions are sent to Gemini vision for a head-to-head verdict, and the rationale is fed back into the next iteration.
+5. **Independent review** (CycleResearcher-inspired): a skeptical reviewer assesses every experiment as SIGNAL/NOISE/MIXED and writes strategic guidance that is prepended to the next iteration's proposal prompt.
+6. **Apply**: best experiment becomes the new baseline (or, on even plateau counts, the second-best is adopted as an exploration move). All results feed a shared Knowledge Base that tracks hypothesis chains, per-category progress, confirmed insights, rejected approaches, and open problems.
+7. **Repeat** until convergence (max iterations, plateau window, or the reasoning model signals stop).
+
+## Cost & resources
+
+Running this loop is not free. Know the order-of-magnitude before you start:
+
+- **API calls**. A default run is `--max-iterations 20 × --num-branches 5 × --num-fixed-refs 20` -- on the order of 2000 Gemini Pro captions, 2000 Gemini Flash generations, 2000 Gemini vision comparisons, and 60-100 reasoning-model calls (Claude, GLM, or GPT). Expect several US dollars per full run at current 2026 prices. Costs scale roughly linearly with `max_iterations × num_branches × num_fixed_refs`.
+- **First-run ML model downloads**. The first invocation pulls ~2 GB of weights from Hugging Face Hub: DreamSim `dino_vitb16` (~870 MB), LAION-Aesthetics CLIP-L, and HPSv2 CLIP-H. These are cached under `~/.cache/huggingface/` and the `dreamsim` / `hpsv2` package cache dirs.
+- **GPU is optional**. CPU works but is slow. Apple Silicon uses MPS automatically. NVIDIA CUDA users have to pick a matching `torch` wheel (see Troubleshooting).
+- **Smoke-test recipe** (~1% of the cost of a default run):
+
+  ```bash
+  uv run python -m art_style_search \
+    --max-iterations 1 --num-branches 1 --num-fixed-refs 3 \
+    --run smoke-test --new
+  ```
+
+  This runs one iteration with one experiment against three images -- enough to validate the full pipeline end-to-end (downloads, captioning, generation, evaluation, state persistence) without burning budget.
 
 ## Prerequisites
 
@@ -48,6 +68,7 @@ The meta-prompt is the only thing being optimized. It tells the captioner *how* 
 - One of:
   - [Anthropic API key](https://console.anthropic.com/) (for Claude -- default)
   - [Z.AI API key](https://z.ai/) (for GLM-5.1 -- alternative)
+  - [OpenAI API key](https://platform.openai.com/) (for GPT-5.4 -- alternative)
 
 ## Quick Start
 
@@ -60,7 +81,8 @@ cp .env.sample .env
 # Edit .env with your keys
 
 # Add reference images
-# Place 5-20 images of the target art style in reference_images/
+# Drop at least 20 images of the target art style in reference_images/,
+# or pass --num-fixed-refs N to match however many you have (minimum 3 for the smoke test).
 
 # Run the optimization loop (creates runs/run_001/)
 uv run python -m art_style_search
@@ -94,10 +116,19 @@ uv run python -m art_style_search clean --all
 | `--aspect-ratio` | `1:1` | Aspect ratio for generated images |
 | `--caption-model` | `gemini-3.1-pro-preview` | Gemini model for captioning |
 | `--generator-model` | `gemini-3.1-flash-image-preview` | Gemini model for generation |
-| `--reasoning-provider` | `anthropic` | Reasoning provider: `anthropic` or `zai` |
-| `--reasoning-model` | auto | Model name (default: `claude-sonnet-4-6` / `glm-5.1`) |
+| `--reasoning-provider` | `anthropic` | Reasoning provider: `anthropic`, `zai`, or `openai` |
+| `--reasoning-model` | auto | Model name (default: `claude-sonnet-4-6` / `glm-5.1` / `gpt-5.4`) |
 | `--gemini-concurrency` | `50` | Max concurrent Gemini API calls |
 | `--eval-concurrency` | `4` | Max concurrent eval threads |
+
+## Troubleshooting
+
+- **`torch` wheel doesn't match CUDA**. `uv sync` pulls the CPU wheel by default. NVIDIA CUDA users need to override the index: `uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124` (pick the channel that matches your CUDA version).
+- **Apple Silicon**. Works out of the box -- the code detects MPS automatically via `torch.backends.mps.is_available()` and uses it for DreamSim / HPS / aesthetics inference.
+- **Hugging Face download failures on first run**. The first invocation pulls ~2 GB of weights. If downloads fail with rate-limit errors, rerun once the limit resets. If the cache directory isn't writable, set `HF_HOME=/path/to/writable/cache` before running.
+- **Missing API keys**. The CLI refuses to start and tells you exactly which env var to set. Mapping: `GOOGLE_API_KEY` (always required, Gemini), `ANTHROPIC_API_KEY` (for `--reasoning-provider anthropic`), `ZAI_API_KEY` (for `zai`), `OPENAI_API_KEY` (for `openai`).
+- **Empty `reference_images/`**. The loop raises `FileNotFoundError` with an actionable message. Drop at least `--num-fixed-refs` images of a supported type (see `IMAGE_EXTENSIONS` in `utils.py`).
+- **`KeyError: 'branches'` when resuming**. Your `state.json` predates the branch-based → shared-KB refactor. Delete the old state and start a new run with `--new`.
 
 ## Evaluation Metrics
 
@@ -145,3 +176,21 @@ uv run pytest tests/     # Run tests
 ```
 
 Ruff handles both linting and formatting (config in `pyproject.toml`, line length 120).
+
+Optional: install [pre-commit](https://pre-commit.com/) and run `pre-commit install` to enable the `gitleaks` hook from `.pre-commit-config.yaml`, which scans staged changes for accidentally-committed secrets.
+
+## Acknowledgements
+
+This project stands on the shoulders of:
+
+- [**DreamSim**](https://github.com/ssundaram21/dreamsim) (Fu et al.) -- human-aligned perceptual similarity, the main reproduction metric.
+- [**HPS v2**](https://github.com/tgxs002/HPSv2) (Wu et al.) -- human preference score for caption-image alignment.
+- [**LAION-Aesthetics-Predictor-v2**](https://laion.ai/blog/laion-aesthetics/) via [`simple-aesthetics-predictor`](https://github.com/shunk031/simple-aesthetics-predictor).
+- [**scikit-image**](https://scikit-image.org/) -- SSIM implementation.
+- [**Google Gemini**](https://ai.google.dev/) -- captioner, image generator, and vision comparator.
+- [**Anthropic Claude**](https://www.anthropic.com/) / [**Z.AI GLM-5.1**](https://z.ai/) / [**OpenAI GPT**](https://openai.com/) -- interchangeable reasoning / optimization backends.
+- [**karpathy/autoresearch**](https://github.com/karpathy/autoresearch) -- the self-improving research-loop pattern that inspired this project.
+
+## License
+
+[MIT](LICENSE) -- see the `LICENSE` file for details.

@@ -6,6 +6,8 @@ readme = "README.md"
 authors = [
     { name = "Maxim Kruglikov", email = "olfronar@users.noreply.github.com" }
 ]
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.44.0",
@@ -22,6 +24,7 @@ dependencies = [
     "tqdm>=4.66.0",
     "python-dotenv>=1.2.2",
     "zai-sdk>=0.2.0",
+    "openai>=1.50.0",
 ]
 
 [dependency-groups]

@@ -44,6 +44,7 @@ uv run python -m art_style_search clean --all        # Remove all runs
 - `ANTHROPIC_API_KEY` - Anthropic API key for Claude (when using `--reasoning-provider anthropic`)
 - `GOOGLE_API_KEY` - Google API key for Gemini models (always required)
 - `ZAI_API_KEY` - Z.AI API key for GLM-5.1 (when using `--reasoning-provider zai`)
+- `OPENAI_API_KEY` - OpenAI API key for GPT-5.4 (when using `--reasoning-provider openai`)
 
 ## Module Map
 
@@ -54,9 +55,9 @@ uv run python -m art_style_search clean --all        # Remove all runs
 - `prompt.py` - Claude meta-prompt proposal/refinement (template structure + values); `propose_experiments` batches N proposals in one call using `<branch>` tags; `RefinementResult` dataclass for structured returns; `review_iteration` provides independent CycleResearcher-inspired review of experiment outcomes
 - `generate.py` - Gemini Flash image generation with semaphore + retry
 - `experiment.py` - Single-experiment execution (caption + generate + evaluate), `ExperimentProposal` dataclass, result collection helpers
-- `knowledge.py` - Knowledge Base maintenance (hypothesis tracking, open problems, caption diffs)
+- `knowledge.py` - Knowledge Base maintenance (hypothesis tracking, open problems); `build_caption_diffs` compares consecutive iterations' best captions for drift detection
 - `models.py` - ModelRegistry: lazy-load DreamSim/HPS/Aesthetics/SSIM with per-model locks
-- `evaluate.py` - Dispatches metrics per image via asyncio.to_thread + Gemini vision comparison
+- `evaluate.py` - Dispatches metrics per image via asyncio.to_thread + Gemini vision comparison; also `pairwise_compare_experiments` (SPO-inspired head-to-head), `check_caption_compliance` (keyword/section/length checks), `compute_style_consistency` (Jaccard overlap of [Art Style] blocks)
 - `utils.py` - Shared helpers: Anthropic streaming/text extraction, Gemini image part builder, MIME map, XML tag extraction, async retry
 - `runs.py` - Run directory management: resolve/create/list/clean isolated run directories under `runs/`
 - `state.py` - JSON persistence (state.json + per-iteration logs)
