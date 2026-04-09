@@ -193,8 +193,15 @@ class ConvergenceReason(enum.Enum):
 
 
 def get_category_names(template: PromptTemplate) -> list[str]:
-    """Merge StyleProfile field names and PromptSection names into canonical category set."""
-    cats = {"color_palette", "composition", "technique", "mood_atmosphere", "subject_matter"}
+    """Merge synonym-map keys, StyleProfile field names, and PromptSection names into
+    the canonical category set. Synonym-map keys (lighting, texture, background,
+    caption_structure, …) must be included so ``suggest_target_categories`` can rank
+    them as unexplored in fresh runs.
+    """
+    from art_style_search.utils import CATEGORY_SYNONYMS  # lazy import to avoid cycle via scoring.py
+
+    cats = set(CATEGORY_SYNONYMS.keys())
+    cats.update({"color_palette", "composition", "technique", "mood_atmosphere", "subject_matter"})
     for section in template.sections:
         cats.add(section.name)
     return sorted(cats)

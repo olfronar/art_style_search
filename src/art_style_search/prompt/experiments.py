@@ -179,7 +179,12 @@ async def propose_experiments(
         "hypothesis category. If a category has 3+ rejected approaches with no confirmed "
         "insights, DEPRIORITIZE it — focus effort where confirmed partial improvements "
         "suggest further gains are possible.\n\n"
-        "If metrics have plateaued, append [CONVERGED] at the very end of the LAST branch.\n\n"
+        "Only emit [CONVERGED] (at the very end of the LAST branch) if you have verified "
+        "ALL of the following: (1) the plateau is deep — multiple flat iterations in a row, "
+        "(2) every hypothesis category in the knowledge base has been directly targeted at "
+        "least once, and (3) you cannot name a concrete untried direction. The orchestration "
+        "loop reserves the right to reject [CONVERGED] and request a new batch if these "
+        "conditions are not met — prefer proposing a bold exploration branch over stopping.\n\n"
         f"Response format — exactly {num_experiments} branches, each containing ALL required tags:\n"
         "<branch>\n"
         "<lessons>\n"
@@ -234,15 +239,16 @@ async def propose_experiments(
         user_parts.append("\n\n")
         user_parts.append(kb_text)
 
-    # Suggest target categories for diversity
-    if knowledge_base and knowledge_base.hypotheses:
-        category_names = get_category_names(current_template)
-        suggested = knowledge_base.suggest_target_categories(num_experiments, category_names)
-        if suggested:
-            user_parts.append(
-                "\n## Suggested Target Categories (ranked by improvement potential)\n"
-                + "\n".join(f"{i}. {cat}" for i, cat in enumerate(suggested, 1))
-            )
+    # Suggest target categories for diversity — always render when a ranking is
+    # available, including on iteration 1, so the unexplored synonym-map categories
+    # (lighting, texture, background, caption_structure, …) surface at priority 1.0.
+    category_names = get_category_names(current_template)
+    suggested = knowledge_base.suggest_target_categories(num_experiments, category_names) if knowledge_base else []
+    if suggested:
+        user_parts.append(
+            "\n## Suggested Target Categories (ranked by improvement potential; "
+            "unexplored categories rank highest)\n" + "\n".join(f"{i}. {cat}" for i, cat in enumerate(suggested, 1))
+        )
 
     # Show last iteration results — only the kept experiment in detail
     if last_results:

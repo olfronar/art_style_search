@@ -144,6 +144,11 @@ _EXPLORATION_CADENCE = 2
 # doesn't help.
 _EXPLORATION_RESET_PLATEAU = 1
 
+# Minimum fraction of ``max_iterations`` that must elapse before the loop
+# honors a ``[CONVERGED]`` signal from the reasoning model. Prevents 2-flat-
+# iteration runs from self-terminating before exploring untried directions.
+_MIN_ITER_FRACTION_FOR_STOP = 0.5
+
 
 # ---------------------------------------------------------------------------
 # Per-run and per-iteration data carriers
@@ -502,10 +507,13 @@ async def _propose_iteration_experiments(
     proposals: list[ExperimentProposal] = []
     for refinement in refinements:
         if refinement.should_stop:
-            logger.info("Reasoning model signaled convergence")
-            state.converged = True
-            state.convergence_reason = ConvergenceReason.REASONING_STOP
-            return [], True
+            if _should_honor_stop(state, ctx, reason="reasoning model emitted [CONVERGED]"):
+                logger.info("Reasoning model signaled convergence — honored")
+                state.converged = True
+                state.convergence_reason = ConvergenceReason.REASONING_STOP
+                return [], True
+            # Guard rejected: drop the stop flag and keep the refinement as a real proposal.
+            refinement.should_stop = False
         proposals.append(
             ExperimentProposal(
                 template=refinement.template,
@@ -518,10 +526,16 @@ async def _propose_iteration_experiments(
         )
 
     if not proposals:
-        logger.warning("No experiments proposed — stopping")
-        state.converged = True
-        state.convergence_reason = ConvergenceReason.REASONING_STOP
-        return [], True
+        if _should_honor_stop(state, ctx, reason="no experiments proposed"):
+            logger.warning("No experiments proposed — honoring stop")
+            state.converged = True
+            state.convergence_reason = ConvergenceReason.REASONING_STOP
+            return [], True
+        # Guard rejected: fall through with an empty batch. _run_experiments_parallel
+        # handles an empty proposals list, the outer loop bumps plateau_counter, and
+        # the next propose call benefits from the widened ranked-category pressure.
+        logger.warning("No experiments proposed — guard rejected, continuing with empty batch")
+        return [], False
 
     return proposals, False
 
@@ -744,6 +758,53 @@ def _check_plateau_convergence(state: LoopState, ctx: RunContext) -> bool:
         state.convergence_reason = ConvergenceReason.PLATEAU
         return True
     return False
+
+
+def _should_honor_stop(state: LoopState, ctx: RunContext, reason: str) -> bool:
+    """Gate the reasoning model's ``[CONVERGED]`` signal behind substantive conditions.
+
+    All three clauses must hold for a stop to be honored:
+
+    1. **Iteration floor** — at least ``_MIN_ITER_FRACTION_FOR_STOP`` of ``max_iterations``
+       has elapsed. Stops short runs from self-terminating after 2 flat iterations.
+    2. **Plateau depth** — ``plateau_counter`` is within 1 of ``plateau_window`` (with a
+       floor of 2). Ensures the plateau is real, not a transient flat iteration.
+    3. **Category coverage** — every canonical hypothesis category in ``CATEGORY_SYNONYMS``
+       has at least one hypothesis in the KB. If any synonym-map category is still
+       unexplored, there is by definition a concrete untried direction — reject the stop
+       and let the widened ranked list steer the next propose call toward it.
+
+    When the guard rejects, logs the reason so post-hoc debugging is trivial.
+    """
+    from art_style_search.utils import CATEGORY_SYNONYMS
+
+    min_iter_floor = ctx.config.max_iterations * _MIN_ITER_FRACTION_FOR_STOP
+    if state.iteration + 1 < min_iter_floor:
+        logger.info(
+            "Rejecting stop (%s): iteration %d below floor %.1f",
+            reason,
+            state.iteration + 1,
+            min_iter_floor,
+        )
+        return False
+
+    plateau_floor = max(ctx.config.plateau_window - 1, 2)
+    if state.plateau_counter < plateau_floor:
+        logger.info(
+            "Rejecting stop (%s): plateau_counter %d below floor %d",
+            reason,
+            state.plateau_counter,
+            plateau_floor,
+        )
+        return False
+
+    tried = {cat for cat, prog in state.knowledge_base.categories.items() if prog.hypothesis_ids}
+    untried = sorted(cat for cat in CATEGORY_SYNONYMS if cat not in tried)
+    if untried:
+        logger.info("Rejecting stop (%s): unexplored categories=%s", reason, untried)
+        return False
+
+    return True
 
 
 # ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@ import math
 from collections.abc import Callable
 
 from art_style_search.types import AggregatedMetrics
+from art_style_search.utils import CATEGORY_SYNONYMS as _CATEGORY_SYNONYMS
 
 _HPS_CEILING = 0.35  # default empirical max for HPS v2 scores; used to normalize to [0, 1]
 
@@ -116,18 +117,9 @@ def adaptive_composite_score(
 # Hypothesis category classification
 # ---------------------------------------------------------------------------
 
-# Synonym map for category auto-classification
-_CATEGORY_SYNONYMS: dict[str, list[str]] = {
-    "color_palette": ["color", "hue", "palette", "saturation", "tone", "gradient", "shade"],
-    "composition": ["layout", "framing", "spatial", "arrangement", "perspective", "depth"],
-    "technique": ["medium", "brushwork", "brushstroke", "rendering", "stroke", "paint", "watercolor"],
-    "mood_atmosphere": ["mood", "atmosphere", "emotion", "feeling", "ambiance", "tone"],
-    "lighting": ["light", "shadow", "illumination", "glow", "highlight", "contrast"],
-    "texture": ["texture", "surface", "grain", "detail", "pattern"],
-    "subject_matter": ["subject", "character", "figure", "object", "scene"],
-    "background": ["background", "environment", "setting", "landscape", "sky"],
-    "caption_structure": ["section", "label", "order", "ordering", "structure", "format", "length"],
-}
+# Synonym map for category auto-classification — defined in utils.py so it can
+# be shared with types.get_category_names and loop._should_honor_stop without
+# creating a scoring ↔ types import cycle.
 
 
 def classify_hypothesis(text: str, categories: list[str]) -> str:
