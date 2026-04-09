@@ -50,12 +50,53 @@ def _handle_list(argv: list[str]) -> None:
         print(f"{r['name']:<25} {r['status']:<25} {r['iteration']:<6} {r['created']:<17}")
 
 
+def _handle_report(argv: list[str]) -> None:
+    parser = argparse.ArgumentParser(prog="art_style_search report", description="Generate a post-run HTML report")
+    parser.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS_DIR, help="Base directory for all runs")
+    parser.add_argument("--run", type=str, default=None, help="Generate report for a specific run")
+    parser.add_argument("--all", action="store_true", dest="report_all", help="Regenerate reports for all runs")
+    parser.add_argument("--open", action="store_true", dest="open_browser", help="Open the report in a browser")
+    args = parser.parse_args(argv)
+
+    if not args.run and not args.report_all:
+        print("Error: specify --run <name> or --all.", file=sys.stderr)
+        sys.exit(1)
+    if args.run and args.report_all:
+        print("Error: --run and --all are mutually exclusive.", file=sys.stderr)
+        sys.exit(1)
+
+    from art_style_search.report import build_all_reports, build_report
+
+    if args.report_all:
+        generated = build_all_reports(args.runs_dir)
+        if not generated:
+            print("No runs with state.json found.")
+            return
+        for path in generated:
+            print(path)
+        return
+
+    run_dir = args.runs_dir / args.run
+    if not run_dir.is_dir():
+        print(f"Error: run {args.run!r} not found at {run_dir}.", file=sys.stderr)
+        sys.exit(1)
+    try:
+        path = build_report(run_dir, open_browser=args.open_browser)
+    except FileNotFoundError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(path)
+
+
 def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "clean":
         _handle_clean(sys.argv[2:])
         return
     if len(sys.argv) > 1 and sys.argv[1] == "list":
         _handle_list(sys.argv[2:])
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "report":
+        _handle_report(sys.argv[2:])
         return
 
     from art_style_search.config import parse_args

@@ -281,3 +281,13 @@ def save_iteration_log(result: IterationResult, log_dir: Path) -> None:
     data = _to_dict(result)
     log_path.write_text(json.dumps(data, cls=_Encoder, ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info("Iteration log written to %s", log_path)
+
+
+def load_iteration_log(path: Path) -> IterationResult:
+    """Load a single iteration-log JSON file into an ``IterationResult``.
+
+    Inverse of :func:`save_iteration_log`.  Used by the HTML report generator
+    (``art_style_search.report``) to read all per-experiment logs for a run.
+    """
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    return _iteration_result_from_dict(raw)

@@ -7,11 +7,14 @@ import logging
 import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 import anthropic
 from anthropic.types import Message
 from google.genai import types as genai_types
+
+if TYPE_CHECKING:
+    from art_style_search.types import IterationResult
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +79,26 @@ def image_to_gemini_part(path: Path) -> genai_types.Part:
     """Read an image file and return a Gemini Part with correct MIME type."""
     mime_type = MIME_MAP.get(path.suffix.lower(), "image/png")
     return genai_types.Part.from_bytes(data=path.read_bytes(), mime_type=mime_type)
+
+
+def build_ref_gen_pairs(result: IterationResult) -> list[tuple[Path, Path]]:
+    """Reconstruct (reference, generated) pairs from an IterationResult.
+
+    Generated image filenames encode the caption index (e.g. ``05.png``
+    corresponds to ``iteration_captions[5]``).  We parse the stem to recover
+    the mapping.
+    """
+    caption_by_idx = {i: c.image_path for i, c in enumerate(result.iteration_captions)}
+    pairs: list[tuple[Path, Path]] = []
+    for gen_path in result.image_paths:
+        try:
+            idx = int(gen_path.stem)
+        except ValueError:
+            continue
+        ref = caption_by_idx.get(idx)
+        if ref is not None:
+            pairs.append((ref, gen_path))
+    return pairs
 
 
 def extract_text(response: Message) -> str:

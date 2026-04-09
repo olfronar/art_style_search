@@ -24,6 +24,7 @@ dependencies = [
     "python-dotenv>=1.2.2,<2.0",
     "zai-sdk>=0.2.0,<1.0",
     "openai>=1.50.0,<3.0",
+    "plotly>=5.20.0,<6.0",
 ]
 
 [dependency-groups]

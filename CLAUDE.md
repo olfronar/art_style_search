@@ -39,6 +39,9 @@ uv run python -m art_style_search --help             # Show all CLI options
 uv run python -m art_style_search list               # List all runs with status
 uv run python -m art_style_search clean --run NAME   # Remove a specific run
 uv run python -m art_style_search clean --all        # Remove all runs
+uv run python -m art_style_search report --run NAME  # Generate runs/<NAME>/report.html
+uv run python -m art_style_search report --run NAME --open  # Generate and open in browser
+uv run python -m art_style_search report --all       # Regenerate reports for all runs
 uv tool install pre-commit                           # Install the pre-commit CLI (optional)
 ```
 
@@ -61,10 +64,11 @@ uv tool install pre-commit                           # Install the pre-commit CL
 - `knowledge.py` - Knowledge Base maintenance (hypothesis tracking, open problems); `build_caption_diffs` compares consecutive iterations' best captions for drift detection
 - `models.py` - ModelRegistry: lazy-load DreamSim/HPS/Aesthetics/SSIM with per-model locks
 - `evaluate.py` - Dispatches metrics per image via asyncio.to_thread + Gemini vision comparison; also `pairwise_compare_experiments` (SPO-inspired head-to-head), `check_caption_compliance` (keyword/section/length checks), `compute_style_consistency` (Jaccard overlap of [Art Style] blocks)
-- `utils.py` - Shared helpers: Anthropic streaming/text extraction, Gemini image part builder, MIME map, XML tag extraction, async retry
+- `utils.py` - Shared helpers: Anthropic streaming/text extraction, Gemini image part builder, MIME map, XML tag extraction, async retry, `build_ref_gen_pairs` (reference/generated pairing from caption-index filenames, used by `loop.py` and `report.py`)
 - `runs.py` - Run directory management: resolve/create/list/clean isolated run directories under `runs/`
-- `state.py` - JSON persistence (state.json + per-iteration logs)
+- `state.py` - JSON persistence (state.json + per-iteration logs); `load_iteration_log` is the public reader for one log file (inverse of `save_iteration_log`)
 - `loop.py` - Experiment-based orchestration loop (zero-step → N parallel experiments per iteration → shared KB → convergence)
+- `report.py` - Post-run HTML report generator. `build_report(run_dir)` writes `runs/<name>/report.html` (Plotly metric trajectories, per-iteration drill-down, image comparison grid, hypothesis tree + KB state). Plotly is lazy-imported so the `list`/`clean` commands stay fast. Images use relative paths via `_rel(target, report_dir)`.
 - `__main__.py` - Entry point
 
 ## Directory Conventions
@@ -73,8 +77,9 @@ uv tool install pre-commit                           # Install the pre-commit CL
 - `reference_images/` - User-provided reference art (not committed)
 - `runs/` - All run data, each run in its own subdirectory (not committed):
   - `runs/<name>/outputs/` - Generated images by iteration/experiment
-  - `runs/<name>/logs/` - Iteration logs, captions cache, style profile
+  - `runs/<name>/logs/` - Iteration logs (`iter_NNN_branch_M.json`), captions cache, style profile, `best_prompt.txt`
   - `runs/<name>/state.json` - Resume state
+  - `runs/<name>/report.html` - Post-run HTML report (generated on demand via `report` subcommand)
 
 ## Evaluation Metrics
 
@@ -117,7 +122,8 @@ Each metric compares a generated image against its specific paired original (not
 - Hypothesis variability is enforced at 3 layers: (1) **Prompt-level** — each `<branch>` requires a `<target_category>` tag unique across branches; (2) **Post-parse dedup** — `enforce_hypothesis_diversity()` in `prompt.py` uses the parsed `target_category` from `RefinementResult` (falling back to `classify_hypothesis()` keyword matching if the tag is missing) to drop duplicate-category experiments; (3) **KB-guided targeting** — `KnowledgeBase.suggest_target_categories()` ranks categories by improvement potential (unexplored=1.0, partial success=0.7, diminishing returns=0.1) and injects the ranked list into the user message for Claude. The dedup filter is called in `loop.py` after `propose_experiments()` returns.
 - Number of fixed reference images is configurable via `--num-fixed-refs` (default 20). On resume, existing refs from state.json are used regardless.
 - Independent review loop (CycleResearcher-inspired): after synthesis (Phase 3.9), `review_iteration` in `prompt.py` sends all experiment results to the reasoning model as a skeptical reviewer. The reviewer assesses each experiment as SIGNAL/NOISE/MIXED, identifies which metric movements are real vs noise, and provides strategic guidance. The `strategic_guidance` is stored in `LoopState.review_feedback` (persisted in state.json) and prepended to `roundtrip_fb` at the start of the next iteration so `propose_experiments` can incorporate the reviewer's recommendations.
-- Pairwise experiment comparison (SPO-inspired): after synthesis (Phase 3.7), `pairwise_compare_experiments` in `evaluate.py` sends sampled image trios (original, set A reproduction, set B reproduction) from the top 2 experiments to Gemini vision for a head-to-head comparison. Returns a winner (A/B/TIE) with rationale. The rationale is stored in `LoopState.pairwise_feedback` (persisted in state.json) and prepended to `vision_fb` at the start of the next iteration so `propose_experiments` can learn which experiment's approach was visually superior. `_build_ref_gen_pairs` in `loop.py` reconstructs (ref, gen) pairs from `IterationResult` by parsing the caption index from generated filenames.
+- Pairwise experiment comparison (SPO-inspired): after synthesis (Phase 3.7), `pairwise_compare_experiments` in `evaluate.py` sends sampled image trios (original, set A reproduction, set B reproduction) from the top 2 experiments to Gemini vision for a head-to-head comparison. Returns a winner (A/B/TIE) with rationale. The rationale is stored in `LoopState.pairwise_feedback` (persisted in state.json) and prepended to `vision_fb` at the start of the next iteration so `propose_experiments` can learn which experiment's approach was visually superior. `build_ref_gen_pairs` in `utils.py` reconstructs (ref, gen) pairs from `IterationResult` by parsing the caption index from generated filenames; both `loop.py` (for pairwise comparison) and `report.py` (for the image grid) use it.
+- HTML report metric trajectories must use `composite_score` only — `adaptive_composite_score` is min-max normalized within a single batch and is meaningless across iterations. Within an iteration's experiment table, `adaptive_composite_score` is fine (and useful for ranking) because it's recomputed per-batch.
 
 ## Code Style
 

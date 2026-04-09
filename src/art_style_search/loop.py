@@ -59,7 +59,7 @@ from art_style_search.types import (
     KnowledgeBase,
     LoopState,
 )
-from art_style_search.utils import IMAGE_EXTENSIONS, ReasoningClient
+from art_style_search.utils import IMAGE_EXTENSIONS, ReasoningClient, build_ref_gen_pairs
 
 logger = logging.getLogger(__name__)
 
@@ -129,26 +129,6 @@ def _log_experiment_results(results: list[IterationResult], log_dir: Path) -> No
             m.vision_composition,
             "KEPT" if r.kept else "discarded",
         )
-
-
-def _build_ref_gen_pairs(result: IterationResult) -> list[tuple[Path, Path]]:
-    """Reconstruct (reference, generated) pairs from an IterationResult.
-
-    Generated image filenames encode the caption index (e.g. ``05.png``
-    corresponds to ``iteration_captions[5]``).  We parse the stem to recover
-    the mapping.
-    """
-    caption_by_idx = {i: c.image_path for i, c in enumerate(result.iteration_captions)}
-    pairs: list[tuple[Path, Path]] = []
-    for gen_path in result.image_paths:
-        try:
-            idx = int(gen_path.stem)
-        except ValueError:
-            continue
-        ref = caption_by_idx.get(idx)
-        if ref is not None:
-            pairs.append((ref, gen_path))
-    return pairs
 
 
 # Max experiment results to persist in state.json (older ones are in iteration logs)
@@ -235,8 +215,8 @@ async def _run_pairwise_comparison(
         return
     sorted_by_score = sorted(exp_results, key=lambda r: ranking.adaptive_scores[id(r)], reverse=True)
     top_a, top_b = sorted_by_score[0], sorted_by_score[1]
-    pairs_a = _build_ref_gen_pairs(top_a)
-    pairs_b = _build_ref_gen_pairs(top_b)
+    pairs_a = build_ref_gen_pairs(top_a)
+    pairs_b = build_ref_gen_pairs(top_b)
     if not pairs_a or not pairs_b:
         state.pairwise_feedback = ""
         return
