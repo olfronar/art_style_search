@@ -1,0 +1,14 @@
+# Pre-commit hooks for art_style_search.
+#
+# Optional — contributors can opt in with:
+#   pipx install pre-commit
+#   pre-commit install
+#
+# The gitleaks hook scans staged changes for accidentally-committed secrets
+# (API keys, tokens, passwords). It runs locally on every `git commit` and
+# refuses the commit on any finding.
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
