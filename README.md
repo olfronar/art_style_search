@@ -47,7 +47,7 @@ The meta-prompt is the only thing being optimized. It tells the captioner *how* 
 - [Google API key](https://aistudio.google.com/apikey) (for Gemini models -- always required)
 - One of:
   - [Anthropic API key](https://console.anthropic.com/) (for Claude -- default)
-  - [Z.AI API key](https://z.ai/) (for GLM-5 -- alternative)
+  - [Z.AI API key](https://z.ai/) (for GLM-5.1 -- alternative)
 
 ## Quick Start
 
@@ -95,7 +95,7 @@ uv run python -m art_style_search clean --all
 | `--caption-model` | `gemini-3.1-pro-preview` | Gemini model for captioning |
 | `--generator-model` | `gemini-3.1-flash-image-preview` | Gemini model for generation |
 | `--reasoning-provider` | `anthropic` | Reasoning provider: `anthropic` or `zai` |
-| `--reasoning-model` | auto | Model name (default: `claude-opus-4-6` / `glm-5`) |
+| `--reasoning-model` | auto | Model name (default: `claude-sonnet-4-6` / `glm-5.1`) |
 | `--gemini-concurrency` | `50` | Max concurrent Gemini API calls |
 | `--eval-concurrency` | `4` | Max concurrent eval threads |
 
