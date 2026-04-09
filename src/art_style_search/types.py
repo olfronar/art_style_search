@@ -611,27 +611,10 @@ class IterationResult:
 
 
 @dataclass
-class BranchState:
-    """Legacy branch state — kept for backward compat with old state.json."""
-
-    branch_id: int
-    current_template: PromptTemplate
-    best_template: PromptTemplate
-    best_metrics: AggregatedMetrics | None = None
-    history: list[IterationResult] = field(default_factory=list)
-    research_log: str = ""
-    knowledge_base: KnowledgeBase = field(default_factory=KnowledgeBase)
-    plateau_counter: int = 0
-    stopped: bool = False
-    stop_reason: ConvergenceReason | None = None
-
-
-@dataclass
 class LoopState:
     """Top-level state that gets persisted to state.json.
 
-    Uses a shared KnowledgeBase and per-iteration experiments instead of
-    persistent branches.  Old branch-based state is migrated on load.
+    Uses a shared KnowledgeBase and per-iteration experiments.
     """
 
     iteration: int

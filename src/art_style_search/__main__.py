@@ -58,14 +58,6 @@ def main() -> None:
         _handle_list(sys.argv[2:])
         return
 
-    # Warn about legacy state
-    if Path("state.json").exists():
-        print(
-            "Warning: Found legacy state.json in project root. "
-            "This version uses runs/ for all state. Use --run to manage runs.",
-            file=sys.stderr,
-        )
-
     from art_style_search.config import parse_args
     from art_style_search.loop import run
 

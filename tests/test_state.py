@@ -7,7 +7,6 @@ from pathlib import Path
 
 from art_style_search.state import (
     _aggregated_metrics_from_dict,
-    _branch_state_from_dict,
     _caption_from_dict,
     _iteration_result_from_dict,
     _knowledge_base_from_dict,
@@ -22,7 +21,6 @@ from art_style_search.state import (
 )
 from art_style_search.types import (
     AggregatedMetrics,
-    BranchState,
     Caption,
     ConvergenceReason,
     IterationResult,
@@ -108,26 +106,6 @@ def make_iteration_result(*, branch_id: int = 0, iteration: int = 1) -> Iteratio
         claude_analysis="Good progress on tonal range; edges still too crisp compared to references.",
         template_changes="Increased wet-on-wet emphasis, added dry-brush texture note.",
         kept=True,
-    )
-
-
-def make_branch_state(
-    *,
-    branch_id: int = 0,
-    n_history: int = 2,
-    stopped: bool = False,
-    stop_reason: ConvergenceReason | None = None,
-    best_metrics: AggregatedMetrics | None = None,
-) -> BranchState:
-    return BranchState(
-        branch_id=branch_id,
-        current_template=make_prompt_template(),
-        best_template=make_prompt_template(n_sections=2),
-        best_metrics=best_metrics if best_metrics is not None else make_aggregated_metrics(seed=1.0),
-        history=[make_iteration_result(branch_id=branch_id, iteration=i + 1) for i in range(n_history)],
-        plateau_counter=1,
-        stopped=stopped,
-        stop_reason=stop_reason,
     )
 
 
@@ -288,22 +266,13 @@ class TestRoundTrip:
         assert restored.aggregated == original.aggregated
         assert restored.kept == original.kept
 
-    def test_branch_state_round_trip(self) -> None:
-        original = make_branch_state(branch_id=1, n_history=3)
-        d = json.loads(json.dumps(_to_dict(original)))
-        restored = _branch_state_from_dict(d)
-        assert restored.branch_id == original.branch_id
-        assert restored.best_metrics == original.best_metrics
-        assert restored.plateau_counter == original.plateau_counter
-        assert len(restored.history) == 3
-
     def test_convergence_reason_round_trip(self) -> None:
         for reason in ConvergenceReason:
-            branch = make_branch_state(stopped=True, stop_reason=reason)
-            d = json.loads(json.dumps(_to_dict(branch)))
-            restored = _branch_state_from_dict(d)
-            assert restored.stop_reason == reason
-            assert restored.stopped is True
+            state = make_loop_state(converged=True, convergence_reason=reason)
+            d = json.loads(json.dumps(_to_dict(state)))
+            restored = _loop_state_from_dict(d)
+            assert restored.convergence_reason == reason
+            assert restored.converged is True
 
     def test_loop_state_round_trip(self) -> None:
         original = make_loop_state(
@@ -554,24 +523,29 @@ class TestKnowledgeBaseSerialization:
         assert len(kb.open_problems) == 1
 
     def test_backward_compat_no_kb_field(self) -> None:
-        """Old state.json without knowledge_base should load with empty KB."""
-        branch_dict = {
-            "branch_id": 0,
+        """An old state.json without a knowledge_base key should load with an empty KB."""
+        loop_state_dict = {
+            "iteration": 0,
             "current_template": {"sections": [], "negative_prompt": None},
             "best_template": {"sections": [], "negative_prompt": None},
             "best_metrics": None,
-            "history": [],
-            "research_log": "## Iteration 1\nOld format log",
-            "plateau_counter": 0,
-            "stopped": False,
-            "stop_reason": None,
+            "captions": [],
+            "style_profile": {
+                "color_palette": "",
+                "composition": "",
+                "technique": "",
+                "mood_atmosphere": "",
+                "subject_matter": "",
+                "influences": "",
+                "gemini_raw_analysis": "",
+                "claude_raw_analysis": "",
+            },
             # No "knowledge_base" key!
         }
-        branch = _branch_state_from_dict(branch_dict)
-        assert branch.knowledge_base is not None
-        assert len(branch.knowledge_base.hypotheses) == 0
-        assert branch.knowledge_base.next_id == 1
-        assert branch.research_log == "## Iteration 1\nOld format log"
+        state = _loop_state_from_dict(loop_state_dict)
+        assert state.knowledge_base is not None
+        assert len(state.knowledge_base.hypotheses) == 0
+        assert state.knowledge_base.next_id == 1
 
     def test_empty_kb_round_trip(self) -> None:
         kb = KnowledgeBase()
