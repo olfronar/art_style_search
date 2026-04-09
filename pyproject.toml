@@ -10,20 +10,20 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
-    "anthropic>=0.44.0",
-    "google-genai>=1.51.0",
-    "Pillow>=10.0.0",
-    "torch>=2.1.0",
-    "torchvision>=0.16.0",
-    "transformers>=4.40.0",
-    "dreamsim>=0.2.0",
-    "hpsv2>=1.2.0",
-    "simple-aesthetics-predictor>=0.1.2",
-    "numpy>=1.26.0",
-    "scikit-image>=0.22.0",
-    "python-dotenv>=1.2.2",
-    "zai-sdk>=0.2.0",
-    "openai>=1.50.0",
+    "anthropic>=0.44.0,<1.0",
+    "google-genai>=1.51.0,<2.0",
+    "Pillow>=10.0.0,<13.0",
+    "torch>=2.1.0,<3.0",
+    "torchvision>=0.16.0,<1.0",
+    "transformers>=4.40.0,<5.0",
+    "dreamsim>=0.2.0,<1.0",
+    "hpsv2>=1.2.0,<2.0",
+    "simple-aesthetics-predictor>=0.1.2,<1.0",
+    "numpy>=1.26.0,<3.0",
+    "scikit-image>=0.22.0,<1.0",
+    "python-dotenv>=1.2.2,<2.0",
+    "zai-sdk>=0.2.0,<1.0",
+    "openai>=1.50.0,<3.0",
 ]
 
 [dependency-groups]

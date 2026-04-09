@@ -107,20 +107,20 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anthropic", specifier = ">=0.44.0" },
-    { name = "dreamsim", specifier = ">=0.2.0" },
-    { name = "google-genai", specifier = ">=1.51.0" },
-    { name = "hpsv2", specifier = ">=1.2.0" },
-    { name = "numpy", specifier = ">=1.26.0" },
-    { name = "openai", specifier = ">=1.50.0" },
-    { name = "pillow", specifier = ">=10.0.0" },
-    { name = "python-dotenv", specifier = ">=1.2.2" },
-    { name = "scikit-image", specifier = ">=0.22.0" },
-    { name = "simple-aesthetics-predictor", specifier = ">=0.1.2" },
-    { name = "torch", specifier = ">=2.1.0" },
-    { name = "torchvision", specifier = ">=0.16.0" },
-    { name = "transformers", specifier = ">=4.40.0" },
-    { name = "zai-sdk", specifier = ">=0.2.0" },
+    { name = "anthropic", specifier = ">=0.44.0,<1.0" },
+    { name = "dreamsim", specifier = ">=0.2.0,<1.0" },
+    { name = "google-genai", specifier = ">=1.51.0,<2.0" },
+    { name = "hpsv2", specifier = ">=1.2.0,<2.0" },
+    { name = "numpy", specifier = ">=1.26.0,<3.0" },
+    { name = "openai", specifier = ">=1.50.0,<3.0" },
+    { name = "pillow", specifier = ">=10.0.0,<13.0" },
+    { name = "python-dotenv", specifier = ">=1.2.2,<2.0" },
+    { name = "scikit-image", specifier = ">=0.22.0,<1.0" },
+    { name = "simple-aesthetics-predictor", specifier = ">=0.1.2,<1.0" },
+    { name = "torch", specifier = ">=2.1.0,<3.0" },
+    { name = "torchvision", specifier = ">=0.16.0,<1.0" },
+    { name = "transformers", specifier = ">=4.40.0,<5.0" },
+    { name = "zai-sdk", specifier = ">=0.2.0,<1.0" },
 ]
 
 [package.metadata.requires-dev]
