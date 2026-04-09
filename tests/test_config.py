@@ -68,14 +68,12 @@ class TestParseArgsWithAllRequired:
                 max_iterations="50",
                 plateau_window="10",
                 num_branches="5",
-                num_images="8",
                 aspect_ratio="16:9",
             )
         )
         assert cfg.max_iterations == 50
         assert cfg.plateau_window == 10
         assert cfg.num_branches == 5
-        assert cfg.num_images == 8
         assert cfg.aspect_ratio == "16:9"
 
 
@@ -122,17 +120,8 @@ class TestDefaults:
     def test_num_branches(self, cfg: Config) -> None:
         assert cfg.num_branches == 5
 
-    def test_num_images(self, cfg: Config) -> None:
-        assert cfg.num_images == 4
-
     def test_aspect_ratio(self, cfg: Config) -> None:
         assert cfg.aspect_ratio == "1:1"
-
-    def test_max_analysis_images(self, cfg: Config) -> None:
-        assert cfg.max_analysis_images == 10
-
-    def test_max_eval_images(self, cfg: Config) -> None:
-        assert cfg.max_eval_images == 10
 
     def test_num_fixed_refs(self, cfg: Config) -> None:
         assert cfg.num_fixed_refs == 20

@@ -31,19 +31,16 @@ class Config:
     num_branches: int
 
     # Generation
-    num_images: int
     aspect_ratio: str
 
     # Sampling
-    max_analysis_images: int
-    max_eval_images: int
     num_fixed_refs: int
 
     # Models
     caption_model: str
     generator_model: str
     reasoning_model: str
-    reasoning_provider: str  # "anthropic" or "zai"
+    reasoning_provider: str  # "anthropic", "zai", or "openai"
 
     # Concurrency
     gemini_concurrency: int
@@ -53,6 +50,7 @@ class Config:
     anthropic_api_key: str
     google_api_key: str
     zai_api_key: str
+    openai_api_key: str
 
 
 def parse_args(argv: list[str] | None = None) -> Config:
@@ -79,13 +77,10 @@ def parse_args(argv: list[str] | None = None) -> Config:
 
     # Generation
     gen = parser.add_argument_group("Generation")
-    gen.add_argument("--num-images", type=int, default=4, help="Images per iteration per branch")
     gen.add_argument("--aspect-ratio", default="1:1", help="Aspect ratio for generated images")
 
     # Sampling
     samp = parser.add_argument_group("Sampling")
-    samp.add_argument("--max-analysis-images", type=int, default=10, help="Max reference images for zero-step analysis")
-    samp.add_argument("--max-eval-images", type=int, default=10, help="Max reference images per evaluation iteration")
     samp.add_argument("--num-fixed-refs", type=int, default=20, help="Fixed reference images for optimization")
 
     # Models
@@ -98,14 +93,14 @@ def parse_args(argv: list[str] | None = None) -> Config:
     )
     models.add_argument(
         "--reasoning-provider",
-        choices=["anthropic", "zai"],
+        choices=["anthropic", "zai", "openai"],
         default="anthropic",
-        help="Reasoning model provider: anthropic (Claude) or zai (GLM-5.1)",
+        help="Reasoning model provider: anthropic (Claude), zai (GLM-5.1), or openai (GPT-5.4)",
     )
     models.add_argument(
         "--reasoning-model",
         default=None,
-        help="Reasoning model name (default: claude-sonnet-4-6 for anthropic, glm-5.1 for zai)",
+        help="Reasoning model name (default: claude-sonnet-4-6 / glm-5.1 / gpt-5.4)",
     )
 
     # Concurrency
@@ -118,23 +113,27 @@ def parse_args(argv: list[str] | None = None) -> Config:
     keys.add_argument("--anthropic-api-key", default=None, help="Anthropic API key (env: ANTHROPIC_API_KEY)")
     keys.add_argument("--google-api-key", default=None, help="Google API key (env: GOOGLE_API_KEY)")
     keys.add_argument("--zai-api-key", default=None, help="Z.AI API key (env: ZAI_API_KEY)")
+    keys.add_argument("--openai-api-key", default=None, help="OpenAI API key (env: OPENAI_API_KEY)")
 
     args = parser.parse_args(argv)
 
     anthropic_key = args.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY", "")
     google_key = args.google_api_key or os.environ.get("GOOGLE_API_KEY", "")
     zai_key = args.zai_api_key or os.environ.get("ZAI_API_KEY", "")
+    openai_key = args.openai_api_key or os.environ.get("OPENAI_API_KEY", "")
 
     provider = args.reasoning_provider
     if provider == "anthropic" and not anthropic_key:
         parser.error("ANTHROPIC_API_KEY must be set via --anthropic-api-key or environment variable")
     if provider == "zai" and not zai_key:
         parser.error("ZAI_API_KEY must be set via --zai-api-key or environment variable")
+    if provider == "openai" and not openai_key:
+        parser.error("OPENAI_API_KEY must be set via --openai-api-key or environment variable")
     if not google_key:
         parser.error("GOOGLE_API_KEY must be set via --google-api-key or environment variable")
 
     # Default model based on provider
-    default_models = {"anthropic": "claude-sonnet-4-6", "zai": "glm-5.1"}
+    default_models = {"anthropic": "claude-sonnet-4-6", "zai": "glm-5.1", "openai": "gpt-5.4"}
     reasoning_model = args.reasoning_model or default_models[provider]
 
     if not args.reference_dir.is_dir():
@@ -156,10 +155,7 @@ def parse_args(argv: list[str] | None = None) -> Config:
         max_iterations=args.max_iterations,
         plateau_window=args.plateau_window,
         num_branches=args.num_branches,
-        num_images=args.num_images,
         aspect_ratio=args.aspect_ratio,
-        max_analysis_images=args.max_analysis_images,
-        max_eval_images=args.max_eval_images,
         num_fixed_refs=args.num_fixed_refs,
         caption_model=args.caption_model,
         generator_model=args.generator_model,
@@ -170,4 +166,5 @@ def parse_args(argv: list[str] | None = None) -> Config:
         anthropic_api_key=anthropic_key,
         google_api_key=google_key,
         zai_api_key=zai_key,
+        openai_api_key=openai_key,
     )
