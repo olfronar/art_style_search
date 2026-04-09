@@ -6,6 +6,7 @@ import logging
 import re
 
 from art_style_search.experiment import ExperimentProposal
+from art_style_search.scoring import classify_hypothesis
 from art_style_search.types import (
     AggregatedMetrics,
     Caption,
@@ -13,7 +14,6 @@ from art_style_search.types import (
     KnowledgeBase,
     OpenProblem,
     PromptTemplate,
-    classify_hypothesis,
     get_category_names,
 )
 

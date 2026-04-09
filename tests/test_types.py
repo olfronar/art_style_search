@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
-from art_style_search.types import (
+from art_style_search.scoring import (
     IMPROVEMENT_EPSILON,
+    classify_hypothesis,
+    composite_score,
+    improvement_epsilon,
+)
+from art_style_search.types import (
     AggregatedMetrics,
     ConvergenceReason,
     KnowledgeBase,
     OpenProblem,
     PromptSection,
     PromptTemplate,
-    classify_hypothesis,
-    composite_score,
     get_category_names,
-    improvement_epsilon,
 )
 
 # -- composite_score ----------------------------------------------------------

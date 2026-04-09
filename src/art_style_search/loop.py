@@ -40,15 +40,13 @@ from art_style_search.prompt import (
     review_iteration,
     synthesize_templates,
 )
+from art_style_search.scoring import adaptive_composite_score, composite_score, improvement_epsilon
 from art_style_search.state import load_state, save_iteration_log, save_state
 from art_style_search.types import (
     ConvergenceReason,
     IterationResult,
     KnowledgeBase,
     LoopState,
-    adaptive_composite_score,
-    composite_score,
-    improvement_epsilon,
 )
 from art_style_search.utils import IMAGE_EXTENSIONS, ReasoningClient
 
@@ -230,6 +228,7 @@ async def run(config: Config) -> LoopState:
         config.reasoning_provider,
         anthropic_api_key=config.anthropic_api_key,
         zai_api_key=config.zai_api_key,
+        openai_api_key=config.openai_api_key,
     )
 
     gemini_semaphore = asyncio.Semaphore(config.gemini_concurrency)

@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from art_style_search.scoring import classify_hypothesis, composite_score
 from art_style_search.types import (
     AggregatedMetrics,
     IterationResult,
@@ -20,8 +21,6 @@ from art_style_search.types import (
     PromptTemplate,
     ReviewResult,
     StyleProfile,
-    classify_hypothesis,
-    composite_score,
     get_category_names,
 )
 from art_style_search.utils import ReasoningClient, extract_xml_tag
