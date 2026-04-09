@@ -44,8 +44,24 @@ from art_style_search.types import (
 logger = logging.getLogger(__name__)
 
 _PLOTLY_CDN = "https://cdn.plot.ly/plotly-2.35.2.min.js"
+_FONTS_CDN = (
+    "https://fonts.googleapis.com/css2"
+    "?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900"
+    "&family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400"
+    "&family=IBM+Plex+Mono:wght@400;500"
+    "&display=swap"
+)
 _MAX_TREE_DEPTH = 6
 _LOG_PATTERN = re.compile(r"iter_(\d+)_branch_(\d+)\.json$")
+
+# Editorial palette — used in CSS *and* cascaded into Plotly charts so the
+# two visual languages stay consistent.
+_COLOR_BG = "#0e0e0c"  # warm near-black
+_COLOR_INK = "#f2eee6"  # cream primary text
+_COLOR_INK_MUTED = "#908a7c"  # faded cream
+_COLOR_RULE = "#2a2823"  # hairline dividers
+_COLOR_ACCENT = "#d9543a"  # vermilion — winners, highlights
+_COLOR_GOLD = "#c9a961"  # muted gold — global best context
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +178,54 @@ def _metric_series(
     return iters, best, mean
 
 
+def _editorial_layout(**overrides) -> dict:
+    """Shared Plotly layout for all charts — transparent bg, serif titles, cream ink."""
+    base = dict(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(
+            family='"IBM Plex Sans", system-ui, sans-serif',
+            color=_COLOR_INK,
+            size=12,
+        ),
+        title=dict(
+            font=dict(family='"Fraunces", Georgia, serif', size=22, color=_COLOR_INK),
+            x=0.0,
+            xanchor="left",
+        ),
+        xaxis=dict(
+            gridcolor=_COLOR_RULE,
+            linecolor=_COLOR_RULE,
+            zerolinecolor=_COLOR_RULE,
+            tickfont=dict(family='"IBM Plex Mono", monospace', size=11, color=_COLOR_INK_MUTED),
+            title=dict(
+                font=dict(family='"IBM Plex Sans", sans-serif', size=11, color=_COLOR_INK_MUTED),
+            ),
+        ),
+        yaxis=dict(
+            gridcolor=_COLOR_RULE,
+            linecolor=_COLOR_RULE,
+            zerolinecolor=_COLOR_RULE,
+            tickfont=dict(family='"IBM Plex Mono", monospace', size=11, color=_COLOR_INK_MUTED),
+            title=dict(
+                font=dict(family='"IBM Plex Sans", sans-serif', size=11, color=_COLOR_INK_MUTED),
+            ),
+        ),
+        legend=dict(
+            font=dict(family='"IBM Plex Sans", sans-serif', size=11, color=_COLOR_INK),
+            bgcolor="rgba(0,0,0,0)",
+        ),
+        margin=dict(l=60, r=40, t=70, b=60),
+        hoverlabel=dict(
+            bgcolor=_COLOR_BG,
+            bordercolor=_COLOR_ACCENT,
+            font=dict(family='"IBM Plex Mono", monospace', color=_COLOR_INK),
+        ),
+    )
+    base.update(overrides)
+    return base
+
+
 def _build_composite_trajectory(data: ReportData) -> str:
     """Hero chart: composite_score best + mean per iteration as JSON."""
     import plotly.graph_objects as go
@@ -174,9 +238,9 @@ def _build_composite_trajectory(data: ReportData) -> str:
             x=iters,
             y=best,
             mode="lines+markers",
-            name="Best (per iter)",
-            line=dict(color="#4ade80", width=3),
-            marker=dict(size=8),
+            name="Best per iteration",
+            line=dict(color=_COLOR_ACCENT, width=2.5, shape="spline", smoothing=0.4),
+            marker=dict(size=9, color=_COLOR_ACCENT, line=dict(color=_COLOR_BG, width=2)),
         )
     )
     fig.add_trace(
@@ -184,27 +248,37 @@ def _build_composite_trajectory(data: ReportData) -> str:
             x=iters,
             y=mean,
             mode="lines+markers",
-            name="Mean (per iter)",
-            line=dict(color="#60a5fa", width=2, dash="dot"),
-            marker=dict(size=6),
+            name="Mean per iteration",
+            line=dict(color=_COLOR_INK_MUTED, width=1.5, dash="2px,4px"),
+            marker=dict(size=5, color=_COLOR_INK_MUTED, symbol="circle-open"),
         )
     )
     if data.state.global_best_metrics is not None:
         fig.add_hline(
             y=composite_score(data.state.global_best_metrics),
-            line_color="#fbbf24",
-            line_dash="dash",
-            annotation_text="Global best",
+            line_color=_COLOR_GOLD,
+            line_dash="dot",
+            line_width=1,
+            annotation_text="global best",
             annotation_position="top right",
+            annotation_font=dict(family='"Fraunces", serif', size=11, color=_COLOR_GOLD),
         )
     fig.update_layout(
-        template="plotly_dark",
-        title="Composite Score",
-        xaxis_title="Iteration",
-        yaxis_title="composite_score",
-        margin=dict(l=50, r=30, t=50, b=50),
-        height=420,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        **_editorial_layout(
+            title="I. Composite Score",
+            xaxis_title="iteration",
+            yaxis_title="composite score",
+            height=440,
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="left",
+                x=0,
+                font=dict(family='"IBM Plex Sans", sans-serif', size=11, color=_COLOR_INK),
+                bgcolor="rgba(0,0,0,0)",
+            ),
+        )
     )
     return fig.to_json()
 
@@ -228,7 +302,13 @@ def _build_per_metric_trajectories(data: ReportData) -> str:
     from plotly.subplots import make_subplots
 
     titles = [title for _, title in _METRIC_SPECS]
-    fig = make_subplots(rows=3, cols=3, subplot_titles=titles, vertical_spacing=0.12, horizontal_spacing=0.08)
+    fig = make_subplots(
+        rows=3,
+        cols=3,
+        subplot_titles=titles,
+        vertical_spacing=0.14,
+        horizontal_spacing=0.09,
+    )
 
     for idx, (attr, _title) in enumerate(_METRIC_SPECS):
         row = idx // 3 + 1
@@ -239,9 +319,9 @@ def _build_per_metric_trajectories(data: ReportData) -> str:
                 x=iters,
                 y=best,
                 mode="lines+markers",
-                name="Best",
-                line=dict(color="#4ade80", width=2),
-                marker=dict(size=5),
+                name="best",
+                line=dict(color=_COLOR_ACCENT, width=2),
+                marker=dict(size=5, color=_COLOR_ACCENT),
                 showlegend=(idx == 0),
                 legendgroup="best",
             ),
@@ -253,9 +333,9 @@ def _build_per_metric_trajectories(data: ReportData) -> str:
                 x=iters,
                 y=mean,
                 mode="lines+markers",
-                name="Mean",
-                line=dict(color="#60a5fa", width=1.5, dash="dot"),
-                marker=dict(size=4),
+                name="mean",
+                line=dict(color=_COLOR_INK_MUTED, width=1.2, dash="2px,4px"),
+                marker=dict(size=4, color=_COLOR_INK_MUTED, symbol="circle-open"),
                 showlegend=(idx == 0),
                 legendgroup="mean",
             ),
@@ -264,13 +344,43 @@ def _build_per_metric_trajectories(data: ReportData) -> str:
         )
 
     fig.update_layout(
-        template="plotly_dark",
-        title="Per-metric trajectories",
-        height=820,
-        margin=dict(l=50, r=30, t=80, b=40),
-        legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="right", x=1),
+        **_editorial_layout(
+            title="II. Per-metric trajectories",
+            height=860,
+            margin=dict(l=60, r=40, t=100, b=60),
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.03,
+                xanchor="left",
+                x=0,
+                font=dict(family='"IBM Plex Sans", sans-serif', size=11, color=_COLOR_INK),
+                bgcolor="rgba(0,0,0,0)",
+            ),
+        )
     )
-    fig.update_xaxes(title_text="Iteration", row=3)
+    # Cascade editorial axis styling into every subplot (update_layout only hits
+    # the first by default for make_subplots figures).
+    fig.update_xaxes(
+        gridcolor=_COLOR_RULE,
+        linecolor=_COLOR_RULE,
+        zerolinecolor=_COLOR_RULE,
+        tickfont=dict(family='"IBM Plex Mono", monospace', size=10, color=_COLOR_INK_MUTED),
+    )
+    fig.update_yaxes(
+        gridcolor=_COLOR_RULE,
+        linecolor=_COLOR_RULE,
+        zerolinecolor=_COLOR_RULE,
+        tickfont=dict(family='"IBM Plex Mono", monospace', size=10, color=_COLOR_INK_MUTED),
+    )
+    # Retitle subplot annotations with Fraunces italic, small caps feel.
+    for annotation in fig["layout"]["annotations"]:
+        annotation["font"] = dict(
+            family='"Fraunces", Georgia, serif',
+            size=13,
+            color=_COLOR_INK,
+        )
+    fig.update_xaxes(title_text="iteration", row=3)
     return fig.to_json()
 
 
@@ -321,7 +431,7 @@ def _render_header(data: ReportData) -> str:
     iteration_count = max(data.iteration_numbers(), default=-1) + 1
     status = "in progress"
     if state.converged and state.convergence_reason is not None:
-        status = f"converged ({state.convergence_reason.value})"
+        status = f"converged · {state.convergence_reason.value.replace('_', ' ')}"
 
     best_score = "—"
     if state.global_best_metrics is not None:
@@ -336,37 +446,75 @@ def _render_header(data: ReportData) -> str:
         ("Subject matter", profile.subject_matter),
         ("Influences", profile.influences),
     ]
-    profile_html = "".join(f"<tr><th>{_h(label)}</th><td>{_h(text)}</td></tr>" for label, text in profile_rows)
+    profile_html = "".join(
+        f"<div class='kv-row'><dt>{_h(label)}</dt><dd>{_h(text)}</dd></div>" for label, text in profile_rows
+    )
 
     return f"""
-<header class="run-header">
-  <h1>{_h(data.run_name)}</h1>
-  <div class="stat-row">
-    <div class="stat"><span class="stat-label">Iterations</span><span class="stat-value">{iteration_count}</span></div>
-    <div class="stat"><span class="stat-label">Status</span><span class="stat-value">{_h(status)}</span></div>
-    <div class="stat"><span class="stat-label">Best composite</span><span class="stat-value">{best_score}</span></div>
-    <div class="stat"><span class="stat-label">Fixed refs</span><span class="stat-value">{len(state.fixed_references)}</span></div>
+<header class="masthead">
+  <div class="masthead-meta">
+    <span>Art Style Search</span>
+    <span class="meta-sep">·</span>
+    <span>Post-run Report</span>
   </div>
-  <details class="collapsible">
-    <summary>Style profile</summary>
-    <table class="kv">{profile_html}</table>
-  </details>
-  <details class="collapsible">
-    <summary>Best meta-prompt</summary>
-    <pre class="prompt-block">{_h(state.global_best_prompt)}</pre>
-  </details>
+  <h1 class="masthead-title">{_h(data.run_name)}</h1>
+  <div class="masthead-rule"></div>
+  <dl class="stats">
+    <div class="stat stat--anim" style="--delay: 0ms">
+      <dd class="stat-value">{iteration_count}</dd>
+      <dt class="stat-label">iterations</dt>
+    </div>
+    <div class="stat stat--anim" style="--delay: 80ms">
+      <dd class="stat-value stat-value--score">{best_score}</dd>
+      <dt class="stat-label">best composite</dt>
+    </div>
+    <div class="stat stat--anim" style="--delay: 160ms">
+      <dd class="stat-value stat-value--status">{_h(status)}</dd>
+      <dt class="stat-label">status</dt>
+    </div>
+    <div class="stat stat--anim" style="--delay: 240ms">
+      <dd class="stat-value">{len(state.fixed_references)}</dd>
+      <dt class="stat-label">fixed references</dt>
+    </div>
+  </dl>
+  <div class="preamble">
+    <details class="fold">
+      <summary><span class="fold-cue">§</span> Style profile</summary>
+      <dl class="kv">{profile_html}</dl>
+    </details>
+    <details class="fold">
+      <summary><span class="fold-cue">§</span> Best meta-prompt</summary>
+      <pre class="prompt-block">{_h(state.global_best_prompt)}</pre>
+    </details>
+  </div>
 </header>
 """
 
 
 def _render_trajectories_section(composite_json: str, multi_json: str) -> str:
     if not composite_json:
-        return '<section><h2>Metric trajectories</h2><p class="empty">No iteration logs available yet.</p></section>'
+        return (
+            '<section class="trajectories">'
+            '<div class="section-head"><span class="section-numeral">I</span>'
+            "<h2>Metric trajectories</h2></div>"
+            '<p class="empty">No iteration logs available yet.</p>'
+            "</section>"
+        )
     return f"""
 <section class="trajectories">
-  <h2>Metric trajectories</h2>
-  <div id="composite-chart" class="chart"></div>
-  <div id="metrics-chart" class="chart"></div>
+  <div class="section-head">
+    <span class="section-numeral">I</span>
+    <h2>Metric trajectories</h2>
+    <p class="section-kicker">Composite score and nine component metrics over the run.</p>
+  </div>
+  <figure class="chart-figure">
+    <div id="composite-chart" class="chart"></div>
+    <figcaption>Figure 1 · Composite score, best and mean per iteration. Gold hairline marks the global best.</figcaption>
+  </figure>
+  <figure class="chart-figure">
+    <div id="metrics-chart" class="chart"></div>
+    <figcaption>Figure 2 · All nine components of the composite score. Vermilion = best-of-iteration; cream = batch mean.</figcaption>
+  </figure>
   <script type="application/json" id="composite-data">{composite_json}</script>
   <script type="application/json" id="metrics-data">{multi_json}</script>
 </section>
@@ -384,29 +532,30 @@ def _render_experiment_table(results: list[IterationResult]) -> str:
         score = composite_score(r.aggregated)
         adaptive = adaptive_composite_score(r.aggregated, batch) if len(batch) >= 2 else None
         adaptive_cell = _fmt_score(adaptive) if adaptive is not None else "—"
-        winner_mark = "★ " if r.branch_id == winner_id else ""
-        kept_cell = "✓" if r.kept else "✗"
+        winner_mark = "<span class='winner-star'>✦</span>" if r.branch_id == winner_id else ""
+        kept_cell = "kept" if r.kept else "cut"
         kept_class = "kept-yes" if r.kept else "kept-no"
         row_class = " class='winner-row'" if r.branch_id == winner_id else ""
         hyp = _h(r.hypothesis)
+        truncated = hyp[:160] + ("…" if len(r.hypothesis) > 160 else "")
         rows.append(
             f"<tr{row_class}>"
-            f"<td class='num'>{winner_mark}{r.branch_id}</td>"
-            f"<td class='hypothesis' title='{hyp}'>{hyp[:140]}{'…' if len(r.hypothesis) > 140 else ''}</td>"
-            f"<td class='num'>{_fmt_score(score)}</td>"
-            f"<td class='num'>{adaptive_cell}</td>"
-            f"<td class='{kept_class}'>{kept_cell}</td>"
+            f"<td class='num-col'>{winner_mark}<span class='branch-id'>{r.branch_id:02d}</span></td>"
+            f"<td class='hypothesis-col' title='{hyp}'>{truncated}</td>"
+            f"<td class='num-col numeric'>{_fmt_score(score)}</td>"
+            f"<td class='num-col numeric'>{adaptive_cell}</td>"
+            f"<td class='kept-col {kept_class}'>{kept_cell}</td>"
             "</tr>"
         )
     return f"""
 <table class="experiment-table">
   <thead>
     <tr>
-      <th>#</th>
+      <th class="num-col">#</th>
       <th>Hypothesis</th>
-      <th>Composite</th>
-      <th>Adaptive</th>
-      <th>Kept</th>
+      <th class="num-col numeric">composite</th>
+      <th class="num-col numeric">adaptive</th>
+      <th class="kept-col">verdict</th>
     </tr>
   </thead>
   <tbody>{"".join(rows)}</tbody>
@@ -438,12 +587,22 @@ def _render_image_grid(winner: IterationResult, report_dir: Path) -> str:
         tooltip = _metric_scores_tooltip(scores) if scores else ""
         ref_rel = _rel(ref, report_dir)
         gen_rel = _rel(gen, report_dir)
+        ref_name = ref.stem[:28] + ("…" if len(ref.stem) > 28 else "")
         cards.append(
             f"""
 <figure class="pair">
-  <img src="{_h(ref_rel)}" alt="reference {idx}">
-  <img src="{_h(gen_rel)}" alt="generated {idx}" title="{_h(tooltip)}">
-  <figcaption>{idx:02d} · {_h(ref.name)}</figcaption>
+  <div class="pair-plate">
+    <div class="plate-label">ref</div>
+    <img src="{_h(ref_rel)}" alt="reference {idx}" loading="lazy">
+  </div>
+  <div class="pair-plate">
+    <div class="plate-label">gen</div>
+    <img src="{_h(gen_rel)}" alt="generated {idx}" title="{_h(tooltip)}" loading="lazy">
+  </div>
+  <figcaption>
+    <span class="pair-num">{idx:02d}</span>
+    <span class="pair-name">{_h(ref_name)}</span>
+  </figcaption>
   <code class="score">{_h(tooltip)}</code>
 </figure>"""
         )
@@ -453,13 +612,20 @@ def _render_image_grid(winner: IterationResult, report_dir: Path) -> str:
 def _render_iteration_drilldown(data: ReportData, report_dir: Path) -> str:
     iterations = data.iteration_numbers()
     if not iterations:
-        return '<section><h2>Iterations</h2><p class="empty">No iteration logs available yet.</p></section>'
+        return (
+            '<section class="iterations">'
+            '<div class="section-head"><span class="section-numeral">II</span>'
+            "<h2>Iterations</h2></div>"
+            '<p class="empty">No iteration logs available yet.</p>'
+            "</section>"
+        )
 
     latest = iterations[-1]
     blocks: list[str] = []
     for i in iterations:
         results = data.iteration_logs[i]
         winner = data.winner_of(i)
+        winner_score = _fmt_score(composite_score(winner.aggregated)) if winner else "—"
         experiment_table = _render_experiment_table(results)
         grid = _render_image_grid(winner, report_dir) if winner else ""
         narrative_blocks: list[str] = []
@@ -480,13 +646,29 @@ def _render_iteration_drilldown(data: ReportData, report_dir: Path) -> str:
         blocks.append(
             f"""
 <details class="iteration"{open_attr}>
-  <summary>Iteration {i} · {len(results)} experiments</summary>
-  {experiment_table}
-  {"".join(narrative_blocks)}
-  {grid}
+  <summary>
+    <span class="iter-number">Iteration {i:02d}</span>
+    <span class="iter-sep">—</span>
+    <span class="iter-count">{len(results)} experiments</span>
+    <span class="iter-score">{winner_score}</span>
+  </summary>
+  <div class="iteration-body">
+    {experiment_table}
+    {"".join(narrative_blocks)}
+    {grid}
+  </div>
 </details>"""
         )
-    return f"<section><h2>Iterations</h2>{''.join(blocks)}</section>"
+    return f"""
+<section class="iterations">
+  <div class="section-head">
+    <span class="section-numeral">II</span>
+    <h2>Iterations</h2>
+    <p class="section-kicker">Per-iteration experiments with their hypotheses, scores, and the winner's reference / generated pairs.</p>
+  </div>
+  {"".join(blocks)}
+</section>
+"""
 
 
 def _render_category_progress(kb: KnowledgeBase) -> str:
@@ -499,19 +681,24 @@ def _render_category_progress(kb: KnowledgeBase) -> str:
         n_total = len(cat.hypothesis_ids)
         n_confirmed = len(cat.confirmed_insights)
         n_rejected = len(cat.rejected_approaches)
-        # Simple bar: proportion confirmed
         confirmed_pct = (n_confirmed / max(n_total, 1)) * 100
         rejected_pct = (n_rejected / max(n_total, 1)) * 100
-        delta_str = f"Δ {cat.best_perceptual_delta:+.3f}" if cat.best_perceptual_delta is not None else "no Δ yet"
+        delta_str = f"Δ {cat.best_perceptual_delta:+.3f}" if cat.best_perceptual_delta is not None else "—"
+        display_name = name.replace("_", " ")
         rows.append(
             f"""
 <div class="cat-row">
-  <div class="cat-name">{_h(name)}</div>
-  <div class="cat-bar">
+  <div class="cat-name">{_h(display_name)}</div>
+  <div class="cat-bar" role="img" aria-label="{n_confirmed} confirmed, {n_rejected} rejected of {n_total}">
     <div class="cat-bar-confirmed" style="width: {confirmed_pct:.0f}%"></div>
     <div class="cat-bar-rejected" style="width: {rejected_pct:.0f}%"></div>
   </div>
-  <div class="cat-meta">{n_total} hyp · {n_confirmed} confirmed · {n_rejected} rejected · {_h(delta_str)}</div>
+  <div class="cat-meta">
+    <span class="cat-count"><b>{n_total}</b> hyp</span>
+    <span class="cat-count"><b>{n_confirmed}</b> confirmed</span>
+    <span class="cat-count"><b>{n_rejected}</b> rejected</span>
+    <span class="cat-delta">{_h(delta_str)}</span>
+  </div>
 </div>"""
         )
     return f'<div class="category-bars">{"".join(rows)}</div>'
@@ -530,12 +717,23 @@ def _render_hypothesis_tree(kb: KnowledgeBase) -> str:
         else:
             roots.append(h)
 
+    def _render_meta(h: Hypothesis) -> str:
+        return (
+            f"<span class='hyp-id'>{_h(h.id)}</span>"
+            f"<span class='hyp-sep'>·</span>"
+            f"<span class='hyp-iter'>iter {h.iteration}</span>"
+            f"<span class='hyp-sep'>·</span>"
+            f"<span class='hyp-category'>{_h(h.category.replace('_', ' '))}</span>"
+            f"<span class='hyp-sep'>·</span>"
+            f"<span class='hyp-outcome'>{_h(h.outcome)}</span>"
+        )
+
     def _render_node(h: Hypothesis, depth: int) -> str:
         children = children_map.get(h.id, [])
         css_class = f"hyp hyp-{_h(h.outcome)}"
-        meta = f"{_h(h.id)} · iter {h.iteration} · {_h(h.category)} · {_h(h.outcome.upper())}"
         statement = _h(h.statement)
         lesson = f"<div class='hyp-lesson'>{_h(h.lesson)}</div>" if h.lesson else ""
+        meta = _render_meta(h)
 
         if depth >= _MAX_TREE_DEPTH and children:
             descendant_count = _count_descendants(h.id, children_map)
@@ -551,10 +749,10 @@ def _render_hypothesis_tree(kb: KnowledgeBase) -> str:
         if children:
             return (
                 f"<details class='{css_class}' open>"
-                f"<summary>{meta}</summary>"
+                f"<summary><span class='hyp-meta'>{meta}</span></summary>"
                 f"<div class='hyp-statement'>{statement}</div>"
                 f"{lesson}"
-                f"{inner}"
+                f"<div class='hyp-children'>{inner}</div>"
                 "</details>"
             )
         return (
@@ -584,30 +782,45 @@ def _render_open_problems(problems: list[OpenProblem]) -> str:
         return "<p class='empty'>No open problems.</p>"
 
     items: list[str] = []
-    for p in problems:
-        gap = f" (gap {p.metric_gap:+.3f})" if p.metric_gap is not None else ""
+    for idx, p in enumerate(problems, start=1):
+        gap = f"{p.metric_gap:+.3f}" if p.metric_gap is not None else "—"
         priority = p.priority or "LOW"
         items.append(
             f"<li class='prio-{_h(priority.lower())}'>"
-            f"<span class='prio-chip'>{_h(priority)}</span> "
+            f"<span class='prob-num'>{idx:02d}</span>"
+            f"<span class='prio-chip'>{_h(priority)}</span>"
             f"<span class='prob-text'>{_h(p.text)}</span>"
-            f"<span class='prob-meta'>{_h(p.category)} · since iter {p.since_iteration}{gap}</span>"
+            f"<span class='prob-meta'>"
+            f"<span>{_h(p.category.replace('_', ' '))}</span>"
+            f"<span>iter {p.since_iteration}</span>"
+            f"<span class='prob-gap'>gap {gap}</span>"
+            "</span>"
             "</li>"
         )
-    return f"<ul class='open-problems'>{''.join(items)}</ul>"
+    return f"<ol class='open-problems'>{''.join(items)}</ol>"
 
 
 def _render_kb_section(data: ReportData) -> str:
     kb = data.state.knowledge_base
     return f"""
 <section class="kb-section">
-  <h2>Knowledge Base</h2>
-  <h3>Category progress</h3>
-  {_render_category_progress(kb)}
-  <h3>Hypothesis tree</h3>
-  {_render_hypothesis_tree(kb)}
-  <h3>Open problems</h3>
-  {_render_open_problems(kb.open_problems)}
+  <div class="section-head">
+    <span class="section-numeral">III</span>
+    <h2>Knowledge Base</h2>
+    <p class="section-kicker">Hypotheses tried, what confirmed or rejected them, and the open problems still worth attacking.</p>
+  </div>
+  <div class="kb-sub">
+    <h3>Category progress</h3>
+    {_render_category_progress(kb)}
+  </div>
+  <div class="kb-sub">
+    <h3>Hypothesis tree</h3>
+    {_render_hypothesis_tree(kb)}
+  </div>
+  <div class="kb-sub">
+    <h3>Open problems</h3>
+    {_render_open_problems(kb.open_problems)}
+  </div>
 </section>
 """
 
@@ -619,80 +832,772 @@ def _render_kb_section(data: ReportData) -> str:
 
 _CSS = """
 :root {
-  --bg: #0f172a;
-  --panel: #1e293b;
-  --text: #e2e8f0;
-  --muted: #94a3b8;
-  --accent: #60a5fa;
-  --good: #4ade80;
-  --bad: #f87171;
-  --warn: #fbbf24;
-  --border: #334155;
+  --bg: #0e0e0c;
+  --bg-sunk: #0a0a09;
+  --panel: rgba(242, 238, 230, 0.02);
+  --ink: #f2eee6;
+  --ink-muted: #908a7c;
+  --ink-faint: #5c5850;
+  --rule: #2a2823;
+  --rule-strong: #3d3a33;
+  --accent: #d9543a;
+  --accent-dim: #8a3324;
+  --gold: #c9a961;
+  --max-w: 1200px;
+  --serif: "Fraunces", Georgia, "Times New Roman", serif;
+  --sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Consolas, monospace;
 }
+
 * { box-sizing: border-box; }
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 24px; }
-h1 { font-size: 28px; margin: 0 0 12px; }
-h2 { font-size: 22px; margin: 32px 0 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
-h3 { font-size: 16px; margin: 24px 0 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
-section { background: var(--panel); border-radius: 10px; padding: 20px; margin-bottom: 24px; border: 1px solid var(--border); }
-.run-header { background: var(--panel); border-radius: 10px; padding: 24px; border: 1px solid var(--border); margin-bottom: 24px; }
-.stat-row { display: flex; gap: 24px; margin: 16px 0; flex-wrap: wrap; }
-.stat { display: flex; flex-direction: column; }
-.stat-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
-.stat-value { font-size: 22px; font-weight: 600; color: var(--text); }
-.collapsible { margin-top: 12px; }
-.collapsible summary { cursor: pointer; color: var(--accent); padding: 6px 0; }
-.collapsible[open] summary { margin-bottom: 8px; }
-table.kv { border-collapse: collapse; width: 100%; }
-table.kv th { text-align: left; padding: 6px 12px 6px 0; color: var(--muted); font-weight: 500; width: 180px; vertical-align: top; }
-table.kv td { padding: 6px 0; color: var(--text); vertical-align: top; }
-.prompt-block { background: #0b1220; padding: 16px; border-radius: 6px; overflow-x: auto; font-size: 12px; line-height: 1.5; max-height: 500px; border: 1px solid var(--border); }
-.chart { margin-bottom: 24px; }
-.empty { color: var(--muted); font-style: italic; }
-.experiment-table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
-.experiment-table th, .experiment-table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); font-size: 13px; }
-.experiment-table th { color: var(--muted); font-weight: 500; text-transform: uppercase; font-size: 11px; letter-spacing: 0.05em; }
-.experiment-table td.num { font-family: monospace; text-align: right; width: 90px; }
-.experiment-table td.hypothesis { max-width: 500px; }
-.experiment-table tr.winner-row { background: rgba(74, 222, 128, 0.08); }
-.kept-yes { color: var(--good); font-weight: 600; }
-.kept-no { color: var(--muted); }
-.iteration { background: #162032; border: 1px solid var(--border); border-radius: 6px; padding: 12px 16px; margin-bottom: 12px; }
-.iteration > summary { cursor: pointer; font-weight: 600; font-size: 15px; padding: 6px 0; }
-.narrative { margin: 8px 0; }
-.narrative summary { cursor: pointer; color: var(--accent); font-size: 13px; padding: 4px 0; }
-.narrative pre { background: #0b1220; padding: 12px; border-radius: 4px; font-size: 12px; line-height: 1.5; overflow-x: auto; white-space: pre-wrap; }
-.ref-gen-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; margin-top: 16px; }
-.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; border: 1px solid var(--border); padding: 8px; border-radius: 6px; background: #0b1220; margin: 0; }
-.pair img { width: 100%; height: auto; object-fit: cover; border-radius: 3px; }
-.pair figcaption { grid-column: 1 / 3; font-size: 11px; color: var(--muted); padding-top: 4px; }
-.pair .score { grid-column: 1 / 3; font-family: monospace; font-size: 11px; color: var(--muted); }
-.category-bars { display: flex; flex-direction: column; gap: 8px; }
-.cat-row { display: grid; grid-template-columns: 180px 1fr auto; gap: 12px; align-items: center; }
-.cat-name { font-size: 13px; font-weight: 500; }
-.cat-bar { height: 14px; background: #0b1220; border-radius: 7px; overflow: hidden; display: flex; border: 1px solid var(--border); }
-.cat-bar-confirmed { background: var(--good); }
-.cat-bar-rejected { background: var(--bad); }
-.cat-meta { font-size: 11px; color: var(--muted); font-family: monospace; }
-.hypothesis-tree { display: flex; flex-direction: column; gap: 6px; }
-.hyp, details.hyp { border-left: 4px solid var(--border); padding: 8px 12px; background: #0b1220; border-radius: 0 4px 4px 0; }
-.hyp-confirmed, details.hyp-confirmed { border-left-color: var(--good); }
-.hyp-rejected, details.hyp-rejected { border-left-color: var(--bad); }
-.hyp-partial, details.hyp-partial { border-left-color: var(--warn); }
-.hyp-meta, details.hyp > summary { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 4px; cursor: pointer; }
-.hyp-statement { font-size: 13px; color: var(--text); margin-bottom: 4px; }
-.hyp-lesson { font-size: 11px; color: var(--muted); font-style: italic; }
-.hyp-deeper { font-size: 11px; color: var(--muted); margin-top: 6px; }
-details.hyp[open] { padding-bottom: 12px; }
-details.hyp > summary + * { margin-left: 12px; margin-top: 6px; }
-.open-problems { list-style: none; padding: 0; margin: 0; }
-.open-problems li { padding: 10px 12px; background: #0b1220; border: 1px solid var(--border); border-radius: 4px; margin-bottom: 6px; display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: baseline; }
-.prio-chip { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 10px; font-weight: 600; letter-spacing: 0.05em; }
-.prio-high .prio-chip { background: rgba(248, 113, 113, 0.2); color: var(--bad); border: 1px solid var(--bad); }
-.prio-med .prio-chip { background: rgba(251, 191, 36, 0.2); color: var(--warn); border: 1px solid var(--warn); }
-.prio-low .prio-chip { background: rgba(148, 163, 184, 0.2); color: var(--muted); border: 1px solid var(--muted); }
-.prob-text { font-size: 13px; }
-.prob-meta { font-size: 11px; color: var(--muted); font-family: monospace; }
+
+html, body {
+  background: var(--bg);
+  color: var(--ink);
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--sans);
+  font-weight: 400;
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  background-image:
+    radial-gradient(ellipse 1200px 600px at 20% -10%, rgba(217, 84, 58, 0.06), transparent 60%),
+    radial-gradient(ellipse 900px 500px at 100% 10%, rgba(201, 169, 97, 0.035), transparent 55%);
+  background-attachment: fixed;
+  min-height: 100vh;
+}
+
+.page {
+  max-width: var(--max-w);
+  margin: 0 auto;
+  padding: 72px 56px 96px;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+/* ---------- Masthead ---------- */
+
+.masthead {
+  padding-bottom: 56px;
+  margin-bottom: 64px;
+  border-bottom: 1px solid var(--rule);
+  position: relative;
+}
+
+.masthead-meta {
+  font-family: var(--sans);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin-bottom: 28px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.meta-sep { color: var(--ink-faint); }
+
+.masthead-title {
+  font-family: var(--serif);
+  font-optical-sizing: auto;
+  font-variation-settings: "opsz" 144, "wght" 500;
+  font-size: clamp(64px, 11vw, 140px);
+  line-height: 0.92;
+  letter-spacing: -0.035em;
+  margin: 0 0 32px;
+  color: var(--ink);
+  word-break: break-word;
+  font-style: italic;
+}
+
+.masthead-rule {
+  height: 1px;
+  background: linear-gradient(to right, var(--accent) 0%, var(--accent) 80px, var(--rule) 80px, var(--rule) 100%);
+  margin: 32px 0 40px;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 32px;
+  margin: 0 0 48px;
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--rule);
+  padding-left: 20px;
+}
+.stat:first-child { border-left-color: var(--accent); }
+
+.stat-value {
+  font-family: var(--serif);
+  font-variation-settings: "opsz" 72, "wght" 400;
+  font-size: 48px;
+  line-height: 1;
+  color: var(--ink);
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+.stat-value--score {
+  font-family: var(--mono);
+  font-size: 40px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--accent);
+}
+.stat-value--status {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 24px;
+  color: var(--gold);
+  line-height: 1.2;
+  font-variation-settings: "opsz" 24, "wght" 400;
+}
+
+.stat-label {
+  font-family: var(--sans);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin-top: 14px;
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.stat--anim {
+  opacity: 0;
+  animation: rise 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+  animation-delay: var(--delay, 0ms);
+}
+
+/* ---------- Preamble (foldable sections) ---------- */
+
+.preamble { display: flex; flex-direction: column; gap: 4px; }
+
+.fold {
+  border-top: 1px solid var(--rule);
+  padding: 18px 0;
+}
+.fold:last-child { border-bottom: 1px solid var(--rule); }
+.fold > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 18px;
+  color: var(--ink);
+  font-variation-settings: "opsz" 18, "wght" 400;
+  transition: color 0.2s;
+}
+.fold > summary::-webkit-details-marker { display: none; }
+.fold > summary:hover { color: var(--accent); }
+.fold-cue {
+  font-family: var(--serif);
+  font-style: normal;
+  font-size: 16px;
+  color: var(--accent);
+  font-weight: 500;
+}
+.fold[open] > summary { margin-bottom: 16px; }
+
+.kv {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 12px 32px;
+}
+.kv-row { display: contents; }
+.kv-row dt {
+  font-family: var(--sans);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  padding-top: 5px;
+  margin: 0;
+}
+.kv-row dd {
+  font-family: var(--serif);
+  font-size: 15px;
+  color: var(--ink);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.prompt-block {
+  background: var(--bg-sunk);
+  padding: 24px 28px;
+  border-left: 2px solid var(--accent);
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.65;
+  max-height: 560px;
+  color: var(--ink);
+  white-space: pre-wrap;
+  margin: 0;
+}
+
+/* ---------- Section heads ---------- */
+
+section {
+  margin-bottom: 96px;
+}
+
+.section-head {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  grid-template-rows: auto auto;
+  gap: 8px 28px;
+  align-items: baseline;
+  margin-bottom: 48px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--rule);
+}
+.section-numeral {
+  grid-row: 1 / 3;
+  font-family: var(--serif);
+  font-variation-settings: "opsz" 144, "wght" 300;
+  font-style: italic;
+  font-size: 88px;
+  line-height: 0.9;
+  color: var(--accent);
+  text-align: right;
+}
+.section-head h2 {
+  font-family: var(--serif);
+  font-variation-settings: "opsz" 72, "wght" 500;
+  font-size: 44px;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin: 0;
+}
+.section-kicker {
+  grid-column: 2;
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 16px;
+  color: var(--ink-muted);
+  margin: 0;
+  max-width: 640px;
+  line-height: 1.5;
+}
+
+h3 {
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin: 0 0 20px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.empty {
+  font-family: var(--serif);
+  font-style: italic;
+  color: var(--ink-muted);
+  font-size: 16px;
+}
+
+/* ---------- Charts ---------- */
+
+.chart-figure { margin: 0 0 48px; padding: 0; }
+.chart { margin-bottom: 12px; }
+.chart-figure figcaption {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 13px;
+  color: var(--ink-muted);
+  padding: 0 8px;
+  border-left: 2px solid var(--rule);
+  margin-left: 8px;
+  line-height: 1.5;
+  max-width: 780px;
+}
+
+/* ---------- Experiment table ---------- */
+
+.experiment-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 32px;
+  font-family: var(--sans);
+}
+.experiment-table thead th {
+  font-family: var(--sans);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  text-align: left;
+  padding: 14px 18px 14px 0;
+  border-bottom: 1px solid var(--rule-strong);
+}
+.experiment-table th.numeric,
+.experiment-table td.numeric { text-align: right; font-family: var(--mono); }
+.experiment-table th.num-col,
+.experiment-table td.num-col { width: 1%; white-space: nowrap; padding-right: 24px; }
+.experiment-table th.kept-col,
+.experiment-table td.kept-col { width: 1%; text-align: right; padding-left: 24px; padding-right: 0; }
+
+.experiment-table tbody td {
+  padding: 18px 18px 18px 0;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: baseline;
+  font-size: 14px;
+  color: var(--ink);
+}
+.experiment-table tbody tr:last-child td { border-bottom: none; }
+.experiment-table td.hypothesis-col {
+  font-family: var(--serif);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--ink);
+  max-width: 620px;
+}
+.experiment-table tr.winner-row td {
+  color: var(--ink);
+  background: linear-gradient(to right, rgba(217, 84, 58, 0.08), transparent 60%);
+}
+.experiment-table tr.winner-row td.hypothesis-col { font-style: italic; }
+
+.branch-id {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--ink-muted);
+  letter-spacing: 0.04em;
+}
+.winner-star {
+  display: inline-block;
+  color: var(--accent);
+  margin-right: 8px;
+  font-size: 13px;
+}
+.kept-yes {
+  font-family: var(--sans);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent);
+  font-weight: 500;
+}
+.kept-no {
+  font-family: var(--sans);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+/* ---------- Iteration drilldown ---------- */
+
+.iteration {
+  margin-bottom: 1px;
+  border-top: 1px solid var(--rule);
+}
+.iterations > .iteration:last-of-type { border-bottom: 1px solid var(--rule); }
+.iteration > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 26px 0;
+  display: grid;
+  grid-template-columns: auto auto 1fr auto;
+  gap: 18px;
+  align-items: baseline;
+  transition: padding-left 0.25s;
+}
+.iteration > summary:hover { padding-left: 16px; }
+.iteration > summary::-webkit-details-marker { display: none; }
+.iteration[open] > summary { padding-left: 0; }
+.iteration[open] > summary:hover { padding-left: 0; }
+
+.iter-number {
+  font-family: var(--serif);
+  font-variation-settings: "opsz" 48, "wght" 500;
+  font-style: italic;
+  font-size: 32px;
+  line-height: 1;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+.iter-sep { color: var(--ink-faint); font-size: 22px; }
+.iter-count {
+  font-family: var(--sans);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+.iter-score {
+  font-family: var(--mono);
+  font-size: 18px;
+  color: var(--accent);
+  font-weight: 500;
+  justify-self: end;
+}
+.iteration-body {
+  padding: 8px 0 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.narrative { margin: 0; }
+.narrative > summary {
+  cursor: pointer;
+  list-style: none;
+  font-family: var(--sans);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  padding: 10px 0;
+  border-top: 1px solid var(--rule);
+  transition: color 0.2s;
+}
+.narrative > summary::-webkit-details-marker { display: none; }
+.narrative > summary::before { content: "— "; color: var(--accent); }
+.narrative > summary:hover { color: var(--accent); }
+.narrative pre {
+  background: var(--bg-sunk);
+  border-left: 2px solid var(--rule);
+  padding: 16px 20px;
+  margin: 8px 0 16px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+/* ---------- Image pair grid ---------- */
+
+.ref-gen-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 28px 24px;
+  margin-top: 8px;
+}
+.pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin: 0;
+}
+.pair-plate {
+  position: relative;
+  background: var(--bg-sunk);
+  border: 1px solid var(--rule);
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+}
+.plate-label {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  font-family: var(--sans);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink);
+  background: rgba(14, 14, 12, 0.82);
+  padding: 3px 8px;
+  z-index: 1;
+  backdrop-filter: blur(4px);
+}
+.pair-plate:first-child .plate-label { color: var(--gold); }
+.pair-plate:nth-child(2) .plate-label { color: var(--accent); }
+.pair img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.5s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.pair:hover img { transform: scale(1.02); }
+.pair figcaption {
+  grid-column: 1 / 3;
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  padding-top: 10px;
+  border-top: 1px solid var(--rule);
+  margin-top: 2px;
+}
+.pair-num {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+  font-weight: 500;
+}
+.pair-name {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 13px;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.pair .score {
+  grid-column: 1 / 3;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-muted);
+  padding: 2px 0 0;
+  line-height: 1.6;
+  letter-spacing: 0.02em;
+}
+
+/* ---------- KB section ---------- */
+
+.kb-sub { margin-bottom: 56px; }
+.kb-sub:last-child { margin-bottom: 0; }
+
+.category-bars { display: flex; flex-direction: column; gap: 20px; }
+.cat-row {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 24px;
+  align-items: center;
+}
+.cat-name {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 17px;
+  color: var(--ink);
+  font-variation-settings: "opsz" 18, "wght" 400;
+}
+.cat-bar {
+  height: 3px;
+  background: var(--rule);
+  display: flex;
+  position: relative;
+}
+.cat-bar-confirmed {
+  background: var(--accent);
+  height: 100%;
+}
+.cat-bar-rejected {
+  background: var(--ink-faint);
+  height: 100%;
+}
+.cat-meta {
+  grid-column: 2;
+  display: flex;
+  gap: 24px;
+  font-family: var(--sans);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin-top: 8px;
+}
+.cat-count b {
+  font-family: var(--mono);
+  font-weight: 500;
+  color: var(--ink);
+  margin-right: 4px;
+  letter-spacing: 0;
+}
+.cat-delta {
+  font-family: var(--mono);
+  color: var(--accent);
+  letter-spacing: 0.02em;
+  text-transform: none;
+  margin-left: auto;
+}
+
+/* ---------- Hypothesis tree ---------- */
+
+.hypothesis-tree { display: flex; flex-direction: column; gap: 2px; }
+.hyp, details.hyp {
+  border-left: 1px solid var(--rule);
+  padding: 14px 0 14px 24px;
+  margin: 0;
+  position: relative;
+}
+.hyp-confirmed, details.hyp-confirmed { border-left-color: var(--accent); }
+.hyp-rejected, details.hyp-rejected { border-left-color: var(--ink-faint); }
+.hyp-partial, details.hyp-partial { border-left-color: var(--gold); }
+
+details.hyp > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 0;
+  margin-bottom: 8px;
+}
+details.hyp > summary::-webkit-details-marker { display: none; }
+
+.hyp-meta {
+  font-family: var(--sans);
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+.hyp-id {
+  font-family: var(--mono);
+  color: var(--accent);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+.hyp-sep { color: var(--ink-faint); }
+.hyp-iter { font-family: var(--mono); text-transform: none; letter-spacing: 0.04em; }
+.hyp-category { color: var(--ink); }
+.hyp-outcome { color: var(--gold); }
+.hyp-confirmed .hyp-outcome { color: var(--accent); }
+.hyp-rejected .hyp-outcome { color: var(--ink-faint); }
+
+.hyp-statement {
+  font-family: var(--serif);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--ink);
+  margin-bottom: 6px;
+}
+.hyp-lesson {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 13px;
+  color: var(--ink-muted);
+  padding-top: 4px;
+}
+.hyp-deeper {
+  font-family: var(--sans);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-top: 10px;
+}
+.hyp-children {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* ---------- Open problems ---------- */
+
+.open-problems {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+}
+.open-problems li {
+  display: grid;
+  grid-template-columns: 56px 88px 1fr;
+  gap: 24px;
+  padding: 22px 0;
+  border-bottom: 1px solid var(--rule);
+  align-items: baseline;
+}
+.open-problems li:first-child { border-top: 1px solid var(--rule); }
+.prob-num {
+  font-family: var(--serif);
+  font-variation-settings: "opsz" 48, "wght" 300;
+  font-style: italic;
+  font-size: 36px;
+  color: var(--ink-faint);
+  line-height: 1;
+  text-align: right;
+}
+.prio-chip {
+  font-family: var(--sans);
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  font-weight: 500;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border: 1px solid currentColor;
+  display: inline-block;
+  text-align: center;
+  justify-self: start;
+}
+.prio-high .prio-chip { color: var(--accent); }
+.prio-high .prob-num { color: var(--accent); }
+.prio-med .prio-chip { color: var(--gold); }
+.prio-low .prio-chip { color: var(--ink-muted); }
+.prob-text {
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 1.45;
+  color: var(--ink);
+  grid-column: 3;
+  grid-row: 1;
+}
+.prob-meta {
+  grid-column: 3;
+  grid-row: 2;
+  display: flex;
+  gap: 16px;
+  font-family: var(--sans);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin-top: 8px;
+}
+.prob-gap {
+  font-family: var(--mono);
+  text-transform: none;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+  margin-left: auto;
+}
+
+/* ---------- Responsive ---------- */
+
+@media (max-width: 880px) {
+  .page { padding: 48px 28px 64px; }
+  .stats { grid-template-columns: repeat(2, 1fr); gap: 32px 20px; }
+  .kv { grid-template-columns: 1fr; gap: 4px 0; }
+  .kv-row { display: block; margin-bottom: 16px; }
+  .kv-row dt { padding-top: 0; margin-bottom: 4px; }
+  .section-head { grid-template-columns: 56px 1fr; gap: 8px 16px; }
+  .section-numeral { font-size: 56px; }
+  .section-head h2 { font-size: 32px; }
+  .cat-row { grid-template-columns: 1fr; gap: 8px; }
+  .cat-meta { margin-top: 4px; }
+  .open-problems li { grid-template-columns: 40px 1fr; gap: 16px; }
+  .prob-text, .prob-meta { grid-column: 2; }
+  .prio-chip { grid-column: 2; grid-row: 2; justify-self: start; }
+  .prob-text { grid-row: 1; }
+  .prob-meta { grid-row: 3; }
+  .iter-number { font-size: 24px; }
+  .iteration > summary { grid-template-columns: auto auto; gap: 12px; row-gap: 4px; }
+  .iter-sep { display: none; }
+}
 """
 
 
@@ -735,14 +1640,19 @@ def _assemble_html(data: ReportData, report_dir: Path) -> str:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Art Style Search · {_h(data.run_name)}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="{_FONTS_CDN}">
   <script src="{_PLOTLY_CDN}"></script>
   <style>{_CSS}</style>
 </head>
 <body>
-  {header}
-  {trajectories}
-  {iterations_section}
-  {kb_section}
+  <main class="page">
+    {header}
+    {trajectories}
+    {iterations_section}
+    {kb_section}
+  </main>
   {plot_script}
 </body>
 </html>

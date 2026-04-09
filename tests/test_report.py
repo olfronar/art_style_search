@@ -334,9 +334,9 @@ class TestBuildReport:
         assert "Plotly.newPlot" in text
         assert "composite-chart" in text
         assert "metrics-chart" in text
-        # Iteration drill-down
-        assert "Iteration 1" in text
-        assert "Iteration 2" in text
+        # Iteration drill-down — iteration numbers are zero-padded in the editorial layout
+        assert "Iteration 01" in text
+        assert "Iteration 02" in text
         # Plotly figure JSON is embedded as <script type=application/json>
         composite_block = text.split('id="composite-data">', 1)[1].split("</script>", 1)[0]
         assert json.loads(composite_block)  # parses cleanly
