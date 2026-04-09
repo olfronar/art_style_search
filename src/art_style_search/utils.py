@@ -1,4 +1,4 @@
-"""Shared utilities for Anthropic, Z.AI, and Gemini API interactions."""
+"""Shared utilities for Anthropic, Z.AI, OpenAI, and Gemini API interactions."""
 
 from __future__ import annotations
 
@@ -144,9 +144,16 @@ async def stream_message(client: anthropic.AsyncAnthropic, **kwargs: object) -> 
 
 
 class ReasoningClient:
-    """Wraps either Anthropic (Claude) or Z.AI (GLM) behind a unified async interface."""
+    """Wraps Anthropic (Claude), Z.AI (GLM), or OpenAI (GPT) behind a unified async interface."""
 
-    def __init__(self, provider: str, *, anthropic_api_key: str = "", zai_api_key: str = "") -> None:
+    def __init__(
+        self,
+        provider: str,
+        *,
+        anthropic_api_key: str = "",
+        zai_api_key: str = "",
+        openai_api_key: str = "",
+    ) -> None:
         self.provider = provider
         if provider == "anthropic":
             self._anthropic = anthropic.AsyncAnthropic(
@@ -160,6 +167,14 @@ class ReasoningClient:
             self._zai = ZaiClient(
                 api_key=zai_api_key,
                 timeout=httpx.Timeout(300.0, connect=15.0),
+            )
+        elif provider == "openai":
+            import httpx
+            from openai import AsyncOpenAI
+
+            self._openai = AsyncOpenAI(
+                api_key=openai_api_key,
+                timeout=httpx.Timeout(600.0, connect=30.0),
             )
         else:
             msg = f"Unknown reasoning provider: {provider}"
@@ -176,6 +191,8 @@ class ReasoningClient:
         """Send a reasoning request and return the text response."""
         if self.provider == "anthropic":
             return await self._call_anthropic(model=model, system=system, user=user, max_tokens=max_tokens)
+        if self.provider == "openai":
+            return await self._call_openai(model=model, system=system, user=user, max_tokens=max_tokens)
         return await self._call_zai(model=model, system=system, user=user, max_tokens=max_tokens)
 
     async def _call_anthropic(self, *, model: str, system: str, user: str, max_tokens: int) -> str:
@@ -222,3 +239,18 @@ class ReasoningClient:
 
         msg = f"Z.AI call failed after {_STREAM_MAX_RETRIES} retries"
         raise RuntimeError(msg) from last_exc
+
+    async def _call_openai(self, *, model: str, system: str, user: str, max_tokens: int) -> str:
+        """Call OpenAI Responses API with medium reasoning effort."""
+
+        async def _call() -> str:
+            response = await self._openai.responses.create(
+                model=model,
+                instructions=system,
+                input=user,
+                reasoning={"effort": "medium"},
+                max_output_tokens=max_tokens,
+            )
+            return response.output_text
+
+        return await async_retry(_call, label="OpenAI call", base_delay=_STREAM_BASE_DELAY)
