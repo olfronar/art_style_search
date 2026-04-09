@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import re
 from typing import TYPE_CHECKING
 
 from art_style_search.prompt._format import _format_metrics
 from art_style_search.types import AggregatedMetrics, IterationResult, KnowledgeBase, ReviewResult
-from art_style_search.utils import ReasoningClient
+from art_style_search.utils import ReasoningClient, extract_xml_tag
 
 if TYPE_CHECKING:
     from art_style_search.experiment import ExperimentProposal
@@ -74,20 +73,13 @@ async def review_iteration(
     user = "\n".join(user_parts)
     text = await client.call(model=model, system=_REVIEW_SYSTEM, user=user, max_tokens=6000)
 
-    # Parse response
-    assessments_match = re.search(r"<assessments>(.*?)</assessments>", text, re.DOTALL)
-    noise_match = re.search(r"<noise_vs_signal>(.*?)</noise_vs_signal>", text, re.DOTALL)
-    guidance_match = re.search(r"<strategic_guidance>(.*?)</strategic_guidance>", text, re.DOTALL)
-    cats_match = re.search(r"<recommended_categories>(.*?)</recommended_categories>", text, re.DOTALL)
-
-    assessments_raw = assessments_match.group(1).strip() if assessments_match else ""
+    assessments_raw = extract_xml_tag(text, "assessments")
     experiment_assessments = [line.strip() for line in assessments_raw.split("\n") if line.strip()]
+    cats_raw = extract_xml_tag(text, "recommended_categories")
 
     return ReviewResult(
         experiment_assessments=experiment_assessments,
-        noise_vs_signal=noise_match.group(1).strip() if noise_match else "",
-        strategic_guidance=guidance_match.group(1).strip() if guidance_match else "",
-        recommended_categories=[
-            c.strip() for c in (cats_match.group(1).strip().split(",") if cats_match else []) if c.strip()
-        ],
+        noise_vs_signal=extract_xml_tag(text, "noise_vs_signal"),
+        strategic_guidance=extract_xml_tag(text, "strategic_guidance"),
+        recommended_categories=[c.strip() for c in cats_raw.split(",") if c.strip()],
     )

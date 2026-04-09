@@ -49,3 +49,17 @@ def _format_metrics(metrics: AggregatedMetrics) -> str:
     d = metrics.summary_dict()
     lines = [f"- {k}: {v:.4f}" for k, v in d.items()]
     return "\n".join(lines)
+
+
+def _truncate_words(text: str, max_words: int, *, suffix: str = "...") -> str:
+    """Cap ``text`` to ``max_words`` whitespace-separated tokens.
+
+    If the text is already short enough, it's returned unchanged; otherwise
+    the first ``max_words`` tokens are joined with spaces and ``suffix`` is
+    appended.  Used to keep per-image captions and feedback blocks from
+    swamping the reasoning-model context.
+    """
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+    return " ".join(words[:max_words]) + suffix

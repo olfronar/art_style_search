@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import logging
-import re
 
 from art_style_search.prompt._format import _format_metrics, _format_style_profile, _format_template
 from art_style_search.prompt._parse import _parse_template
 from art_style_search.types import IterationResult, PromptTemplate, StyleProfile
-from art_style_search.utils import ReasoningClient
+from art_style_search.utils import ReasoningClient, extract_xml_tag
 
 logger = logging.getLogger(__name__)
 
@@ -78,10 +77,7 @@ async def synthesize_templates(
     text = await client.call(model=model, system=system, user=user, max_tokens=12000)
 
     merged = _parse_template(text)
-    rationale = ""
-    rationale_match = re.search(r"<rationale>(.*?)</rationale>", text, re.DOTALL)
-    if rationale_match:
-        rationale = rationale_match.group(1).strip()
+    rationale = extract_xml_tag(text, "rationale")
 
     if not merged.sections:
         logger.warning("Synthesis produced no sections — falling back to best experiment's template")

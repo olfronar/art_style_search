@@ -220,25 +220,10 @@ class ReasoningClient:
             )
             return response.choices[0].message.content
 
-        last_exc: Exception | None = None
-        for attempt in range(_STREAM_MAX_RETRIES):
-            try:
-                return await asyncio.to_thread(_sync_call)
-            except Exception as exc:
-                last_exc = exc
-                delay = _STREAM_BASE_DELAY * (2**attempt)
-                logger.warning(
-                    "Z.AI call attempt %d/%d failed: %s: %s — retrying in %.0fs",
-                    attempt + 1,
-                    _STREAM_MAX_RETRIES,
-                    type(exc).__name__,
-                    exc,
-                    delay,
-                )
-                await asyncio.sleep(delay)
+        async def _call() -> str:
+            return await asyncio.to_thread(_sync_call)
 
-        msg = f"Z.AI call failed after {_STREAM_MAX_RETRIES} retries"
-        raise RuntimeError(msg) from last_exc
+        return await async_retry(_call, label="Z.AI call", base_delay=_STREAM_BASE_DELAY)
 
     async def _call_openai(self, *, model: str, system: str, user: str, max_tokens: int) -> str:
         """Call OpenAI Responses API with medium reasoning effort."""

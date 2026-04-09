@@ -89,7 +89,6 @@ def _apply_best_result(state: LoopState, result: IterationResult) -> None:
     state.current_template = result.template
     state.best_template = result.template
     state.best_metrics = result.aggregated
-    # Only update global best if this actually beats it
     global_score = composite_score(state.global_best_metrics) if state.global_best_metrics else float("-inf")
     if composite_score(result.aggregated) > global_score:
         state.global_best_prompt = result.rendered_prompt
@@ -155,6 +154,16 @@ def _build_ref_gen_pairs(result: IterationResult) -> list[tuple[Path, Path]]:
 # Max experiment results to persist in state.json (older ones are in iteration logs)
 _MAX_PERSISTED_HISTORY = 30
 
+# Exploration (plateau-escape) tuning: once we've plateaued for this many
+# iterations, adopt the second-best experiment every ``_EXPLORATION_CADENCE``
+# plateau ticks, to escape local optima without abandoning the baseline.
+_EXPLORATION_MIN_PLATEAU = 2
+_EXPLORATION_CADENCE = 2
+# After adopting a second-best for exploration, reset plateau to this value
+# (not 0) so the plateau window can still terminate the run if exploration
+# doesn't help.
+_EXPLORATION_RESET_PLATEAU = 1
+
 
 # ---------------------------------------------------------------------------
 # Per-run and per-iteration data carriers
@@ -167,7 +176,8 @@ class RunContext:
 
     Holds clients, semaphores, registry, and config so per-phase helpers
     don't need 8-parameter signatures.  ``fixed_refs`` lives on ``LoopState``
-    (authoritative, persisted) and is not duplicated here.
+    (authoritative, persisted) and is not duplicated here.  ``experiment_kwargs``
+    is the pre-built kwarg dict forwarded to every ``run_experiment`` call.
     """
 
     config: Config
@@ -176,11 +186,10 @@ class RunContext:
     registry: ModelRegistry
     gemini_semaphore: asyncio.Semaphore
     eval_semaphore: asyncio.Semaphore
+    experiment_kwargs: dict[str, Any] = field(init=False)
 
-    @property
-    def experiment_kwargs(self) -> dict[str, Any]:
-        """Kwargs passed to ``run_experiment`` by every phase that runs experiments."""
-        return {
+    def __post_init__(self) -> None:
+        self.experiment_kwargs = {
             "config": self.config,
             "gemini_client": self.gemini_client,
             "registry": self.registry,
@@ -194,18 +203,19 @@ class IterationRanking:
     """Ranking state that crosses phase boundaries within one iteration.
 
     Bundled so phase-3 → 3.5 → 3.7 → 4 can pass it explicitly instead of
-    capturing locals via closure.  ``_synthesize_top_experiments`` mutates
-    ``exp_results`` and re-computes ``all_agg``/``adaptive_scores``, then
-    returns the updated ``IterationRanking`` to callers.
+    capturing locals via closure.  ``_synthesize_top_experiments`` appends
+    to ``exp_results`` and stores its own output on ``synth_result``; every
+    field here is required at construction time except ``synth_result``,
+    which stays ``None`` when synthesis is skipped or fails.
     """
 
     exp_results: list[IterationResult]
-    all_agg: list[AggregatedMetrics]
-    adaptive_scores: dict[int, float] = field(default_factory=dict)
-    best_exp: IterationResult | None = None
-    best_score: float = float("-inf")
-    baseline_score: float = float("-inf")
-    epsilon: float = 0.0
+    adaptive_scores: dict[int, float]
+    best_exp: IterationResult
+    best_score: float
+    baseline_score: float
+    epsilon: float
+    synth_result: IterationResult | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -472,6 +482,11 @@ def _build_iteration_context(state: LoopState) -> tuple[str, str, str]:
     if state.pairwise_feedback:
         vision_fb = f"## Pairwise Experiment Comparison\n{state.pairwise_feedback}\n\n{vision_fb}"
 
+    # Clear consumed feedback so it doesn't bleed into iteration N+2 if the
+    # upcoming pairwise/review phases fail to produce fresh guidance.
+    state.review_feedback = ""
+    state.pairwise_feedback = ""
+
     return vision_fb, roundtrip_fb, caption_diffs
 
 
@@ -567,7 +582,6 @@ def _score_and_rank(exp_results: list[IterationResult], state: LoopState) -> Ite
     baseline_score = composite_score(state.best_metrics) if state.best_metrics else float("-inf")
     return IterationRanking(
         exp_results=exp_results,
-        all_agg=all_agg,
         adaptive_scores=adaptive_scores,
         best_exp=best_exp,
         best_score=best_score,
@@ -581,16 +595,17 @@ async def _synthesize_top_experiments(
     state: LoopState,
     ctx: RunContext,
     iteration: int,
-) -> IterationResult | None:
-    """Phase 3.5: merge top experiments into one template, validate, append to exp_results.
+) -> None:
+    """Phase 3.5: merge top experiments into one template, validate, append to ranking.
 
-    Mutates ``ranking.exp_results``, ``ranking.all_agg``, ``ranking.adaptive_scores``,
-    and — if the synthesis beats the best individual — ``ranking.best_exp`` /
-    ``ranking.best_score``.  Returns the ``IterationResult`` produced by the
-    synthesis (or ``None`` on failure / fewer than 2 experiments).
+    On success, appends the synth result to ``ranking.exp_results``, refreshes
+    ``ranking.adaptive_scores`` over the enlarged set, stores the synth result
+    on ``ranking.synth_result``, and — if it beat the best individual —
+    updates ``ranking.best_exp``/``ranking.best_score``.  On failure or when
+    there are fewer than 2 experiments, leaves ranking untouched.
     """
     if len(ranking.exp_results) < 2:
-        return None
+        return
 
     try:
         ranked_for_synth = sorted(ranking.exp_results, key=lambda r: ranking.adaptive_scores[id(r)], reverse=True)
@@ -618,13 +633,14 @@ async def _synthesize_top_experiments(
         logger.info(
             "Synthesis result: DS=%.4f (best individual: %.4f)",
             synth_result.aggregated.dreamsim_similarity_mean,
-            ranking.best_exp.aggregated.dreamsim_similarity_mean if ranking.best_exp else float("nan"),
+            ranking.best_exp.aggregated.dreamsim_similarity_mean,
         )
 
         ranking.exp_results.append(synth_result)
-        ranking.all_agg = [r.aggregated for r in ranking.exp_results]
+        ranking.synth_result = synth_result
+        updated_agg = [r.aggregated for r in ranking.exp_results]
         ranking.adaptive_scores = {
-            id(r): adaptive_composite_score(r.aggregated, ranking.all_agg) for r in ranking.exp_results
+            id(r): adaptive_composite_score(r.aggregated, updated_agg) for r in ranking.exp_results
         }
         if merged_score > ranking.best_score:
             ranking.best_exp = synth_result
@@ -632,9 +648,6 @@ async def _synthesize_top_experiments(
             logger.info("Synthesis beat best individual — adopting merged template")
     except Exception:
         logger.warning("Synthesis failed — continuing with individual experiments only", exc_info=True)
-        return None
-    else:
-        return synth_result
 
 
 def _update_knowledge_base_for_iteration(
@@ -672,9 +685,6 @@ def _apply_iteration_result(state: LoopState, ranking: IterationRanking) -> None
     adopt second-best via ``_apply_exploration_result`` and reset plateau to 1
     to give exploration runway.
     """
-    if ranking.best_exp is None:
-        return
-
     improved = ranking.best_score > ranking.baseline_score + ranking.epsilon
 
     if improved:
@@ -683,23 +693,28 @@ def _apply_iteration_result(state: LoopState, ranking: IterationRanking) -> None
         return
 
     state.plateau_counter += 1
-    # Exploration: on even plateau counts, adopt second-best to escape local optima
-    if state.plateau_counter >= 2 and state.plateau_counter % 2 == 0 and len(ranking.exp_results) >= 2:
+    # Exploration: on even plateau counts, adopt second-best to escape local optima.
+    # Needs at least 2 experiments to pick a second-best from.
+    can_explore = (
+        state.plateau_counter >= _EXPLORATION_MIN_PLATEAU
+        and state.plateau_counter % _EXPLORATION_CADENCE == 0
+        and len(ranking.exp_results) >= 2
+    )
+    if can_explore:
         ranked = sorted(
             ranking.exp_results,
-            key=lambda r: adaptive_composite_score(r.aggregated, ranking.all_agg),
+            key=lambda r: ranking.adaptive_scores[id(r)],
             reverse=True,
         )
         second_best = ranked[1]
         logger.info("Exploration: adopting second-best experiment to escape potential local optimum")
         _apply_exploration_result(state, second_best)
-        state.plateau_counter = 1  # Give exploration runway before plateau termination
+        state.plateau_counter = _EXPLORATION_RESET_PLATEAU
 
 
 def _record_iteration_state(
     state: LoopState,
     ranking: IterationRanking,
-    synth_result: IterationResult | None,
     pre_update_metrics: AggregatedMetrics | None,
     iteration: int,
     ctx: RunContext,
@@ -717,7 +732,8 @@ def _record_iteration_state(
         state.experiment_history = state.experiment_history[-_MAX_PERSISTED_HISTORY:]
 
     # Record synthesis experiment separately (it has no matching proposal)
-    if synth_result is not None:
+    if ranking.synth_result is not None:
+        synth_result = ranking.synth_result
         synth_proposal = ExperimentProposal(
             template=synth_result.template,
             hypothesis=synth_result.hypothesis,
@@ -794,12 +810,12 @@ async def run(config: Config) -> LoopState:
             continue
 
         ranking = _score_and_rank(exp_results, state)
-        synth_result = await _synthesize_top_experiments(ranking, state, ctx, iteration)
+        await _synthesize_top_experiments(ranking, state, ctx, iteration)
         await _run_pairwise_and_review(ranking, proposals, state, ctx)
 
         pre_update_metrics = _update_knowledge_base_for_iteration(state, ranking, proposals, iteration)
         _apply_iteration_result(state, ranking)
-        _record_iteration_state(state, ranking, synth_result, pre_update_metrics, iteration, ctx)
+        _record_iteration_state(state, ranking, pre_update_metrics, iteration, ctx)
 
         if _check_plateau_convergence(state, ctx):
             break

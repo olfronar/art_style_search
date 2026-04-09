@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import logging
 
-from art_style_search.prompt._format import _format_metrics, _format_style_profile, _format_template
+from art_style_search.prompt._format import (
+    _format_metrics,
+    _format_style_profile,
+    _format_template,
+    _truncate_words,
+)
 from art_style_search.prompt._parse import (
     Lessons,
     RefinementResult,
@@ -268,36 +273,25 @@ async def propose_experiments(
                 )
                 if idx < len(worst.iteration_captions):
                     cap = worst.iteration_captions[idx]
-                    cap_words = cap.text.split()
-                    cap_text = " ".join(cap_words[:150]) + ("..." if len(cap_words) > 150 else "")
+                    cap_text = _truncate_words(cap.text, 150)
                     worst_parts.append(
                         f"Worst image ({cap.image_path.name}): "
                         f"DS={worst.per_image_scores[idx].dreamsim_similarity:.3f}\n"
                         f"Caption: {cap_text}\n"
                     )
             if worst.vision_feedback:
-                vf_words = worst.vision_feedback.split()
-                vf = " ".join(vf_words[:100]) + ("..." if len(vf_words) > 100 else "")
-                worst_parts.append(f"Vision feedback: {vf}\n")
+                worst_parts.append(f"Vision feedback: {_truncate_words(worst.vision_feedback, 100)}\n")
             user_parts.append("".join(worst_parts))
 
     if vision_feedback:
         user_parts.append("\n\n## Vision Comparison (Gemini analysis of generated vs reference images)\n")
         # Cap vision feedback to ~500 words to prevent context degradation
-        vision_words = vision_feedback.split()
-        if len(vision_words) > 500:
-            user_parts.append(" ".join(vision_words[:500]) + "\n[...truncated]")
-        else:
-            user_parts.append(vision_feedback)
+        user_parts.append(_truncate_words(vision_feedback, 500, suffix="\n[...truncated]"))
 
     if roundtrip_feedback:
         user_parts.append("\n\n## Per-Image Results (sorted worst → best by DreamSim)\n")
         # Cap roundtrip feedback to ~800 words (full detail for worst images, metrics-only for rest)
-        roundtrip_words = roundtrip_feedback.split()
-        if len(roundtrip_words) > 800:
-            user_parts.append(" ".join(roundtrip_words[:800]) + "\n[...truncated]")
-        else:
-            user_parts.append(roundtrip_feedback)
+        user_parts.append(_truncate_words(roundtrip_feedback, 800, suffix="\n[...truncated]"))
 
     if caption_diffs:
         user_parts.append(f"\n\n{caption_diffs}")
