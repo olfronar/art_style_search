@@ -1598,6 +1598,198 @@ details.hyp > summary::-webkit-details-marker { display: none; }
   .iteration > summary { grid-template-columns: auto auto; gap: 12px; row-gap: 4px; }
   .iter-sep { display: none; }
 }
+
+/* --- Scientific rigor sections --- */
+.protocol-badge-row {
+  display: flex; flex-wrap: wrap; gap: 16px; align-items: center;
+  padding: 16px 0; margin-bottom: 16px;
+}
+.protocol-badge {
+  font-family: var(--mono); font-size: 13px; font-weight: 700;
+  padding: 4px 12px; border-radius: 4px; letter-spacing: 0.05em;
+}
+.badge-classic { background: var(--panel); color: var(--ink-muted); border: 1px solid var(--rule); }
+.badge-rigorous { background: rgba(201,169,97,0.15); color: var(--gold); border: 1px solid var(--gold); }
+.manifest-item { font-family: var(--mono); font-size: 13px; color: var(--ink-muted); }
+.manifest-item code { color: var(--ink); }
+
+.promotion-table .promo-yes td:last-child { color: var(--accent); font-weight: 600; }
+.promotion-table .promo-explore td:last-child { color: var(--gold); font-weight: 600; }
+.promotion-table .promo-no td:last-child { color: var(--ink-muted); }
+.decision-cell { text-transform: uppercase; font-family: var(--mono); font-size: 12px; letter-spacing: 0.05em; }
+
+.holdout-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px;
+  padding: 24px 0;
+}
+.holdout-card {
+  background: var(--panel); border: 1px solid var(--rule); border-radius: 8px;
+  padding: 20px; text-align: center;
+}
+.holdout-label { font-family: var(--sans); font-size: 13px; color: var(--ink-muted); margin-bottom: 8px; }
+.holdout-value { font-family: var(--mono); font-size: 24px; color: var(--ink); }
+.holdout-up { color: var(--accent); }
+.holdout-down { color: var(--ink-muted); }
+.holdout-images { font-family: var(--mono); font-size: 12px; color: var(--ink-muted); word-break: break-all; }
+"""
+
+
+# ---------------------------------------------------------------------------
+# Scientific-rigor report sections (Phase 2C + Phase 5)
+# ---------------------------------------------------------------------------
+
+
+def _render_protocol_section(data: ReportData) -> str:
+    """Render protocol metadata badge + manifest info (Phase 5D)."""
+    from art_style_search.state import load_manifest
+
+    manifest_path = data.run_dir / "run_manifest.json"
+    manifest = load_manifest(manifest_path)
+    if manifest is None:
+        return ""
+
+    badge_class = "badge-rigorous" if "rigorous" in manifest.protocol_version else "badge-classic"
+    badge_label = manifest.protocol_version.upper().replace("_", " ")
+
+    git_line = (
+        f'<span class="manifest-item">Git: <code>{_h(manifest.git_sha[:10])}</code></span>' if manifest.git_sha else ""
+    )
+
+    return f"""
+<section class="protocol-section">
+  <div class="section-head">
+    <span class="section-numeral">IV</span>
+    <h2>Protocol</h2>
+    <p class="section-kicker">Run provenance and scientific rigor settings.</p>
+  </div>
+  <div class="protocol-badge-row">
+    <span class="protocol-badge {badge_class}">{badge_label}</span>
+    <span class="manifest-item">Seed: <code>{manifest.seed}</code></span>
+    {git_line}
+    <span class="manifest-item">Refs: <code>{manifest.num_fixed_refs}</code></span>
+  </div>
+  <details class="fold">
+    <summary>Models &amp; config</summary>
+    <dl class="kv">
+      <dt>Caption model</dt><dd>{_h(manifest.model_names.get("caption_model", ""))}</dd>
+      <dt>Generator model</dt><dd>{_h(manifest.model_names.get("generator_model", ""))}</dd>
+      <dt>Reasoning model</dt><dd>{_h(manifest.model_names.get("reasoning_model", ""))}</dd>
+      <dt>Provider</dt><dd>{_h(manifest.reasoning_provider)}</dd>
+      <dt>Platform</dt><dd>{_h(manifest.platform)}</dd>
+      <dt>Python</dt><dd>{_h(manifest.python_version.split()[0] if manifest.python_version else "")}</dd>
+      <dt>Timestamp</dt><dd>{_h(manifest.timestamp_utc)}</dd>
+    </dl>
+  </details>
+</section>
+"""
+
+
+def _render_promotion_section(data: ReportData) -> str:
+    """Render promotion decision table (Phase 5A)."""
+    from art_style_search.state import load_promotion_log
+
+    log_path = data.run_dir / "promotion_log.jsonl"
+    decisions = load_promotion_log(log_path)
+    if not decisions:
+        return ""
+
+    rows: list[str] = []
+    for d in decisions:
+        css_class = {"promoted": "promo-yes", "exploration": "promo-explore", "rejected": "promo-no"}.get(
+            d.decision, ""
+        )
+        p_cell = f"{d.p_value:.4f}" if d.p_value is not None else "—"
+        effect_cell = f"{d.delta:+.5f}"
+        rows.append(
+            f'<tr class="{css_class}">'
+            f"<td>{d.iteration + 1}</td>"
+            f"<td>{d.candidate_branch_id}</td>"
+            f"<td>{_fmt_score(d.baseline_score)}</td>"
+            f"<td>{_fmt_score(d.candidate_score)}</td>"
+            f"<td>{effect_cell}</td>"
+            f"<td>{_fmt_score(d.epsilon)}</td>"
+            f"<td>{p_cell}</td>"
+            f'<td class="decision-cell">{_h(d.decision)}</td>'
+            f"</tr>"
+        )
+
+    n_promoted = sum(1 for d in decisions if d.decision == "promoted")
+    n_explored = sum(1 for d in decisions if d.decision == "exploration")
+
+    return f"""
+<section class="promotion-section">
+  <div class="section-head">
+    <span class="section-numeral">V</span>
+    <h2>Promotion Decisions</h2>
+    <p class="section-kicker">{n_promoted} promoted, {n_explored} explorations, {len(decisions) - n_promoted - n_explored} rejected.</p>
+  </div>
+  <div class="table-wrap">
+    <table class="experiment-table promotion-table">
+      <thead>
+        <tr><th>Iter</th><th>Exp</th><th>Baseline</th><th>Candidate</th><th>Delta</th><th>&epsilon;</th><th>p-value</th><th>Decision</th></tr>
+      </thead>
+      <tbody>
+        {"".join(rows)}
+      </tbody>
+    </table>
+  </div>
+</section>
+"""
+
+
+def _render_holdout_section(data: ReportData) -> str:
+    """Render silent-image holdout summary (Phase 2C)."""
+    holdout_path = data.run_dir / "holdout_summary.json"
+    if not holdout_path.exists():
+        return ""
+
+    summary = json.loads(holdout_path.read_text(encoding="utf-8"))
+    n_silent = summary.get("silent_image_count", 0)
+    if n_silent == 0:
+        return ""
+
+    iter0_mean = summary.get("iteration_0_mean")
+    final_mean = summary.get("final_mean")
+    delta = summary.get("delta")
+
+    iter0_str = f"{iter0_mean:.4f}" if iter0_mean is not None else "—"
+    final_str = f"{final_mean:.4f}" if final_mean is not None else "—"
+    if delta is not None:
+        arrow = "&#9650;" if delta > 0 else "&#9660;" if delta < 0 else "="
+        delta_str = f"{delta:+.4f} {arrow}"
+        delta_class = "holdout-up" if delta > 0 else "holdout-down" if delta < 0 else ""
+    else:
+        delta_str = "—"
+        delta_class = ""
+
+    image_names = ", ".join(summary.get("silent_image_names", []))
+
+    return f"""
+<section class="holdout-section">
+  <div class="section-head">
+    <span class="section-numeral">VI</span>
+    <h2>Silent-Image Holdout</h2>
+    <p class="section-kicker">{n_silent} images were never shown to the optimizer — improvements here indicate genuine generalization.</p>
+  </div>
+  <div class="holdout-grid">
+    <div class="holdout-card">
+      <div class="holdout-label">Iteration 0</div>
+      <div class="holdout-value">{iter0_str}</div>
+    </div>
+    <div class="holdout-card">
+      <div class="holdout-label">Final</div>
+      <div class="holdout-value">{final_str}</div>
+    </div>
+    <div class="holdout-card">
+      <div class="holdout-label">Delta</div>
+      <div class="holdout-value {delta_class}">{delta_str}</div>
+    </div>
+  </div>
+  <details class="fold">
+    <summary>Silent images</summary>
+    <p class="holdout-images">{_h(image_names)}</p>
+  </details>
+</section>
 """
 
 
@@ -1612,6 +1804,9 @@ def _assemble_html(data: ReportData, report_dir: Path) -> str:
     trajectories = _render_trajectories_section(composite_json, multi_json)
     iterations_section = _render_iteration_drilldown(data, report_dir)
     kb_section = _render_kb_section(data)
+    protocol_section = _render_protocol_section(data)
+    promotion_section = _render_promotion_section(data)
+    holdout_section = _render_holdout_section(data)
 
     plot_script = ""
     if composite_json and multi_json:
@@ -1652,6 +1847,9 @@ def _assemble_html(data: ReportData, report_dir: Path) -> str:
     {trajectories}
     {iterations_section}
     {kb_section}
+    {protocol_section}
+    {promotion_section}
+    {holdout_section}
   </main>
   {plot_script}
 </body>

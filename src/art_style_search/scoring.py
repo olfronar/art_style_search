@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 
-from art_style_search.types import AggregatedMetrics
+from art_style_search.types import AggregatedMetrics, MetricScores, PromotionTestResult
 from art_style_search.utils import CATEGORY_SYNONYMS as _CATEGORY_SYNONYMS
 
 _HPS_CEILING = 0.35  # default empirical max for HPS v2 scores; used to normalize to [0, 1]
@@ -141,3 +141,96 @@ def classify_hypothesis(text: str, categories: list[str]) -> str:
             best_score = score
             best_cat = cat
     return best_cat if best_score > 0 else "general"
+
+
+# ---------------------------------------------------------------------------
+# Per-image composite score (for statistical testing)
+# ---------------------------------------------------------------------------
+
+
+def per_image_composite(s: MetricScores) -> float:
+    """Compute a per-image composite score using the same weights as ``composite_score``.
+
+    Unlike ``composite_score`` (which operates on aggregated means), this computes
+    the score for a single image — no variance penalty since there's only one observation.
+    """
+    return (
+        0.40 * s.dreamsim_similarity
+        + 0.05 * _normalize_hps(s.hps_score)
+        + 0.06 * (s.aesthetics_score / 10.0)
+        + 0.22 * s.color_histogram
+        + 0.11 * s.ssim
+        + 0.04 * s.vision_style
+        + 0.04 * s.vision_subject
+        + 0.04 * s.vision_composition
+    )
+
+
+# ---------------------------------------------------------------------------
+# Statistical testing for promotion decisions (rigorous mode)
+# ---------------------------------------------------------------------------
+
+_PROMOTION_ALPHA = 0.10  # relaxed threshold for internal trustworthiness
+_BOOTSTRAP_RESAMPLES = 2000
+
+
+def paired_promotion_test(
+    candidate_scores: list[MetricScores],
+    incumbent_scores: list[MetricScores],
+) -> PromotionTestResult:
+    """Wilcoxon signed-rank test on per-image composite scores.
+
+    Returns a ``PromotionTestResult`` with one-sided p-value (H1: candidate > incumbent),
+    effect size (mean paired difference), and bootstrap 95% CI on the mean difference.
+    Falls back to a sign test when Wilcoxon assumptions are violated (too many ties).
+    """
+    import numpy as np
+    from scipy import stats as sp_stats
+
+    n = min(len(candidate_scores), len(incumbent_scores))
+    diffs = np.array(
+        [per_image_composite(candidate_scores[i]) - per_image_composite(incumbent_scores[i]) for i in range(n)]
+    )
+
+    effect_size = float(np.mean(diffs))
+
+    # Bootstrap 95% CI on mean difference
+    rng = np.random.default_rng(42)
+    boot_means = np.array(
+        [float(np.mean(rng.choice(diffs, size=n, replace=True))) for _ in range(_BOOTSTRAP_RESAMPLES)]
+    )
+    ci_lower = float(np.percentile(boot_means, 2.5))
+    ci_upper = float(np.percentile(boot_means, 97.5))
+
+    # Wilcoxon signed-rank test (one-sided: candidate > incumbent)
+    try:
+        stat_result = sp_stats.wilcoxon(diffs, alternative="greater")
+        statistic = float(stat_result.statistic)
+        p_value = float(stat_result.pvalue)
+    except ValueError:
+        # Falls back to sign test if all differences are zero or too many ties
+        n_pos = int(np.sum(diffs > 0))
+        n_neg = int(np.sum(diffs < 0))
+        n_nonzero = n_pos + n_neg
+        if n_nonzero == 0:
+            return PromotionTestResult(
+                statistic=0.0,
+                p_value=1.0,
+                effect_size=effect_size,
+                ci_lower=ci_lower,
+                ci_upper=ci_upper,
+                passed=False,
+            )
+        sign_result = sp_stats.binomtest(n_pos, n_nonzero, 0.5, alternative="greater")
+        statistic = float(n_pos)
+        p_value = float(sign_result.pvalue)
+
+    passed = p_value < _PROMOTION_ALPHA and effect_size > 0
+    return PromotionTestResult(
+        statistic=statistic,
+        p_value=p_value,
+        effect_size=effect_size,
+        ci_lower=ci_lower,
+        ci_upper=ci_upper,
+        passed=passed,
+    )

@@ -13,9 +13,13 @@ from art_style_search.state import (
     _loop_state_from_dict,
     _metric_scores_from_dict,
     _prompt_section_from_dict,
+    append_promotion_log,
+    load_manifest,
+    load_promotion_log,
     load_state,
     prompt_template_from_dict,
     save_iteration_log,
+    save_manifest,
     save_state,
     to_dict,
 )
@@ -28,8 +32,10 @@ from art_style_search.types import (
     LoopState,
     MetricScores,
     OpenProblem,
+    PromotionDecision,
     PromptSection,
     PromptTemplate,
+    RunManifest,
     StyleProfile,
 )
 
@@ -555,3 +561,136 @@ class TestKnowledgeBaseSerialization:
         assert restored.categories == {}
         assert restored.open_problems == []
         assert restored.next_id == 1
+
+
+# ---------------------------------------------------------------------------
+# Tests for RunManifest save/load
+# ---------------------------------------------------------------------------
+
+
+class TestManifestRoundTrip:
+    """Test save_manifest / load_manifest round-trip."""
+
+    def test_save_and_load_manifest(self, tmp_path: Path) -> None:
+        manifest = RunManifest(
+            protocol_version="rigorous_v1",
+            seed=42,
+            cli_args={"num_fixed_refs": 20, "max_iterations": 50},
+            model_names={
+                "caption_model": "gemini-pro",
+                "generator_model": "gemini-flash",
+                "reasoning_model": "claude-opus",
+            },
+            reasoning_provider="anthropic",
+            git_sha="abc1234",
+            python_version="3.12.0",
+            platform="darwin",
+            timestamp_utc="2026-04-10T12:00:00Z",
+            reference_image_hashes={"img_001.png": "deadbeef", "img_002.png": "cafebabe"},
+            num_fixed_refs=20,
+            uv_lock_hash="lockhash123",
+        )
+        manifest_path = tmp_path / "manifest.json"
+
+        save_manifest(manifest, manifest_path)
+        assert manifest_path.exists()
+
+        loaded = load_manifest(manifest_path)
+        assert loaded is not None
+        assert loaded.protocol_version == manifest.protocol_version
+        assert loaded.seed == manifest.seed
+        assert loaded.cli_args == manifest.cli_args
+        assert loaded.model_names == manifest.model_names
+        assert loaded.reasoning_provider == manifest.reasoning_provider
+        assert loaded.git_sha == manifest.git_sha
+        assert loaded.python_version == manifest.python_version
+        assert loaded.platform == manifest.platform
+        assert loaded.timestamp_utc == manifest.timestamp_utc
+        assert loaded.reference_image_hashes == manifest.reference_image_hashes
+        assert loaded.num_fixed_refs == manifest.num_fixed_refs
+        assert loaded.uv_lock_hash == manifest.uv_lock_hash
+
+
+# ---------------------------------------------------------------------------
+# Tests for PromotionDecision append/load log
+# ---------------------------------------------------------------------------
+
+
+class TestPromotionLog:
+    """Test append_promotion_log / load_promotion_log round-trip."""
+
+    def test_append_and_load(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "promotions.jsonl"
+
+        d1 = PromotionDecision(
+            iteration=1,
+            candidate_score=0.65,
+            baseline_score=0.60,
+            epsilon=0.01,
+            delta=0.05,
+            decision="promoted",
+            reason="Candidate exceeded baseline + epsilon",
+            candidate_branch_id=0,
+            candidate_hypothesis="Add hex color codes",
+        )
+        d2 = PromotionDecision(
+            iteration=2,
+            candidate_score=0.62,
+            baseline_score=0.65,
+            epsilon=0.01,
+            delta=-0.03,
+            decision="rejected",
+            reason="Candidate below baseline",
+            candidate_branch_id=1,
+            candidate_hypothesis="Increase brush detail",
+            replicate_scores=[0.61, 0.63, 0.62],
+            p_value=0.35,
+            test_statistic=1.2,
+        )
+
+        append_promotion_log(d1, log_path)
+        append_promotion_log(d2, log_path)
+
+        loaded = load_promotion_log(log_path)
+        assert len(loaded) == 2
+
+        assert loaded[0].iteration == 1
+        assert loaded[0].decision == "promoted"
+        assert loaded[0].candidate_score == 0.65
+        assert loaded[0].candidate_hypothesis == "Add hex color codes"
+        assert loaded[0].replicate_scores is None
+        assert loaded[0].p_value is None
+
+        assert loaded[1].iteration == 2
+        assert loaded[1].decision == "rejected"
+        assert loaded[1].candidate_score == 0.62
+        assert loaded[1].candidate_hypothesis == "Increase brush detail"
+        assert loaded[1].replicate_scores == [0.61, 0.63, 0.62]
+        assert loaded[1].p_value == 0.35
+        assert loaded[1].test_statistic == 1.2
+
+
+# ---------------------------------------------------------------------------
+# Tests for LoopState new scientific rigor fields
+# ---------------------------------------------------------------------------
+
+
+class TestLoopStateNewFields:
+    """Test that seed, protocol, feedback_refs, silent_refs survive save/load."""
+
+    def test_round_trip_with_new_fields(self, tmp_path: Path) -> None:
+        state = make_loop_state(global_best_metrics=make_aggregated_metrics())
+        state.seed = 12345
+        state.protocol = "rigorous"
+        state.feedback_refs = [Path("/data/refs/img_001.png"), Path("/data/refs/img_002.png")]
+        state.silent_refs = [Path("/data/refs/img_003.png")]
+
+        state_file = tmp_path / "state.json"
+        save_state(state, state_file)
+        loaded = load_state(state_file)
+
+        assert loaded is not None
+        assert loaded.seed == 12345
+        assert loaded.protocol == "rigorous"
+        assert loaded.feedback_refs == [Path("/data/refs/img_001.png"), Path("/data/refs/img_002.png")]
+        assert loaded.silent_refs == [Path("/data/refs/img_003.png")]

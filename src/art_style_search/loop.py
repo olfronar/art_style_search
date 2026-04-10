@@ -26,7 +26,8 @@ import hashlib
 import logging
 import random
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC
 from pathlib import Path
 
 from google import genai
@@ -52,14 +53,23 @@ from art_style_search.prompt import (
     synthesize_templates,
 )
 from art_style_search.scoring import adaptive_composite_score, composite_score, improvement_epsilon
-from art_style_search.state import load_state, save_iteration_log, save_state
+from art_style_search.state import (
+    append_promotion_log,
+    load_manifest,
+    load_state,
+    save_iteration_log,
+    save_manifest,
+    save_state,
+)
 from art_style_search.types import (
     AggregatedMetrics,
     ConvergenceReason,
     IterationResult,
     KnowledgeBase,
     LoopState,
+    PromotionDecision,
     PromptTemplate,
+    RunManifest,
 )
 from art_style_search.utils import IMAGE_EXTENSIONS, ReasoningClient, build_ref_gen_pairs
 
@@ -78,10 +88,12 @@ def _discover_images(directory: Path) -> list[Path]:
     return paths
 
 
-def _sample(items: list[Path], max_count: int) -> list[Path]:
+def _sample(items: list[Path], max_count: int, rng: random.Random | None = None) -> list[Path]:
     """Random sample up to max_count items from a list."""
     if len(items) <= max_count:
         return items
+    if rng is not None:
+        return rng.sample(items, max_count)
     return random.sample(items, max_count)
 
 
@@ -133,6 +145,28 @@ def _log_experiment_results(results: list[IterationResult], log_dir: Path) -> No
         )
 
 
+def _filter_feedback_by_refs(feedback_text: str, feedback_refs: frozenset[Path]) -> str:
+    """Filter multi-line per-image feedback to include only lines mentioning feedback_ref filenames."""
+    if not feedback_text or not feedback_refs:
+        return feedback_text
+    ref_names = {p.name for p in feedback_refs}
+    lines = feedback_text.split("\n")
+    kept: list[str] = []
+    keep_current = True
+    for line in lines:
+        # Section headers (##) and empty lines are always kept
+        if line.startswith("##") or not line.strip():
+            kept.append(line)
+            keep_current = True
+            continue
+        # Lines starting with ** or "Image (" are per-image — check if it matches a feedback ref
+        if line.startswith("**") or line.startswith("Image ("):
+            keep_current = any(name in line for name in ref_names)
+        if keep_current:
+            kept.append(line)
+    return "\n".join(kept)
+
+
 # Max experiment results to persist in state.json (older ones are in iteration logs)
 _MAX_PERSISTED_HISTORY = 30
 
@@ -158,6 +192,127 @@ def _ref_cache_key(paths: list[Path]) -> str:
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()[:16]
 
 
+def _build_manifest(config: Config) -> RunManifest:
+    """Build a RunManifest from the current config and environment."""
+    import platform as _platform
+    import subprocess
+    import sys
+    from datetime import datetime
+
+    git_sha: str | None = None
+    try:
+        result = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            git_sha = result.stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    uv_lock_hash: str | None = None
+    uv_lock = Path("uv.lock")
+    if uv_lock.exists():
+        uv_lock_hash = hashlib.sha256(uv_lock.read_bytes()).hexdigest()
+
+    ref_hashes: dict[str, str] = {}
+    for p in sorted(config.reference_dir.iterdir()):
+        if p.suffix.lower() in IMAGE_EXTENSIONS:
+            ref_hashes[p.name] = hashlib.sha256(p.read_bytes()).hexdigest()
+
+    protocol_version = "rigorous_v1" if config.protocol == "rigorous" else "classic"
+
+    return RunManifest(
+        protocol_version=protocol_version,
+        seed=config.seed,
+        cli_args={
+            "max_iterations": config.max_iterations,
+            "plateau_window": config.plateau_window,
+            "num_branches": config.num_branches,
+            "aspect_ratio": config.aspect_ratio,
+            "num_fixed_refs": config.num_fixed_refs,
+            "protocol": config.protocol,
+        },
+        model_names={
+            "caption_model": config.caption_model,
+            "generator_model": config.generator_model,
+            "reasoning_model": config.reasoning_model,
+        },
+        reasoning_provider=config.reasoning_provider,
+        git_sha=git_sha,
+        python_version=sys.version,
+        platform=_platform.platform(),
+        timestamp_utc=datetime.now(UTC).isoformat(),
+        reference_image_hashes=ref_hashes,
+        num_fixed_refs=config.num_fixed_refs,
+        uv_lock_hash=uv_lock_hash,
+    )
+
+
+def _verify_manifest(config: Config, manifest: RunManifest) -> None:
+    """Verify on resume that the manifest matches current config. Warn or abort."""
+    if config.protocol == "rigorous":
+        if manifest.protocol_version != "rigorous_v1":
+            msg = f"Protocol mismatch: state has '{manifest.protocol_version}', CLI has 'rigorous'"
+            raise RuntimeError(msg)
+        if manifest.seed != config.seed:
+            msg = f"Seed mismatch: manifest has {manifest.seed}, CLI has {config.seed}"
+            raise RuntimeError(msg)
+        # Verify reference image hashes
+        current_hashes: dict[str, str] = {}
+        for p in sorted(config.reference_dir.iterdir()):
+            if p.suffix.lower() in IMAGE_EXTENSIONS:
+                current_hashes[p.name] = hashlib.sha256(p.read_bytes()).hexdigest()
+        if current_hashes != manifest.reference_image_hashes:
+            msg = "Reference images changed since run started — aborting resume in rigorous mode"
+            raise RuntimeError(msg)
+    else:
+        if manifest.seed != config.seed:
+            logger.warning("Seed drift: manifest=%d, CLI=%d", manifest.seed, config.seed)
+        if manifest.protocol_version != ("rigorous_v1" if config.protocol == "rigorous" else "classic"):
+            logger.warning("Protocol drift: manifest=%s, CLI=%s", manifest.protocol_version, config.protocol)
+
+
+def _split_information_barrier(
+    fixed_refs: list[Path], protocol: str, rng: random.Random
+) -> tuple[list[Path], list[Path]]:
+    """Split fixed refs into feedback (shown to reasoning model) and silent (hidden).
+
+    In rigorous mode: ceil(0.7 * N) feedback, rest silent (min 2 silent).
+    In classic mode: all feedback, none silent.
+    """
+    import math
+
+    if protocol != "rigorous" or len(fixed_refs) < 4:
+        return list(fixed_refs), []
+    n_feedback = math.ceil(0.7 * len(fixed_refs))
+    n_silent = len(fixed_refs) - n_feedback
+    if n_silent < 2:
+        n_feedback = len(fixed_refs) - 2
+    shuffled = list(fixed_refs)
+    rng.shuffle(shuffled)
+    return shuffled[:n_feedback], shuffled[n_feedback:]
+
+
+def _log_promotion_decision(
+    state: LoopState,
+    ranking: IterationRanking,
+    decision: str,
+    reason: str,
+    config: Config,
+) -> None:
+    """Log a promotion decision to promotion_log.jsonl."""
+    pd = PromotionDecision(
+        iteration=state.iteration,
+        candidate_score=ranking.best_score,
+        baseline_score=ranking.baseline_score,
+        epsilon=ranking.epsilon,
+        delta=ranking.best_score - ranking.baseline_score,
+        decision=decision,
+        reason=reason,
+        candidate_branch_id=ranking.best_exp.branch_id,
+        candidate_hypothesis=ranking.best_exp.hypothesis,
+    )
+    append_promotion_log(pd, config.run_dir / "promotion_log.jsonl")
+
+
 # ---------------------------------------------------------------------------
 # Per-run and per-iteration data carriers
 # ---------------------------------------------------------------------------
@@ -178,6 +333,7 @@ class RunContext:
     registry: ModelRegistry
     gemini_semaphore: asyncio.Semaphore
     eval_semaphore: asyncio.Semaphore
+    rng: random.Random = field(default_factory=random.Random)
 
 
 @dataclass
@@ -219,6 +375,11 @@ async def _run_pairwise_comparison(
     top_a, top_b = sorted_by_score[0], sorted_by_score[1]
     pairs_a = build_ref_gen_pairs(top_a)
     pairs_b = build_ref_gen_pairs(top_b)
+    # Information barrier: only send feedback_refs pairs to pairwise comparison
+    if state.silent_refs:
+        feedback_set = frozenset(state.feedback_refs)
+        pairs_a = [(ref, gen) for ref, gen in pairs_a if ref in feedback_set]
+        pairs_b = [(ref, gen) for ref, gen in pairs_b if ref in feedback_set]
     if not pairs_a or not pairs_b:
         state.pairwise_feedback = ""
         return
@@ -288,6 +449,9 @@ async def _setup_run_context(config: Config) -> RunContext:
     gemini_semaphore = asyncio.Semaphore(config.gemini_concurrency)
     eval_semaphore = asyncio.Semaphore(config.eval_concurrency)
 
+    rng = random.Random(config.seed)
+    logger.info("Run seed: %d, protocol: %s", config.seed, config.protocol)
+
     logger.info("Loading evaluation models...")
     registry = await asyncio.to_thread(ModelRegistry.load_all)
 
@@ -298,6 +462,7 @@ async def _setup_run_context(config: Config) -> RunContext:
         registry=registry,
         gemini_semaphore=gemini_semaphore,
         eval_semaphore=eval_semaphore,
+        rng=rng,
     )
 
 
@@ -305,6 +470,9 @@ def _finalize_run(state: LoopState, ctx: RunContext) -> LoopState:
     """Persist final state, write best prompt, and log the summary banner."""
     save_state(state, ctx.config.state_file)
     _save_best_prompt(state, ctx.config.log_dir)
+
+    # Write holdout summary for silent images (information barrier)
+    _write_holdout_summary(state, ctx)
 
     logger.info("=" * 60)
     if state.global_best_metrics:
@@ -323,6 +491,51 @@ def _finalize_run(state: LoopState, ctx: RunContext) -> LoopState:
     return state
 
 
+def _write_holdout_summary(state: LoopState, ctx: RunContext) -> None:
+    """Compute and save holdout summary for silent images."""
+    import json
+
+    if not state.silent_refs:
+        return
+
+    silent_set = frozenset(state.silent_refs)
+
+    def _extract_silent_scores(results: list[IterationResult]) -> list[float]:
+        """Extract per-image composite scores for silent images from results."""
+        from art_style_search.scoring import per_image_composite
+
+        scores: list[float] = []
+        for r in results:
+            for cap, sc in zip(r.iteration_captions, r.per_image_scores, strict=False):
+                if cap.image_path in silent_set:
+                    scores.append(per_image_composite(sc))
+        return scores
+
+    # Iteration 0 scores (from experiment_history or last_iteration_results)
+    iter0_results = [r for r in state.experiment_history if r.iteration == 0 and r.kept]
+    final_results = [r for r in state.last_iteration_results if r.kept]
+    if not final_results:
+        final_results = state.last_iteration_results[:1]
+
+    iter0_scores = _extract_silent_scores(iter0_results)
+    final_scores = _extract_silent_scores(final_results)
+
+    summary = {
+        "silent_image_count": len(state.silent_refs),
+        "silent_image_names": [p.name for p in state.silent_refs],
+        "iteration_0_mean": sum(iter0_scores) / len(iter0_scores) if iter0_scores else None,
+        "final_mean": sum(final_scores) / len(final_scores) if final_scores else None,
+        "iteration_0_scores": iter0_scores,
+        "final_scores": final_scores,
+    }
+    if summary["iteration_0_mean"] is not None and summary["final_mean"] is not None:
+        summary["delta"] = summary["final_mean"] - summary["iteration_0_mean"]
+
+    holdout_path = ctx.config.run_dir / "holdout_summary.json"
+    holdout_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    logger.info("Holdout summary written to %s", holdout_path)
+
+
 # ---------------------------------------------------------------------------
 # Zero-step (fix refs → caption → analyze → initial templates → eval → apply)
 # ---------------------------------------------------------------------------
@@ -331,8 +544,13 @@ def _finalize_run(state: LoopState, ctx: RunContext) -> LoopState:
 async def _zero_step(ctx: RunContext, all_ref_paths: list[Path]) -> LoopState:
     """Zero-step: fix refs, caption, analyze style, propose N initial templates, evaluate, apply best."""
     config = ctx.config
-    fixed_refs = _sample(all_ref_paths, config.num_fixed_refs)
+    fixed_refs = _sample(all_ref_paths, config.num_fixed_refs, rng=ctx.rng)
     logger.info("Fixed %d reference images for optimization", len(fixed_refs))
+
+    # Information barrier: split into feedback (visible to reasoning model) and silent
+    feedback_refs, silent_refs = _split_information_barrier(fixed_refs, config.protocol, ctx.rng)
+    if silent_refs:
+        logger.info("Information barrier: %d feedback + %d silent images", len(feedback_refs), len(silent_refs))
 
     logger.info("Zero-step: captioning %d reference images...", len(fixed_refs))
     captions = await caption_references(
@@ -386,6 +604,10 @@ async def _zero_step(ctx: RunContext, all_ref_paths: list[Path]) -> LoopState:
         captions=captions,
         style_profile=style_profile,
         fixed_references=fixed_refs,
+        seed=config.seed,
+        protocol=config.protocol,
+        feedback_refs=feedback_refs,
+        silent_refs=silent_refs,
     )
 
     # Save state before evaluation so a crash doesn't lose analysis work
@@ -447,10 +669,26 @@ def _build_iteration_context(state: LoopState) -> tuple[str, str, str]:
     vision_fb = best_last.vision_feedback if best_last else ""
     roundtrip_fb = best_last.roundtrip_feedback if best_last else ""
 
+    # Information barrier: filter per-image feedback to feedback_refs only
+    if state.silent_refs and best_last:
+        feedback_set = frozenset(state.feedback_refs)
+        vision_fb = _filter_feedback_by_refs(vision_fb, feedback_set)
+        roundtrip_fb = _filter_feedback_by_refs(roundtrip_fb, feedback_set)
+
     caption_diffs = ""
     if best_last and best_last.iteration_captions:
+        captions_for_diff = best_last.iteration_captions
+        scores_for_diff = best_last.per_image_scores
+        # Information barrier: only show caption diffs for feedback images
+        if state.silent_refs:
+            feedback_set = frozenset(state.feedback_refs)
+            paired = [
+                (c, s) for c, s in zip(captions_for_diff, scores_for_diff, strict=False) if c.image_path in feedback_set
+            ]
+            captions_for_diff = [c for c, _ in paired]
+            scores_for_diff = [s for _, s in paired]
         sorted_caps = sorted(
-            zip(best_last.iteration_captions, best_last.per_image_scores, strict=False),
+            zip(captions_for_diff, scores_for_diff, strict=False),
             key=lambda x: x[1].dreamsim_similarity,
         )
         worst_caps = [c for c, _ in sorted_caps[:3]]
@@ -582,6 +820,107 @@ def _score_and_rank(exp_results: list[IterationResult], state: LoopState) -> Ite
     )
 
 
+async def _confirmatory_validation(
+    ranking: IterationRanking,
+    state: LoopState,
+    ctx: RunContext,
+    iteration: int,
+) -> None:
+    """Phase 3.1: replicate top-2 candidates + incumbent for statistical testing.
+
+    Only runs in rigorous mode. Updates ranking.best_exp/best_score with median scores.
+    """
+    from art_style_search.experiment import replicate_experiment
+    from art_style_search.scoring import paired_promotion_test
+
+    if ctx.config.protocol != "rigorous":
+        return
+
+    # Identify top-2 by adaptive score
+    sorted_exps = sorted(ranking.exp_results, key=lambda r: ranking.adaptive_scores[id(r)], reverse=True)
+    top_exps = sorted_exps[:2]
+
+    logger.info("Confirmatory validation: replicating %d candidates + incumbent", len(top_exps))
+
+    # Build replicate tasks: top-2 candidates (existing scores as rep 0) + incumbent
+    tasks = []
+    for exp in top_exps:
+        tasks.append(
+            replicate_experiment(
+                template=exp.template,
+                branch_id=exp.branch_id,
+                iteration=iteration,
+                fixed_refs=state.fixed_references,
+                config=ctx.config,
+                gemini_client=ctx.gemini_client,
+                registry=ctx.registry,
+                gemini_semaphore=ctx.gemini_semaphore,
+                eval_semaphore=ctx.eval_semaphore,
+                n_replicates=3,
+                existing_scores=exp.per_image_scores,
+            )
+        )
+    # Incumbent replication (fresh, no existing scores)
+    if state.best_template is not None:
+        tasks.append(
+            replicate_experiment(
+                template=state.best_template,
+                branch_id=900,  # sentinel ID for incumbent
+                iteration=iteration,
+                fixed_refs=state.fixed_references,
+                config=ctx.config,
+                gemini_client=ctx.gemini_client,
+                registry=ctx.registry,
+                gemini_semaphore=ctx.gemini_semaphore,
+                eval_semaphore=ctx.eval_semaphore,
+                n_replicates=3,
+            )
+        )
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Process results
+    candidate_evals = []
+    incumbent_eval = None
+    for i, result in enumerate(results):
+        if isinstance(result, BaseException):
+            logger.warning("Confirmatory replicate %d failed: %s", i, result)
+            continue
+        if i < len(top_exps):
+            candidate_evals.append((top_exps[i], result))
+        else:
+            incumbent_eval = result
+
+    if not candidate_evals or incumbent_eval is None:
+        logger.warning("Confirmatory validation incomplete — falling back to single-pass scores")
+        return
+
+    # Update ranking with median scores from best candidate
+    best_candidate_exp, best_candidate_eval = max(
+        candidate_evals, key=lambda x: composite_score(x[1].median_aggregated)
+    )
+    ranking.best_exp = best_candidate_exp
+    ranking.best_score = composite_score(best_candidate_eval.median_aggregated)
+
+    # Run statistical test: best candidate vs incumbent
+    test_result = paired_promotion_test(
+        best_candidate_eval.median_per_image,
+        incumbent_eval.median_per_image,
+    )
+    logger.info(
+        "Promotion test: p=%.4f, effect=%.5f, CI=[%.5f, %.5f], passed=%s",
+        test_result.p_value,
+        test_result.effect_size,
+        test_result.ci_lower,
+        test_result.ci_upper,
+        test_result.passed,
+    )
+
+    # Store test result on ranking for use in _apply_iteration_result
+    ranking.promotion_test = test_result  # type: ignore[attr-defined]
+    ranking.baseline_score = composite_score(incumbent_eval.median_aggregated)
+
+
 async def _synthesize_reasoning(
     ranking: IterationRanking,
     state: LoopState,
@@ -674,7 +1013,7 @@ def _update_knowledge_base_for_iteration(
     return pre_update_metrics
 
 
-def _apply_iteration_result(state: LoopState, ranking: IterationRanking) -> None:
+def _apply_iteration_result(state: LoopState, ranking: IterationRanking, config: Config) -> None:
     """Decide improvement vs plateau and update state accordingly.
 
     On a genuine improvement: call ``_apply_best_result`` and reset plateau.
@@ -684,9 +1023,20 @@ def _apply_iteration_result(state: LoopState, ranking: IterationRanking) -> None
     """
     improved = ranking.best_score > ranking.baseline_score + ranking.epsilon
 
+    # In rigorous mode, also require statistical confirmation
+    if improved and config.protocol == "rigorous":
+        promotion_test = getattr(ranking, "promotion_test", None)
+        if promotion_test is not None and not promotion_test.passed:
+            logger.info(
+                "Epsilon check passed but statistical test failed (p=%.4f) — rejecting promotion",
+                promotion_test.p_value,
+            )
+            improved = False
+
     if improved:
         _apply_best_result(state, ranking.best_exp)
         state.plateau_counter = 0
+        _log_promotion_decision(state, ranking, "promoted", "Exceeded baseline + epsilon", config)
         return
 
     state.plateau_counter += 1
@@ -707,6 +1057,15 @@ def _apply_iteration_result(state: LoopState, ranking: IterationRanking) -> None
         logger.info("Exploration: adopting second-best experiment to escape potential local optimum")
         _apply_exploration_result(state, second_best)
         state.plateau_counter = _EXPLORATION_RESET_PLATEAU
+        _log_promotion_decision(state, ranking, "exploration", "Plateau escape via second-best", config)
+    else:
+        _log_promotion_decision(
+            state,
+            ranking,
+            "rejected",
+            f"Delta {ranking.best_score - ranking.baseline_score:.5f} < epsilon {ranking.epsilon:.5f}",
+            config,
+        )
 
 
 def _record_iteration_state(
@@ -825,6 +1184,15 @@ async def run(config: Config) -> LoopState:
         raise FileNotFoundError(msg)
     logger.info("Found %d reference images", len(all_ref_paths))
 
+    # Write or verify run manifest
+    manifest_path = config.run_dir / "run_manifest.json"
+    existing_manifest = load_manifest(manifest_path)
+    if existing_manifest is None:
+        manifest = _build_manifest(config)
+        save_manifest(manifest, manifest_path)
+    else:
+        _verify_manifest(config, existing_manifest)
+
     # Resume from disk, or run zero-step
     state = load_state(config.state_file)
     if state is not None:
@@ -860,6 +1228,12 @@ async def run(config: Config) -> LoopState:
 
         ranking = _score_and_rank(exp_results, state)
 
+        # Phase 3.1: Confirmatory validation (rigorous mode only)
+        try:
+            await _confirmatory_validation(ranking, state, ctx, iteration)
+        except Exception:
+            logger.warning("Confirmatory validation failed — falling back to single-pass", exc_info=True)
+
         # Run synthesis reasoning + pairwise + review in parallel
         synth_result, pairwise_result, review_result = await asyncio.gather(
             _synthesize_reasoning(ranking, state, ctx),
@@ -883,7 +1257,7 @@ async def run(config: Config) -> LoopState:
                 logger.warning("Synthesis experiment failed — continuing with individual experiments", exc_info=True)
 
         pre_update_metrics = _update_knowledge_base_for_iteration(state, ranking, proposals, iteration)
-        _apply_iteration_result(state, ranking)
+        _apply_iteration_result(state, ranking, ctx.config)
         _record_iteration_state(state, ranking, pre_update_metrics, iteration, ctx)
 
         if _check_plateau_convergence(state, ctx):

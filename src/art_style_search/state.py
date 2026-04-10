@@ -21,8 +21,10 @@ from art_style_search.types import (
     LoopState,
     MetricScores,
     OpenProblem,
+    PromotionDecision,
     PromptSection,
     PromptTemplate,
+    RunManifest,
     StyleProfile,
 )
 
@@ -235,6 +237,10 @@ def _loop_state_from_dict(d: dict[str, Any]) -> LoopState:
         convergence_reason=(
             ConvergenceReason(d["convergence_reason"]) if d.get("convergence_reason") is not None else None
         ),
+        seed=d.get("seed", 0),
+        protocol=d.get("protocol", "classic"),
+        feedback_refs=[Path(p) for p in d.get("feedback_refs", [])],
+        silent_refs=[Path(p) for p in d.get("silent_refs", [])],
     )
 
 
@@ -291,3 +297,78 @@ def load_iteration_log(path: Path) -> IterationResult:
     """
     raw = json.loads(path.read_text(encoding="utf-8"))
     return _iteration_result_from_dict(raw)
+
+
+# ---------------------------------------------------------------------------
+# Run manifest (write-once provenance record)
+# ---------------------------------------------------------------------------
+
+
+def save_manifest(manifest: RunManifest, path: Path) -> None:
+    """Write the run manifest to *path* (JSON, write-once)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = to_dict(manifest)
+    path.write_text(json.dumps(data, cls=_Encoder, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info("Run manifest written to %s", path)
+
+
+def load_manifest(path: Path) -> RunManifest | None:
+    """Load a previously saved run manifest, or return None if not found."""
+    if not path.exists():
+        return None
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    return RunManifest(
+        protocol_version=raw.get("protocol_version", "classic"),
+        seed=raw.get("seed", 0),
+        cli_args=raw.get("cli_args", {}),
+        model_names=raw.get("model_names", {}),
+        reasoning_provider=raw.get("reasoning_provider", ""),
+        git_sha=raw.get("git_sha"),
+        python_version=raw.get("python_version", ""),
+        platform=raw.get("platform", ""),
+        timestamp_utc=raw.get("timestamp_utc", ""),
+        reference_image_hashes=raw.get("reference_image_hashes", {}),
+        num_fixed_refs=raw.get("num_fixed_refs", 0),
+        uv_lock_hash=raw.get("uv_lock_hash"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Promotion decision log (append-only JSONL)
+# ---------------------------------------------------------------------------
+
+
+def append_promotion_log(decision: PromotionDecision, path: Path) -> None:
+    """Append one promotion decision as a JSON line to *path*."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(to_dict(decision), cls=_Encoder, ensure_ascii=False)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(line + "\n")
+
+
+def load_promotion_log(path: Path) -> list[PromotionDecision]:
+    """Load all promotion decisions from a JSONL file."""
+    if not path.exists():
+        return []
+    decisions: list[PromotionDecision] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        d = json.loads(line)
+        decisions.append(
+            PromotionDecision(
+                iteration=d["iteration"],
+                candidate_score=d["candidate_score"],
+                baseline_score=d["baseline_score"],
+                epsilon=d["epsilon"],
+                delta=d["delta"],
+                decision=d["decision"],
+                reason=d["reason"],
+                candidate_branch_id=d["candidate_branch_id"],
+                candidate_hypothesis=d.get("candidate_hypothesis", ""),
+                replicate_scores=d.get("replicate_scores"),
+                p_value=d.get("p_value"),
+                test_statistic=d.get("test_statistic"),
+            )
+        )
+    return decisions

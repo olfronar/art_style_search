@@ -9,6 +9,10 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from typing import Any
 
 
 @dataclass(frozen=True)
@@ -511,3 +515,73 @@ class LoopState:
     pairwise_feedback: str = ""
     converged: bool = False
     convergence_reason: ConvergenceReason | None = None
+    # Scientific rigor fields (Phase 1-3)
+    seed: int = 0
+    protocol: str = "classic"  # "classic" or "rigorous"
+    feedback_refs: list[Path] = field(default_factory=list)  # shown to reasoning model
+    silent_refs: list[Path] = field(default_factory=list)  # evaluated but hidden from optimizer
+
+
+# ---------------------------------------------------------------------------
+# Scientific rigor types (Phases 1-3)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RunManifest:
+    """Write-once provenance record for a run."""
+
+    protocol_version: str  # "classic" or "rigorous_v1"
+    seed: int
+    cli_args: dict[str, Any]
+    model_names: dict[str, str]  # caption_model, generator_model, reasoning_model
+    reasoning_provider: str
+    git_sha: str | None
+    python_version: str
+    platform: str
+    timestamp_utc: str  # ISO 8601
+    reference_image_hashes: dict[str, str]  # filename -> SHA256
+    num_fixed_refs: int
+    uv_lock_hash: str | None
+
+
+@dataclass(frozen=True)
+class PromotionDecision:
+    """One promotion decision logged per iteration."""
+
+    iteration: int
+    candidate_score: float
+    baseline_score: float
+    epsilon: float
+    delta: float
+    decision: str  # "promoted" | "rejected" | "exploration"
+    reason: str
+    candidate_branch_id: int
+    candidate_hypothesis: str
+    replicate_scores: list[float] | None = None
+    p_value: float | None = None
+    test_statistic: float | None = None
+
+
+@dataclass(frozen=True)
+class PromotionTestResult:
+    """Statistical test result for promotion decisions (rigorous mode)."""
+
+    statistic: float
+    p_value: float  # one-sided
+    effect_size: float  # mean paired difference
+    ci_lower: float  # 95% CI lower bound of mean difference
+    ci_upper: float
+    passed: bool  # p < 0.10 AND effect_size > 0
+
+
+@dataclass
+class ReplicatedEvaluation:
+    """Replicated evaluation for confirmatory validation (rigorous mode)."""
+
+    template: PromptTemplate
+    branch_id: int
+    replicate_scores: list[list[MetricScores]]  # [replicate][image]
+    replicate_aggregated: list[AggregatedMetrics]  # per-replicate
+    median_per_image: list[MetricScores]  # median across replicates per image
+    median_aggregated: AggregatedMetrics  # aggregated from medians

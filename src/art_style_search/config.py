@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import random
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -46,6 +47,10 @@ class Config:
     # Concurrency
     gemini_concurrency: int
     eval_concurrency: int
+
+    # Scientific rigor
+    seed: int
+    protocol: str  # "classic" or "rigorous"
 
     # API keys
     anthropic_api_key: str
@@ -109,6 +114,16 @@ def parse_args(argv: list[str] | None = None) -> Config:
         help="Base URL for local/remote OpenAI-compatible server (e.g. http://gpu:8000/v1)",
     )
 
+    # Scientific rigor
+    rigor = parser.add_argument_group("Scientific Rigor")
+    rigor.add_argument(
+        "--protocol",
+        choices=["classic", "rigorous"],
+        default="classic",
+        help="Protocol: classic (current behavior) or rigorous (info barrier + replication + statistical testing)",
+    )
+    rigor.add_argument("--seed", type=int, default=None, help="RNG seed for reproducibility (random if omitted)")
+
     # Concurrency
     conc = parser.add_argument_group("Concurrency")
     conc.add_argument("--gemini-concurrency", type=int, default=50, help="Max concurrent Gemini API calls")
@@ -146,6 +161,9 @@ def parse_args(argv: list[str] | None = None) -> Config:
     default_models = {"anthropic": "claude-sonnet-4-6", "zai": "glm-5.1", "openai": "gpt-5.4", "local": ""}
     reasoning_model = args.reasoning_model or default_models[provider]
 
+    # Resolve seed: generate one if not provided
+    seed = args.seed if args.seed is not None else random.randint(0, 2**32 - 1)
+
     if not args.reference_dir.is_dir():
         parser.error(f"Reference directory does not exist: {args.reference_dir}")
 
@@ -174,6 +192,8 @@ def parse_args(argv: list[str] | None = None) -> Config:
         reasoning_base_url=args.reasoning_base_url or "",
         gemini_concurrency=args.gemini_concurrency,
         eval_concurrency=args.eval_concurrency,
+        seed=seed,
+        protocol=args.protocol,
         anthropic_api_key=anthropic_key,
         google_api_key=google_key,
         zai_api_key=zai_key,

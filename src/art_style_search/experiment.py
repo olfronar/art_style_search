@@ -21,7 +21,15 @@ from art_style_search.evaluate import (
 from art_style_search.generate import generate_single
 from art_style_search.models import ModelRegistry
 from art_style_search.prompt import Lessons
-from art_style_search.types import Caption, IterationResult, MetricScores, PromptTemplate, verdict_label
+from art_style_search.types import (
+    AggregatedMetrics,
+    Caption,
+    IterationResult,
+    MetricScores,
+    PromptTemplate,
+    ReplicatedEvaluation,
+    verdict_label,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +98,13 @@ async def _caption_and_generate(
     cache_dir = config.log_dir / f"iter_{iteration:03d}" / f"exp_{experiment_id}" / "captions"
     gen_dir = config.output_dir / f"iter_{iteration:03d}" / f"exp_{experiment_id}"
     gen_dir.mkdir(parents=True, exist_ok=True)
+    # In rigorous mode, include prompt hash so cache invalidates when meta-prompt changes
     cache_key = f"iter{iteration}_e{experiment_id}"
+    if getattr(config, "protocol", "classic") == "rigorous":
+        import hashlib
+
+        prompt_hash = hashlib.sha256(meta_prompt.encode()).hexdigest()[:8]
+        cache_key = f"{cache_key}_p{prompt_hash}"
 
     async def _caption_then_generate(ref_path: Path, i: int) -> tuple[Caption, Path]:
         caption = await caption_single(
@@ -255,4 +269,127 @@ async def run_experiment(
         vision_feedback=vision_feedback,
         roundtrip_feedback=roundtrip_feedback,
         iteration_captions=captions,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Replicated evaluation (rigorous mode)
+# ---------------------------------------------------------------------------
+
+
+def _median_metric_scores(replicate_scores: list[list[MetricScores]]) -> list[MetricScores]:
+    """Compute per-image median across replicates.
+
+    ``replicate_scores[r][i]`` is replicate *r*, image *i*.
+    Returns a list of length n_images with median scores.
+    """
+    import statistics
+
+    n_images = len(replicate_scores[0])
+    result: list[MetricScores] = []
+    for img_idx in range(n_images):
+        scores_across_reps = [replicate_scores[r][img_idx] for r in range(len(replicate_scores))]
+        result.append(
+            MetricScores(
+                dreamsim_similarity=statistics.median(s.dreamsim_similarity for s in scores_across_reps),
+                hps_score=statistics.median(s.hps_score for s in scores_across_reps),
+                aesthetics_score=statistics.median(s.aesthetics_score for s in scores_across_reps),
+                color_histogram=statistics.median(s.color_histogram for s in scores_across_reps),
+                ssim=statistics.median(s.ssim for s in scores_across_reps),
+                vision_style=statistics.median(s.vision_style for s in scores_across_reps),
+                vision_subject=statistics.median(s.vision_subject for s in scores_across_reps),
+                vision_composition=statistics.median(s.vision_composition for s in scores_across_reps),
+            )
+        )
+    return result
+
+
+async def replicate_experiment(
+    template: PromptTemplate,
+    branch_id: int,
+    iteration: int,
+    fixed_refs: list[Path],
+    config: Config,
+    *,
+    gemini_client: genai.Client,
+    registry: ModelRegistry,
+    gemini_semaphore: asyncio.Semaphore,
+    eval_semaphore: asyncio.Semaphore,
+    n_replicates: int = 3,
+    existing_scores: list[MetricScores] | None = None,
+) -> ReplicatedEvaluation:
+    """Run replicated caption+generate+evaluate cycles for confirmatory validation.
+
+    If *existing_scores* is provided, it is used as replicate 0 and only
+    ``n_replicates - 1`` additional replicates are generated.
+    """
+    meta_prompt = template.render()
+    all_replicate_scores: list[list[MetricScores]] = []
+    all_replicate_agg: list[AggregatedMetrics] = []
+
+    start_rep = 0
+    if existing_scores is not None:
+        all_replicate_scores.append(existing_scores)
+        all_replicate_agg.append(aggregate(existing_scores))
+        start_rep = 1
+
+    for rep in range(start_rep, n_replicates):
+        rep_id = branch_id * 100 + rep  # unique experiment_id per replicate
+        captions, generated_paths, pairs = await _caption_and_generate(
+            fixed_refs,
+            meta_prompt,
+            config=config,
+            gemini_client=gemini_client,
+            gemini_semaphore=gemini_semaphore,
+            iteration=iteration,
+            experiment_id=rep_id,
+        )
+        if not generated_paths:
+            logger.warning("Replicate %d/%d for branch %d: no images generated", rep, n_replicates, branch_id)
+            continue
+
+        gen_paths = [gen for _, gen in pairs]
+        ref_paths = [orig for orig, _ in pairs]
+        caption_by_path = {c.image_path: c.text for c in captions}
+        eval_captions = [caption_by_path[orig] for orig, _ in pairs]
+
+        (metric_scores, _), (_, vision_scores_list) = await asyncio.gather(
+            evaluate_images(gen_paths, ref_paths, eval_captions, registry=registry, semaphore=eval_semaphore),
+            compare_vision_per_image(
+                pairs, eval_captions, client=gemini_client, model=config.caption_model, semaphore=gemini_semaphore
+            ),
+        )
+
+        # Merge vision scores into metric scores
+        scores: list[MetricScores] = []
+        for i in range(len(metric_scores)):
+            vs = vision_scores_list[i]
+            scores.append(
+                replace(
+                    metric_scores[i],
+                    vision_style=vs.style.score,
+                    vision_subject=vs.subject.score,
+                    vision_composition=vs.composition.score,
+                )
+            )
+
+        all_replicate_scores.append(scores)
+        all_replicate_agg.append(aggregate(scores))
+
+    if not all_replicate_scores:
+        msg = f"All replicates failed for branch {branch_id}"
+        raise RuntimeError(msg)
+
+    median_scores = _median_metric_scores(all_replicate_scores)
+    median_agg = aggregate(median_scores)
+    style_con = compute_style_consistency([])  # no captions to compare across replicates
+    median_agg = replace(median_agg, style_consistency=style_con)
+
+    return ReplicatedEvaluation(
+        template=template,
+        branch_id=branch_id,
+        replicate_scores=all_replicate_scores,
+        replicate_aggregated=all_replicate_agg,
+        median_per_image=median_scores,
+        median_aggregated=median_agg,
     )
