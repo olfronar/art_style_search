@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import re
 from pathlib import Path
 
@@ -174,8 +175,6 @@ async def pairwise_compare_experiments(
     experiment.  Returns (rationale, score_for_a) where score_for_a is 1.0 if
     A wins, 0.0 if B wins, 0.5 for tie.
     """
-    import random as _random
-
     n = min(len(pairs_a), len(pairs_b))
     if n == 0:
         return ("No images to compare", 0.5)
@@ -183,7 +182,7 @@ async def pairwise_compare_experiments(
     indices = list(range(0, n, step))[:max_images]
 
     # Randomize A/B ordering to eliminate position bias in LLM comparisons
-    swapped = _random.random() < 0.5
+    swapped = random.random() < 0.5
     if swapped:
         pairs_a, pairs_b = pairs_b, pairs_a
 

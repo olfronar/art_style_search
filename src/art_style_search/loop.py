@@ -1100,11 +1100,6 @@ def _record_iteration_state(
         state.prev_best_captions = list(current_best.iteration_captions)
 
     state.last_iteration_results = ranking.exp_results
-    # Strip heavy fields from non-kept results before persisting (full data is in iteration logs)
-    for r in ranking.exp_results:
-        if not r.kept:
-            r.iteration_captions = []
-            r.rendered_prompt = ""
     state.experiment_history.extend(ranking.exp_results)
     # Cap persisted history to avoid unbounded state.json growth
     if len(state.experiment_history) > _MAX_PERSISTED_HISTORY:
@@ -1131,6 +1126,11 @@ def _record_iteration_state(
         )
 
     _log_experiment_results(ranking.exp_results, ctx.config.log_dir)
+    # Strip heavy fields from non-kept results AFTER logging (iteration logs keep full data)
+    for r in ranking.exp_results:
+        if not r.kept:
+            r.iteration_captions = []
+            r.rendered_prompt = ""
     save_state(state, ctx.config.state_file)
     _save_best_prompt(state, ctx.config.log_dir)
 
