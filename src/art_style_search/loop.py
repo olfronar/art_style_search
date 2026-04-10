@@ -861,19 +861,19 @@ async def run(config: Config) -> LoopState:
         ranking = _score_and_rank(exp_results, state)
 
         # Run synthesis reasoning + pairwise + review in parallel
-        parallel_results = await asyncio.gather(
+        synth_result, pairwise_result, review_result = await asyncio.gather(
             _synthesize_reasoning(ranking, state, ctx),
             _run_pairwise_comparison(ranking, state, ctx),
             _run_independent_review(ranking, proposals, state, ctx),
             return_exceptions=True,
         )
-        for i, result in enumerate(parallel_results[1:], start=1):
-            if isinstance(result, BaseException):
-                label = "Pairwise comparison" if i == 1 else "Independent review"
-                logger.warning("%s failed — skipping: %s", label, result)
+        if isinstance(pairwise_result, BaseException):
+            logger.warning("Pairwise comparison failed — skipping: %s", pairwise_result)
+        if isinstance(review_result, BaseException):
+            logger.warning("Independent review failed — skipping: %s", review_result)
 
         # Synthesis experiment needs the template from the reasoning call
-        synth_template = parallel_results[0]
+        synth_template = synth_result
         if isinstance(synth_template, BaseException):
             logger.warning("Synthesis reasoning failed — skipping: %s", synth_template)
         elif synth_template is not None:

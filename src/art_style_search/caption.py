@@ -10,7 +10,7 @@ from pathlib import Path
 from google import genai
 
 from art_style_search.types import Caption
-from art_style_search.utils import async_retry, image_to_gemini_part
+from art_style_search.utils import async_retry, gemini_circuit_breaker, image_to_gemini_part
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ CAPTION_PROMPT = (
 )
 
 
-async def _caption_single(
+async def caption_single(
     image_path: Path,
     *,
     prompt: str,
@@ -74,8 +74,6 @@ async def _caption_single(
                 timeout=90,
             )
         return resp.text
-
-    from art_style_search.utils import gemini_circuit_breaker
 
     caption_text: str = await async_retry(
         _call, label=f"Caption {image_path.name}", circuit_breaker=gemini_circuit_breaker
@@ -123,7 +121,7 @@ async def caption_references(
     """
     effective_prompt = prompt or CAPTION_PROMPT
     tasks = [
-        _caption_single(
+        caption_single(
             path,
             prompt=effective_prompt,
             model=model,

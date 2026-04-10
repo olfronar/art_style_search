@@ -10,7 +10,13 @@ from pathlib import Path
 from google import genai
 
 from art_style_search.types import Caption, PromptSection, PromptTemplate, StyleProfile
-from art_style_search.utils import ReasoningClient, async_retry, extract_xml_tag, image_to_gemini_part
+from art_style_search.utils import (
+    ReasoningClient,
+    async_retry,
+    extract_xml_tag,
+    gemini_circuit_breaker,
+    image_to_gemini_part,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +210,6 @@ async def _gemini_analyze(
         )
         return response.text
 
-    from art_style_search.utils import gemini_circuit_breaker
 
     return await async_retry(_call, label="Gemini style analysis", circuit_breaker=gemini_circuit_breaker)
 

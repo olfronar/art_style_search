@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random as _rng
 import re
+import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
@@ -83,7 +85,6 @@ class CircuitBreaker:
         self._consecutive_failures = 0
 
     def record_failure(self) -> None:
-        import time
 
         self._consecutive_failures += 1
         if self._consecutive_failures >= self._threshold:
@@ -95,7 +96,6 @@ class CircuitBreaker:
             )
 
     async def wait_if_open(self) -> None:
-        import time
 
         remaining = self._open_until - time.monotonic()
         if remaining > 0:
@@ -123,7 +123,6 @@ async def async_retry(
     When *circuit_breaker* is provided, waits if breaker is open and records
     successes/failures to trip or reset it.
     """
-    import random as _rng
 
     cb = circuit_breaker
     last_exc: Exception | None = None
@@ -204,8 +203,6 @@ async def stream_message(client: anthropic.AsyncAnthropic, **kwargs: object) -> 
             async with client.messages.stream(**kwargs) as stream:
                 return await stream.get_final_message()
         except (anthropic.APIConnectionError, anthropic.APITimeoutError) as exc:
-            import random as _rng
-
             last_exc = exc
             delay = _STREAM_BASE_DELAY * (2**attempt) * (0.5 + _rng.random())
             logger.warning(
@@ -228,8 +225,6 @@ async def stream_message(client: anthropic.AsyncAnthropic, **kwargs: object) -> 
                 or "connectionerror" in exc_name
             )
             if is_transient:
-                import random as _rng
-
                 last_exc = exc
                 delay = _STREAM_BASE_DELAY * (2**attempt) * (0.5 + _rng.random())
                 logger.warning(

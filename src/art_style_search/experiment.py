@@ -9,7 +9,7 @@ from pathlib import Path
 
 from google import genai
 
-from art_style_search.caption import _caption_single
+from art_style_search.caption import caption_single
 from art_style_search.config import Config
 from art_style_search.evaluate import (
     aggregate,
@@ -93,7 +93,7 @@ async def _caption_and_generate(
     cache_key = f"iter{iteration}_e{experiment_id}"
 
     async def _caption_then_generate(ref_path: Path, i: int) -> tuple[Caption, Path]:
-        caption = await _caption_single(
+        caption = await caption_single(
             ref_path,
             prompt=meta_prompt,
             model=config.caption_model,
