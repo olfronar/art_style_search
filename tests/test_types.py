@@ -253,6 +253,7 @@ class TestAggregatedMetricsSummaryDict:
             "vision_subject_std",
             "vision_composition",
             "vision_composition_std",
+            "completion_rate",
         }
         assert set(d.keys()) == expected_keys
 
@@ -284,7 +285,7 @@ class TestAggregatedMetricsSummaryDict:
         )
         assert isinstance(m.summary_dict(), dict)
 
-    def test_exactly_nineteen_entries(self) -> None:
+    def test_exactly_eighteen_entries(self) -> None:
         m = AggregatedMetrics(
             dreamsim_similarity_mean=0.0,
             dreamsim_similarity_std=0.0,
@@ -293,7 +294,7 @@ class TestAggregatedMetricsSummaryDict:
             aesthetics_score_mean=0.0,
             aesthetics_score_std=0.0,
         )
-        assert len(m.summary_dict()) == 17
+        assert len(m.summary_dict()) == 18
 
 
 # -- ConvergenceReason --------------------------------------------------------

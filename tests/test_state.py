@@ -112,6 +112,8 @@ def make_iteration_result(*, branch_id: int = 0, iteration: int = 1) -> Iteratio
         claude_analysis="Good progress on tonal range; edges still too crisp compared to references.",
         template_changes="Increased wet-on-wet emphasis, added dry-brush texture note.",
         kept=True,
+        n_images_attempted=4,
+        n_images_succeeded=4,
     )
 
 

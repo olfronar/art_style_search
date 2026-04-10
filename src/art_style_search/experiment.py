@@ -35,6 +35,9 @@ from art_style_search.types import (
 
 logger = logging.getLogger(__name__)
 
+# Reject experiments where fewer than this fraction of images were generated
+_MIN_COMPLETION_RATE = 0.5
+
 
 # ---------------------------------------------------------------------------
 # Experiment proposal dataclass
@@ -90,12 +93,13 @@ async def _caption_and_generate(
     gemini_semaphore: asyncio.Semaphore,
     iteration: int,
     experiment_id: int,
-) -> tuple[list[Caption], list[Path], list[tuple[Path, Path]]]:
+) -> tuple[list[Caption], list[Path], list[tuple[Path, Path]], int, int]:
     """Caption and generate per-image in a pipeline (no serial boundary).
 
     Each image's caption→generate runs as a single chained task so generation
     starts as soon as each individual caption completes. Returns (captions,
-    generated_paths, pairs) where pairs maps (original, generated).
+    generated_paths, pairs, n_attempted, n_succeeded) where pairs maps
+    (original, generated).
     """
     cache_dir = config.log_dir / f"iter_{iteration:03d}" / f"exp_{experiment_id}" / "captions"
     gen_dir = config.output_dir / f"iter_{iteration:03d}" / f"exp_{experiment_id}"
@@ -144,7 +148,7 @@ async def _caption_and_generate(
             generated_paths.append(gen_path)
             pairs.append((caption.image_path, gen_path))
 
-    return captions, generated_paths, pairs
+    return captions, generated_paths, pairs, len(ref_paths), len(generated_paths)
 
 
 async def run_experiment(
@@ -166,7 +170,7 @@ async def run_experiment(
     meta_prompt = template.render()
     logger.info("Exp %d iter %d — meta-prompt: %.100s...", experiment_id, iteration, meta_prompt)
 
-    captions, generated_paths, pairs = await _caption_and_generate(
+    captions, generated_paths, pairs, n_attempted, n_succeeded = await _caption_and_generate(
         fixed_refs,
         meta_prompt,
         config=config,
@@ -179,6 +183,13 @@ async def run_experiment(
     if not generated_paths:
         raise RuntimeError(f"Experiment {experiment_id}: no images generated")
 
+    completion_rate_gen = n_succeeded / n_attempted if n_attempted > 0 else 0.0
+    if completion_rate_gen < _MIN_COMPLETION_RATE:
+        raise RuntimeError(
+            f"Experiment {experiment_id}: only {n_succeeded}/{n_attempted} "
+            f"images generated ({completion_rate_gen:.0%}), below {_MIN_COMPLETION_RATE:.0%} threshold"
+        )
+
     logger.info(
         "Exp %d iter %d — %d/%d images generated", experiment_id, iteration, len(generated_paths), len(fixed_refs)
     )
@@ -189,7 +200,7 @@ async def run_experiment(
     eval_captions = [caption_by_path[orig] for orig, _ in pairs]
 
     # Run metric evaluation and vision comparison in parallel
-    (metric_scores, _), (vision_feedbacks, vision_scores_list) = await asyncio.gather(
+    (metric_scores, _, n_eval_failed), (vision_feedbacks, vision_scores_list) = await asyncio.gather(
         evaluate_images(
             gen_paths_for_eval, ref_paths_for_eval, eval_captions, registry=registry, semaphore=eval_semaphore
         ),
@@ -201,13 +212,11 @@ async def run_experiment(
     section_names = [s.name for s in template.sections]
     compliance = check_caption_compliance(section_names, captions, caption_sections=template.caption_sections)
 
-    # Sort by DreamSim worst-first, merge vision scores into MetricScores, then aggregate
-    order = sorted(range(len(metric_scores)), key=lambda i: metric_scores[i].dreamsim_similarity)
-    scores: list[MetricScores] = []
-    vision_parts: list[str] = []
-    for i in order:
-        sc, vs, fb = metric_scores[i], vision_scores_list[i], vision_feedbacks[i]
-        scores.append(
+    # Merge vision scores into MetricScores in ORIGINAL order (aligned with pairs/captions/paths)
+    original_scores: list[MetricScores] = []
+    for i in range(len(metric_scores)):
+        sc, vs = metric_scores[i], vision_scores_list[i]
+        original_scores.append(
             replace(
                 sc,
                 vision_style=vs.style.score,
@@ -215,17 +224,29 @@ async def run_experiment(
                 vision_composition=vs.composition.score,
             )
         )
-        ref_path = pairs[i][0]
-        vl = f"S={verdict_label(vs.style.score)} Su={verdict_label(vs.subject.score)} Co={verdict_label(vs.composition.score)}"
-        vision_parts.append(f"**{ref_path.name}** [{vl}]: {fb[:300]}")
-    aggregated = aggregate(scores)
+
+    # Compute completion rate including eval failures
+    total_succeeded = max(n_succeeded - n_eval_failed, 0)
+    completion_rate = total_succeeded / n_attempted if n_attempted > 0 else 0.0
+
+    aggregated = aggregate(original_scores, completion_rate=completion_rate)
     # Measure how consistent the [Art Style] blocks are across captions
     style_con = compute_style_consistency(captions)
     aggregated = replace(aggregated, style_consistency=style_con)
+
+    # Sort by DreamSim worst-first FOR FEEDBACK STRINGS ONLY
+    order = sorted(range(len(original_scores)), key=lambda i: original_scores[i].dreamsim_similarity)
+    vision_parts: list[str] = []
+    for i in order:
+        sc, fb = original_scores[i], vision_feedbacks[i]
+        ref_path = pairs[i][0]
+        vl = f"S={verdict_label(sc.vision_style)} Su={verdict_label(sc.vision_subject)} Co={verdict_label(sc.vision_composition)}"
+        vision_parts.append(f"**{ref_path.name}** [{vl}]: {fb[:300]}")
     vision_feedback = "\n".join(vision_parts)
 
     sorted_pairs = [pairs[i] for i in order]
-    sorted_captions_list = [captions[order[j]] for j in range(len(order))]
+    sorted_captions_list = [captions[i] for i in order]
+    sorted_scores = [original_scores[i] for i in order]
 
     # Build roundtrip feedback — full caption for worst images, truncated for rest
     prev = best_kept_result(last_results)
@@ -235,7 +256,7 @@ async def run_experiment(
             prev_scores[cap.image_path] = sc.dreamsim_similarity
 
     roundtrip_details: list[str] = []
-    for idx, ((ref_p, _), sc, cap) in enumerate(zip(sorted_pairs, scores, sorted_captions_list, strict=True)):
+    for idx, ((ref_p, _), sc, cap) in enumerate(zip(sorted_pairs, sorted_scores, sorted_captions_list, strict=True)):
         prev_ds = prev_scores.get(cap.image_path)
         trend = ""
         if prev_ds is not None:
@@ -259,7 +280,7 @@ async def run_experiment(
         template=template,
         rendered_prompt=meta_prompt,
         image_paths=generated_paths,
-        per_image_scores=scores,
+        per_image_scores=original_scores,
         aggregated=aggregated,
         claude_analysis="",
         template_changes="",
@@ -269,6 +290,8 @@ async def run_experiment(
         vision_feedback=vision_feedback,
         roundtrip_feedback=roundtrip_feedback,
         iteration_captions=captions,
+        n_images_attempted=n_attempted,
+        n_images_succeeded=n_succeeded,
     )
 
 
@@ -334,7 +357,7 @@ async def replicate_experiment(
 
     async def _run_one_replicate(rep: int) -> tuple[list[MetricScores], AggregatedMetrics] | None:
         rep_id = branch_id * 100 + rep  # unique experiment_id per replicate
-        captions, generated_paths, pairs = await _caption_and_generate(
+        captions, generated_paths, pairs, _n_att, _n_succ = await _caption_and_generate(
             fixed_refs,
             meta_prompt,
             config=config,
@@ -352,7 +375,7 @@ async def replicate_experiment(
         caption_by_path = {c.image_path: c.text for c in captions}
         eval_captions = [caption_by_path[orig] for orig, _ in pairs]
 
-        (metric_scores, _), (_, vision_scores_list) = await asyncio.gather(
+        (metric_scores, _, _n_eval_failed), (_, vision_scores_list) = await asyncio.gather(
             evaluate_images(gen_paths, ref_paths_eval, eval_captions, registry=registry, semaphore=eval_semaphore),
             compare_vision_per_image(
                 pairs, eval_captions, client=gemini_client, model=config.caption_model, semaphore=gemini_semaphore

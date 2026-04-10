@@ -69,7 +69,9 @@ def composite_score(m: AggregatedMetrics) -> float:
     )
     # Penalize inconsistency: high std across images means unreliable reproduction
     variance_penalty = _W_VARIANCE_PENALTY * (m.dreamsim_similarity_std + m.color_histogram_std) / 2.0
-    return base - variance_penalty
+    # Penalize incomplete experiments: missing images should not inflate scores
+    completion_penalty = (1.0 - m.completion_rate) * 0.15
+    return base - variance_penalty - completion_penalty
 
 
 def adaptive_composite_score(

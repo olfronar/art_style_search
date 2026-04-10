@@ -118,6 +118,7 @@ def _aggregated_metrics_from_dict(d: dict[str, Any]) -> AggregatedMetrics:
         vision_style_std=d.get("vision_style_std", 0.0),
         vision_subject_std=d.get("vision_subject_std", 0.0),
         vision_composition_std=d.get("vision_composition_std", 0.0),
+        completion_rate=d.get("completion_rate", 1.0),
     )
 
 
@@ -164,6 +165,8 @@ def _iteration_result_from_dict(d: dict[str, Any]) -> IterationResult:
         vision_feedback=d.get("vision_feedback", ""),
         roundtrip_feedback=d.get("roundtrip_feedback", ""),
         iteration_captions=[_caption_from_dict(c) for c in d.get("iteration_captions", [])],
+        n_images_attempted=d.get("n_images_attempted", 0),
+        n_images_succeeded=d.get("n_images_succeeded", 0),
     )
 
 

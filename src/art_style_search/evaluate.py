@@ -376,7 +376,7 @@ def compute_style_consistency(captions: list[Caption]) -> float:
     return total / count if count else 0.0
 
 
-def aggregate(scores: list[MetricScores]) -> AggregatedMetrics:
+def aggregate(scores: list[MetricScores], *, completion_rate: float = 1.0) -> AggregatedMetrics:
     """Compute mean and std for each metric across a list of per-image scores."""
     n = len(scores)
     if n == 0:
@@ -387,6 +387,7 @@ def aggregate(scores: list[MetricScores]) -> AggregatedMetrics:
             hps_score_std=0.0,
             aesthetics_score_mean=0.0,
             aesthetics_score_std=0.0,
+            completion_rate=completion_rate,
         )
 
     def _mean(vals: list[float]) -> float:
@@ -422,7 +423,20 @@ def aggregate(scores: list[MetricScores]) -> AggregatedMetrics:
         vision_subject_std=_std(v_subject),
         vision_composition=_mean(v_composition),
         vision_composition_std=_std(v_composition),
+        completion_rate=completion_rate,
     )
+
+
+_ZERO_SCORES = MetricScores(
+    dreamsim_similarity=0.0,
+    hps_score=0.0,
+    aesthetics_score=0.0,
+    color_histogram=0.0,
+    ssim=0.0,
+    vision_style=0.0,
+    vision_subject=0.0,
+    vision_composition=0.0,
+)
 
 
 def _compute_single_sync(
@@ -448,14 +462,15 @@ async def evaluate_images(
     *,
     registry: ModelRegistry,
     semaphore: asyncio.Semaphore,
-) -> tuple[list[MetricScores], AggregatedMetrics]:
+) -> tuple[list[MetricScores], AggregatedMetrics, int]:
     """Evaluate each generated image against its paired reference.
 
     Each generated image is compared against ONLY its corresponding reference
     (not the mean of all references).  HPS is scored against the per-image
     caption (the actual generation prompt), not the meta-prompt.
 
-    Returns per-image scores and aggregated statistics.
+    Returns (per-image scores, aggregated statistics, n_eval_failed).
+    Failed evaluations get zero-score sentinels to preserve index alignment.
     """
 
     async def _eval_one(gen_path: Path, ref_path: Path, caption: str) -> MetricScores | None:
@@ -480,7 +495,10 @@ async def evaluate_images(
         *[_eval_one(gp, rp, cap) for gp, rp, cap in zip(generated_paths, reference_paths, captions, strict=True)]
     )
 
-    scores = [r for r in results if r is not None]
+    n_eval_failed = sum(1 for r in results if r is None)
+    if n_eval_failed:
+        logger.warning("evaluate_images: %d/%d evaluations failed, using zero scores", n_eval_failed, len(results))
+    scores = [r if r is not None else _ZERO_SCORES for r in results]
     aggregated = aggregate(scores)
 
-    return scores, aggregated
+    return scores, aggregated, n_eval_failed

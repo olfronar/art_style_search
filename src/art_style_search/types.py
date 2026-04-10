@@ -94,6 +94,9 @@ class AggregatedMetrics:
     # Style consistency: Jaccard similarity of [Art Style] blocks across captions [0, 1]
     style_consistency: float = 0.0
 
+    # Completion rate: fraction of attempted images that succeeded (1.0 = all)
+    completion_rate: float = 1.0
+
     # Per-image Gemini vision scores (ternary: MATCH=1.0, PARTIAL=0.5, MISS=0.0)
     vision_style: float = 0.5
     vision_style_std: float = 0.0
@@ -116,6 +119,7 @@ class AggregatedMetrics:
             "ssim_mean": self.ssim_mean,
             "ssim_std": self.ssim_std,
             "style_consistency": self.style_consistency,
+            "completion_rate": self.completion_rate,
             "vision_style": self.vision_style,
             "vision_style_std": self.vision_style_std,
             "vision_subject": self.vision_subject,
@@ -488,6 +492,8 @@ class IterationResult:
     vision_feedback: str = ""
     roundtrip_feedback: str = ""
     iteration_captions: list[Caption] = field(default_factory=list)
+    n_images_attempted: int = 0
+    n_images_succeeded: int = 0
 
 
 @dataclass
