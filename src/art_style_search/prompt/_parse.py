@@ -14,6 +14,10 @@ from dataclasses import dataclass
 from art_style_search.types import PromptSection, PromptTemplate
 from art_style_search.utils import extract_xml_tag
 
+# ---------------------------------------------------------------------------
+# Shared section-parsing regexes (also used by analyze.py)
+# ---------------------------------------------------------------------------
+
 logger = logging.getLogger(__name__)
 
 

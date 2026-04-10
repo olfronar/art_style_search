@@ -26,9 +26,8 @@ import hashlib
 import logging
 import random
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from google import genai
 
@@ -170,8 +169,7 @@ class RunContext:
 
     Holds clients, semaphores, registry, and config so per-phase helpers
     don't need 8-parameter signatures.  ``fixed_refs`` lives on ``LoopState``
-    (authoritative, persisted) and is not duplicated here.  ``experiment_kwargs``
-    is the pre-built kwarg dict forwarded to every ``run_experiment`` call.
+    (authoritative, persisted) and is not duplicated here.
     """
 
     config: Config
@@ -180,16 +178,6 @@ class RunContext:
     registry: ModelRegistry
     gemini_semaphore: asyncio.Semaphore
     eval_semaphore: asyncio.Semaphore
-    experiment_kwargs: dict[str, Any] = field(init=False)
-
-    def __post_init__(self) -> None:
-        self.experiment_kwargs = {
-            "config": self.config,
-            "gemini_client": self.gemini_client,
-            "registry": self.registry,
-            "gemini_semaphore": self.gemini_semaphore,
-            "eval_semaphore": self.eval_semaphore,
-        }
 
 
 @dataclass
@@ -412,10 +400,14 @@ async def _zero_step(ctx: RunContext, all_ref_paths: list[Path]) -> LoopState:
                 template=t,
                 iteration=0,
                 fixed_refs=fixed_refs,
+                config=ctx.config,
+                gemini_client=ctx.gemini_client,
+                registry=ctx.registry,
+                gemini_semaphore=ctx.gemini_semaphore,
+                eval_semaphore=ctx.eval_semaphore,
                 last_results=[],
                 hypothesis=f"Initial template {i}",
                 experiment_desc="Zero-step diverse template",
-                **ctx.experiment_kwargs,
             )
             for i, t in enumerate(initial_templates)
         ]
@@ -558,10 +550,14 @@ async def _run_experiments_parallel(
             template=p.template,
             iteration=iteration,
             fixed_refs=state.fixed_references,
+            config=ctx.config,
+            gemini_client=ctx.gemini_client,
+            registry=ctx.registry,
+            gemini_semaphore=ctx.gemini_semaphore,
+            eval_semaphore=ctx.eval_semaphore,
             last_results=state.last_iteration_results,
             hypothesis=p.hypothesis,
             experiment_desc=p.experiment_desc,
-            **ctx.experiment_kwargs,
         )
         for i, p in enumerate(proposals)
     ]
@@ -625,10 +621,14 @@ async def _run_synthesis_experiment(
         template=merged_template,
         iteration=iteration,
         fixed_refs=state.fixed_references,
+        config=ctx.config,
+        gemini_client=ctx.gemini_client,
+        registry=ctx.registry,
+        gemini_semaphore=ctx.gemini_semaphore,
+        eval_semaphore=ctx.eval_semaphore,
         last_results=state.last_iteration_results,
         hypothesis=merged_hypothesis,
         experiment_desc="Synthesis of top experiments",
-        **ctx.experiment_kwargs,
     )
     merged_score = composite_score(synth_result.aggregated)
     logger.info(

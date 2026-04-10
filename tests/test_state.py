@@ -13,11 +13,11 @@ from art_style_search.state import (
     _loop_state_from_dict,
     _metric_scores_from_dict,
     _prompt_section_from_dict,
-    _prompt_template_from_dict,
-    _to_dict,
     load_state,
+    prompt_template_from_dict,
     save_iteration_log,
     save_state,
+    to_dict,
 )
 from art_style_search.types import (
     AggregatedMetrics,
@@ -142,14 +142,14 @@ class TestToDict:
 
     def test_caption_path_becomes_string(self) -> None:
         caption = make_caption()
-        d = _to_dict(caption)
+        d = to_dict(caption)
         assert isinstance(d["image_path"], str)
         assert d["image_path"] == "/data/reference_images/painting_000.png"
         assert d["text"] == caption.text
 
     def test_metric_scores_all_floats(self) -> None:
         ms = make_metric_scores(seed=2.0)
-        d = _to_dict(ms)
+        d = to_dict(ms)
         assert set(d.keys()) == {
             "dreamsim_similarity",
             "hps_score",
@@ -165,7 +165,7 @@ class TestToDict:
 
     def test_prompt_template_sections_list(self) -> None:
         pt = make_prompt_template(n_sections=3)
-        d = _to_dict(pt)
+        d = to_dict(pt)
         assert isinstance(d["sections"], list)
         assert len(d["sections"]) == 3
         for sec in d["sections"]:
@@ -174,36 +174,36 @@ class TestToDict:
 
     def test_prompt_template_negative_prompt_none(self) -> None:
         pt = PromptTemplate(sections=[make_prompt_section()], negative_prompt=None)
-        d = _to_dict(pt)
+        d = to_dict(pt)
         assert d["negative_prompt"] is None
 
     def test_convergence_reason_enum_becomes_value(self) -> None:
         for reason in ConvergenceReason:
-            assert _to_dict(reason) == reason.value
+            assert to_dict(reason) == reason.value
 
     def test_full_loop_state_is_json_serializable(self) -> None:
         state = make_loop_state(global_best_metrics=make_aggregated_metrics())
-        d = _to_dict(state)
+        d = to_dict(state)
         # Must not raise
         text = json.dumps(d)
         assert isinstance(text, str)
 
     def test_nested_paths_in_iteration_result(self) -> None:
         ir = make_iteration_result()
-        d = _to_dict(ir)
+        d = to_dict(ir)
         for p in d["image_paths"]:
             assert isinstance(p, str)
             assert p.startswith("/data/outputs/")
 
     def test_plain_values_pass_through(self) -> None:
-        assert _to_dict(42) == 42
-        assert _to_dict("hello") == "hello"
-        assert _to_dict(None) is None
-        assert _to_dict(3.14) == 3.14
+        assert to_dict(42) == 42
+        assert to_dict("hello") == "hello"
+        assert to_dict(None) is None
+        assert to_dict(3.14) == 3.14
 
     def test_dict_keys_are_recursed(self) -> None:
         d = {"a": make_caption(), "b": [make_metric_scores()]}
-        result = _to_dict(d)
+        result = to_dict(d)
         assert isinstance(result["a"]["image_path"], str)
         assert isinstance(result["b"][0]["dreamsim_similarity"], float)
 
@@ -218,45 +218,45 @@ class TestRoundTrip:
 
     def test_caption_round_trip(self) -> None:
         original = make_caption(index=7)
-        d = json.loads(json.dumps(_to_dict(original)))
+        d = json.loads(json.dumps(to_dict(original)))
         restored = _caption_from_dict(d)
         assert restored == original
 
     def test_metric_scores_round_trip(self) -> None:
         original = make_metric_scores(seed=3.0)
-        d = json.loads(json.dumps(_to_dict(original)))
+        d = json.loads(json.dumps(to_dict(original)))
         restored = _metric_scores_from_dict(d)
         assert restored == original
 
     def test_aggregated_metrics_round_trip(self) -> None:
         original = make_aggregated_metrics(seed=2.0)
-        d = json.loads(json.dumps(_to_dict(original)))
+        d = json.loads(json.dumps(to_dict(original)))
         restored = _aggregated_metrics_from_dict(d)
         assert restored == original
 
     def test_prompt_section_round_trip(self) -> None:
         original = make_prompt_section(index=1)
-        d = json.loads(json.dumps(_to_dict(original)))
+        d = json.loads(json.dumps(to_dict(original)))
         restored = _prompt_section_from_dict(d)
         assert restored == original
 
     def test_prompt_template_round_trip(self) -> None:
         original = make_prompt_template(n_sections=3)
-        d = json.loads(json.dumps(_to_dict(original)))
-        restored = _prompt_template_from_dict(d)
+        d = json.loads(json.dumps(to_dict(original)))
+        restored = prompt_template_from_dict(d)
         assert restored.sections == original.sections
         assert restored.negative_prompt == original.negative_prompt
 
     def test_prompt_template_no_negative_prompt_round_trip(self) -> None:
         original = PromptTemplate(sections=[make_prompt_section()], negative_prompt=None)
-        d = json.loads(json.dumps(_to_dict(original)))
-        restored = _prompt_template_from_dict(d)
+        d = json.loads(json.dumps(to_dict(original)))
+        restored = prompt_template_from_dict(d)
         assert restored.negative_prompt is None
         assert len(restored.sections) == 1
 
     def test_iteration_result_round_trip(self) -> None:
         original = make_iteration_result(branch_id=2, iteration=4)
-        d = json.loads(json.dumps(_to_dict(original)))
+        d = json.loads(json.dumps(to_dict(original)))
         restored = _iteration_result_from_dict(d)
         assert restored.branch_id == original.branch_id
         assert restored.iteration == original.iteration
@@ -269,7 +269,7 @@ class TestRoundTrip:
     def test_convergence_reason_round_trip(self) -> None:
         for reason in ConvergenceReason:
             state = make_loop_state(converged=True, convergence_reason=reason)
-            d = json.loads(json.dumps(_to_dict(state)))
+            d = json.loads(json.dumps(to_dict(state)))
             restored = _loop_state_from_dict(d)
             assert restored.convergence_reason == reason
             assert restored.converged is True
@@ -281,7 +281,7 @@ class TestRoundTrip:
             convergence_reason=ConvergenceReason.PLATEAU,
             global_best_metrics=make_aggregated_metrics(seed=5.0),
         )
-        d = json.loads(json.dumps(_to_dict(original)))
+        d = json.loads(json.dumps(to_dict(original)))
         restored = _loop_state_from_dict(d)
         assert restored.iteration == original.iteration
         assert restored.converged is True
@@ -489,7 +489,7 @@ class TestKnowledgeBaseSerialization:
 
     def test_knowledge_base_round_trip(self) -> None:
         kb = _make_knowledge_base()
-        d = json.loads(json.dumps(_to_dict(kb)))
+        d = json.loads(json.dumps(to_dict(kb)))
         restored = _knowledge_base_from_dict(d)
 
         assert len(restored.hypotheses) == 2
@@ -549,7 +549,7 @@ class TestKnowledgeBaseSerialization:
 
     def test_empty_kb_round_trip(self) -> None:
         kb = KnowledgeBase()
-        d = json.loads(json.dumps(_to_dict(kb)))
+        d = json.loads(json.dumps(to_dict(kb)))
         restored = _knowledge_base_from_dict(d)
         assert restored.hypotheses == []
         assert restored.categories == {}

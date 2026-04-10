@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
 import anthropic
+import httpcore
+import httpx
 from anthropic.types import Message
 from google.genai import types as genai_types
 
@@ -213,17 +215,21 @@ async def stream_message(client: anthropic.AsyncAnthropic, **kwargs: object) -> 
                 delay,
             )
             await asyncio.sleep(delay)
-        except Exception as exc:
-            exc_name = type(exc).__name__.lower()
-            exc_str = str(exc).lower()
-            is_transient = (
-                "incomplete chunked read" in exc_str
-                or "peer closed connection" in exc_str
-                or "readerror" in exc_name
-                or "readtimeout" in exc_name
-                or "remotedisconnected" in exc_name
-                or "connectionerror" in exc_name
+        except (httpx.RemoteProtocolError, httpx.ReadError, httpcore.RemoteProtocolError, httpcore.ReadError) as exc:
+            last_exc = exc
+            delay = _STREAM_BASE_DELAY * (2**attempt) * (0.5 + _rng.random())
+            logger.warning(
+                "Anthropic stream attempt %d/%d failed: %s: %s — retrying in %.0fs",
+                attempt + 1,
+                _STREAM_MAX_RETRIES,
+                type(exc).__name__,
+                exc,
+                delay,
             )
+            await asyncio.sleep(delay)
+        except Exception as exc:
+            exc_str = str(exc).lower()
+            is_transient = "incomplete chunked read" in exc_str or "peer closed connection" in exc_str
             if is_transient:
                 last_exc = exc
                 delay = _STREAM_BASE_DELAY * (2**attempt) * (0.5 + _rng.random())

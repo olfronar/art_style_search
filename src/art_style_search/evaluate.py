@@ -126,9 +126,17 @@ async def compare_vision_per_image(
         for (ref, gen), cap in zip(pairs, captions, strict=True)
     ]
     logger.info("Vision comparison: scoring %d image pairs", len(tasks))
-    results = await asyncio.gather(*tasks)
-    feedbacks = [text for text, _ in results]
-    scores = [vs for _, vs in results]
+    raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+    feedbacks: list[str] = []
+    scores: list[VisionScores] = []
+    for i, result in enumerate(raw_results):
+        if isinstance(result, BaseException):
+            logger.warning("Vision pair %d failed: %s: %s", i, type(result).__name__, result)
+            feedbacks.append("")
+            scores.append(VisionScores.default())
+        else:
+            feedbacks.append(result[0])
+            scores.append(result[1])
     logger.info("Vision comparison: done (%d pairs scored)", len(scores))
     return feedbacks, scores
 
@@ -420,17 +428,16 @@ def aggregate(scores: list[MetricScores]) -> AggregatedMetrics:
 def _compute_single_sync(
     registry: ModelRegistry,
     generated: Image.Image,
-    references: list[Image.Image],
+    reference: Image.Image,
     prompt: str,
 ) -> MetricScores:
     """Compute all per-image metrics for one generated image (synchronous)."""
-    ref = references[0]  # always a single paired reference
     return MetricScores(
-        dreamsim_similarity=registry.compute_dreamsim(generated, ref),
+        dreamsim_similarity=registry.compute_dreamsim(generated, reference),
         hps_score=registry.compute_hps(generated, prompt),
         aesthetics_score=registry.compute_aesthetics(generated),
-        color_histogram=registry.compute_color_histogram(generated, ref),
-        ssim=registry.compute_ssim(generated, ref),
+        color_histogram=registry.compute_color_histogram(generated, reference),
+        ssim=registry.compute_ssim(generated, reference),
     )
 
 
@@ -458,7 +465,7 @@ async def evaluate_images(
             try:
                 gen_image = Image.open(gen_path).convert("RGB")
                 ref_image = Image.open(ref_path).convert("RGB")
-                scores = await asyncio.to_thread(_compute_single_sync, registry, gen_image, [ref_image], caption)
+                scores = await asyncio.to_thread(_compute_single_sync, registry, gen_image, ref_image, caption)
                 return scores
             except Exception as exc:
                 logger.warning("Evaluation failed for %s: %s", gen_path.name, exc)

@@ -41,27 +41,27 @@ class _Encoder(json.JSONEncoder):
         if isinstance(o, Path):
             return str(o)
         if dataclasses.is_dataclass(o) and not isinstance(o, type):
-            return _to_dict(o)
+            return to_dict(o)
         if isinstance(o, enum.Enum):
             return o.value
         return super().default(o)
 
 
-def _to_dict(obj: Any) -> Any:
+def to_dict(obj: Any) -> Any:
     """Recursively convert a dataclass (or nested structure) to a JSON-safe dict."""
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
         result: dict[str, Any] = {}
         for f in dataclasses.fields(obj):
-            result[f.name] = _to_dict(getattr(obj, f.name))
+            result[f.name] = to_dict(getattr(obj, f.name))
         return result
     if isinstance(obj, Path):
         return str(obj)
     if isinstance(obj, enum.Enum):
         return obj.value
     if isinstance(obj, list):
-        return [_to_dict(item) for item in obj]
+        return [to_dict(item) for item in obj]
     if isinstance(obj, dict):
-        return {k: _to_dict(v) for k, v in obj.items()}
+        return {k: to_dict(v) for k, v in obj.items()}
     return obj
 
 
@@ -123,7 +123,7 @@ def _prompt_section_from_dict(d: dict[str, Any]) -> PromptSection:
     return PromptSection(name=d["name"], description=d["description"], value=d["value"])
 
 
-def _prompt_template_from_dict(d: dict[str, Any]) -> PromptTemplate:
+def prompt_template_from_dict(d: dict[str, Any]) -> PromptTemplate:
     return PromptTemplate(
         sections=[_prompt_section_from_dict(s) for s in d.get("sections", [])],
         negative_prompt=d.get("negative_prompt"),
@@ -132,7 +132,7 @@ def _prompt_template_from_dict(d: dict[str, Any]) -> PromptTemplate:
     )
 
 
-def _style_profile_from_dict(d: dict[str, Any]) -> StyleProfile:
+def style_profile_from_dict(d: dict[str, Any]) -> StyleProfile:
     return StyleProfile(
         color_palette=d["color_palette"],
         composition=d["composition"],
@@ -149,7 +149,7 @@ def _iteration_result_from_dict(d: dict[str, Any]) -> IterationResult:
     return IterationResult(
         branch_id=d["branch_id"],
         iteration=d["iteration"],
-        template=_prompt_template_from_dict(d["template"]),
+        template=prompt_template_from_dict(d["template"]),
         rendered_prompt=d["rendered_prompt"],
         image_paths=[Path(p) for p in d["image_paths"]],
         per_image_scores=[_metric_scores_from_dict(s) for s in d["per_image_scores"]],
@@ -212,12 +212,12 @@ def _knowledge_base_from_dict(d: dict[str, Any]) -> KnowledgeBase:
 def _loop_state_from_dict(d: dict[str, Any]) -> LoopState:
     return LoopState(
         iteration=d["iteration"],
-        current_template=_prompt_template_from_dict(d["current_template"]),
-        best_template=_prompt_template_from_dict(d["best_template"]),
+        current_template=prompt_template_from_dict(d["current_template"]),
+        best_template=prompt_template_from_dict(d["best_template"]),
         best_metrics=_aggregated_metrics_from_dict(d["best_metrics"]) if d.get("best_metrics") is not None else None,
         knowledge_base=_knowledge_base_from_dict(d["knowledge_base"]) if d.get("knowledge_base") else KnowledgeBase(),
         captions=[_caption_from_dict(c) for c in d["captions"]],
-        style_profile=_style_profile_from_dict(d["style_profile"]),
+        style_profile=style_profile_from_dict(d["style_profile"]),
         fixed_references=[Path(p) for p in d.get("fixed_references", [])],
         experiment_history=[_iteration_result_from_dict(r) for r in d.get("experiment_history", [])],
         last_iteration_results=[_iteration_result_from_dict(r) for r in d.get("last_iteration_results", [])],
@@ -245,7 +245,7 @@ def _loop_state_from_dict(d: dict[str, Any]) -> LoopState:
 
 def save_state(state: LoopState, path: Path) -> None:
     """Serialize *state* to JSON, writing atomically via temp-file + rename."""
-    data = _to_dict(state)
+    data = to_dict(state)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     # Write to a temp file in the same directory, then atomically rename.
@@ -278,7 +278,7 @@ def save_iteration_log(result: IterationResult, log_dir: Path) -> None:
     filename = f"iter_{result.iteration:03d}_branch_{result.branch_id}.json"
     log_path = log_dir / filename
 
-    data = _to_dict(result)
+    data = to_dict(result)
     log_path.write_text(json.dumps(data, cls=_Encoder, ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info("Iteration log written to %s", log_path)
 

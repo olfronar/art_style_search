@@ -18,7 +18,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def _auto_device() -> torch.device:
@@ -64,7 +64,7 @@ class ModelRegistry:
         resolves the device.
         """
         resolved = _auto_device() if device == "auto" else torch.device(device)
-        log.info("ModelRegistry using device: %s", resolved)
+        logger.info("ModelRegistry using device: %s", resolved)
         return cls(device=resolved)
 
     # ------------------------------------------------------------------
@@ -76,7 +76,7 @@ class ModelRegistry:
             return
         from dreamsim import dreamsim
 
-        log.info("Loading DreamSim (dino_vitb16) ...")
+        logger.info("Loading DreamSim (dino_vitb16) ...")
         model, preprocess = dreamsim(pretrained=True, dreamsim_type="dino_vitb16", device=self.device)
         model.eval()
         self._dreamsim_model = model
@@ -90,7 +90,7 @@ class ModelRegistry:
 
         model_name = "shunk031/aesthetics-predictor-v2-sac-logos-ava1-l14-linearMSE"
         clip_name = "openai/clip-vit-large-patch14"
-        log.info("Loading LAION Aesthetics (%s) ...", model_name)
+        logger.info("Loading LAION Aesthetics (%s) ...", model_name)
         self._aesthetics_processor = CLIPProcessor.from_pretrained(clip_name)
         self._aesthetics_model = AestheticsPredictorV2Linear.from_pretrained(model_name).to(self.device).eval()
 
@@ -106,8 +106,8 @@ class ModelRegistry:
         """
         with self._dreamsim_lock:
             self._ensure_dreamsim()
-            assert self._dreamsim_model is not None
-            assert self._dreamsim_preprocess is not None
+            if self._dreamsim_model is None or self._dreamsim_preprocess is None:
+                raise RuntimeError("DreamSim model failed to load")
 
             with torch.no_grad():
                 gen_tensor = self._dreamsim_preprocess(generated.convert("RGB")).to(self.device)
@@ -135,8 +135,8 @@ class ModelRegistry:
         """
         with self._aesthetics_lock:
             self._ensure_aesthetics()
-            assert self._aesthetics_model is not None
-            assert self._aesthetics_processor is not None
+            if self._aesthetics_model is None or self._aesthetics_processor is None:
+                raise RuntimeError("Aesthetics model failed to load")
 
             with torch.no_grad():
                 inputs = self._aesthetics_processor(images=generated, return_tensors="pt").to(self.device)

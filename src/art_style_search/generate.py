@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 _REQUEST_TIMEOUT = 180  # seconds — per-request timeout to release semaphore on hang
 
 
-async def _generate_single(
+async def generate_single(
     prompt: str,
     *,
     index: int,

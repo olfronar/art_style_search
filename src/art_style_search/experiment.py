@@ -18,7 +18,7 @@ from art_style_search.evaluate import (
     compute_style_consistency,
     evaluate_images,
 )
-from art_style_search.generate import _generate_single
+from art_style_search.generate import generate_single
 from art_style_search.models import ModelRegistry
 from art_style_search.prompt import Lessons
 from art_style_search.types import Caption, IterationResult, MetricScores, PromptTemplate, verdict_label
@@ -102,7 +102,7 @@ async def _caption_and_generate(
             semaphore=gemini_semaphore,
             cache_key=cache_key,
         )
-        gen_path = await _generate_single(
+        gen_path = await generate_single(
             caption.text,
             index=i,
             aspect_ratio=config.aspect_ratio,

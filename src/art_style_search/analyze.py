@@ -9,6 +9,7 @@ from pathlib import Path
 
 from google import genai
 
+from art_style_search.state import prompt_template_from_dict, style_profile_from_dict, to_dict
 from art_style_search.types import Caption, PromptSection, PromptTemplate, StyleProfile
 from art_style_search.utils import (
     ReasoningClient,
@@ -139,14 +140,24 @@ _extract_tag = extract_xml_tag  # local alias for tests that import it
 
 
 def _parse_sections(xml: str) -> list[PromptSection]:
-    """Parse all <section name="..." description="...">value</section> tags."""
-    import re
+    """Parse all <section name="..." description="...">value</section> tags.
 
-    pattern = r'<section\s+name="([^"]+)"\s+description="([^"]+)">(.*?)</section>'
-    matches = re.findall(pattern, xml, re.DOTALL)
-    return [
-        PromptSection(name=name.strip(), description=desc.strip(), value=val.strip()) for name, desc, val in matches
+    Uses the shared regexes from ``prompt/_parse.py`` (strict, then loose fallback).
+    """
+    from art_style_search.prompt._parse import _SECTION_RE, _SECTION_RE_LOOSE
+
+    sections = [
+        PromptSection(name=m.group("name").strip(), description=m.group("desc").strip(), value=m.group("value").strip())
+        for m in _SECTION_RE.finditer(xml)
     ]
+    if not sections:
+        sections = [
+            PromptSection(
+                name=m.group("name").strip(), description=m.group("desc").strip(), value=m.group("value").strip()
+            )
+            for m in _SECTION_RE_LOOSE.finditer(xml)
+        ]
+    return sections
 
 
 def _parse_compilation(text: str, gemini_raw: str, reasoning_raw: str) -> tuple[StyleProfile, PromptTemplate]:
@@ -210,7 +221,6 @@ async def _gemini_analyze(
         )
         return response.text
 
-
     return await async_retry(_call, label="Gemini style analysis", circuit_breaker=gemini_circuit_breaker)
 
 
@@ -253,12 +263,11 @@ async def _reasoning_compile(
 
 def _save_cache(profile: StyleProfile, template: PromptTemplate, cache_path: Path) -> None:
     """Persist style profile and template to disk."""
-    from art_style_search.state import _to_dict
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     data = {
-        "style_profile": _to_dict(profile),
-        "prompt_template": _to_dict(template),
+        "style_profile": to_dict(profile),
+        "prompt_template": to_dict(template),
     }
     cache_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info("Style analysis cached to %s", cache_path)
@@ -270,11 +279,9 @@ def _load_cache(cache_path: Path) -> tuple[StyleProfile, PromptTemplate] | None:
         return None
 
     try:
-        from art_style_search.state import _prompt_template_from_dict, _style_profile_from_dict
-
         data = json.loads(cache_path.read_text(encoding="utf-8"))
-        profile = _style_profile_from_dict(data["style_profile"])
-        template = _prompt_template_from_dict(data["prompt_template"])
+        profile = style_profile_from_dict(data["style_profile"])
+        template = prompt_template_from_dict(data["prompt_template"])
         logger.info("Loaded cached style analysis from %s", cache_path)
         return profile, template
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
