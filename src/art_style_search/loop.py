@@ -22,8 +22,10 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import hashlib
 import logging
 import random
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -58,6 +60,7 @@ from art_style_search.types import (
     IterationResult,
     KnowledgeBase,
     LoopState,
+    PromptTemplate,
 )
 from art_style_search.utils import IMAGE_EXTENSIONS, ReasoningClient, build_ref_gen_pairs
 
@@ -150,6 +153,12 @@ _EXPLORATION_RESET_PLATEAU = 1
 _MIN_ITER_FRACTION_FOR_STOP = 0.5
 
 
+def _ref_cache_key(paths: list[Path]) -> str:
+    """Deterministic hash from sorted reference paths + mtimes for cross-run caching."""
+    parts = sorted(f"{p}:{p.stat().st_mtime}" for p in paths)
+    return hashlib.sha256("\n".join(parts).encode()).hexdigest()[:16]
+
+
 # ---------------------------------------------------------------------------
 # Per-run and per-iteration data carriers
 # ---------------------------------------------------------------------------
@@ -188,7 +197,7 @@ class IterationRanking:
     """Ranking state that crosses phase boundaries within one iteration.
 
     Bundled so phase-3 → 3.5 → 3.7 → 4 can pass it explicitly instead of
-    capturing locals via closure.  ``_synthesize_top_experiments`` appends
+    capturing locals via closure.  ``_run_synthesis_experiment`` appends
     to ``exp_results`` and stores its own output on ``synth_result``; every
     field here is required at construction time except ``synth_result``,
     which stays ``None`` when synthesis is skipped or fails.
@@ -265,24 +274,6 @@ async def _run_independent_review(
         logger.info("Review guidance: %.200s", review.strategic_guidance)
 
 
-async def _run_pairwise_and_review(
-    ranking: IterationRanking,
-    proposals: list[ExperimentProposal],
-    state: LoopState,
-    ctx: RunContext,
-) -> None:
-    """Run phases 3.7 and 3.9 in parallel, logging failures but not raising."""
-    gather_results = await asyncio.gather(
-        _run_pairwise_comparison(ranking, state, ctx),
-        _run_independent_review(ranking, proposals, state, ctx),
-        return_exceptions=True,
-    )
-    for i, result in enumerate(gather_results):
-        if isinstance(result, BaseException):
-            label = "Pairwise comparison" if i == 0 else "Independent review"
-            logger.warning("%s failed — skipping: %s", label, result)
-
-
 # ---------------------------------------------------------------------------
 # Setup / teardown
 # ---------------------------------------------------------------------------
@@ -303,6 +294,7 @@ async def _setup_run_context(config: Config) -> RunContext:
         anthropic_api_key=config.anthropic_api_key,
         zai_api_key=config.zai_api_key,
         openai_api_key=config.openai_api_key,
+        base_url=config.reasoning_base_url,
     )
 
     gemini_semaphore = asyncio.Semaphore(config.gemini_concurrency)
@@ -365,6 +357,12 @@ async def _zero_step(ctx: RunContext, all_ref_paths: list[Path]) -> LoopState:
     )
 
     logger.info("Zero-step: analyzing art style...")
+    # Shared cache keyed by reference images — survives across runs with the same refs
+    shared_cache_dir = config.run_dir.parent / ".cache"
+    shared_cache_dir.mkdir(parents=True, exist_ok=True)
+    shared_cache = shared_cache_dir / f"style_{_ref_cache_key(fixed_refs)}.json"
+    run_cache = config.log_dir / "style_profile.json"
+
     style_profile, initial_template = await analyze_style(
         fixed_refs,
         captions,
@@ -372,8 +370,12 @@ async def _zero_step(ctx: RunContext, all_ref_paths: list[Path]) -> LoopState:
         reasoning_client=ctx.reasoning_client,
         caption_model=config.caption_model,
         reasoning_model=config.reasoning_model,
-        cache_path=config.log_dir / "style_profile.json",
+        cache_path=shared_cache,
     )
+
+    # Copy into run dir for provenance
+    if shared_cache.exists() and not run_cache.exists():
+        shutil.copy2(shared_cache, run_cache)
 
     logger.info("Zero-step: proposing %d initial meta-prompts...", config.num_branches)
     initial_templates = await propose_initial_templates(
@@ -584,64 +586,65 @@ def _score_and_rank(exp_results: list[IterationResult], state: LoopState) -> Ite
     )
 
 
-async def _synthesize_top_experiments(
+async def _synthesize_reasoning(
+    ranking: IterationRanking,
+    state: LoopState,
+    ctx: RunContext,
+) -> tuple[PromptTemplate, str] | None:
+    """Phase 3.5a: reasoning call to merge top experiments into one template.
+
+    Returns (merged_template, merged_hypothesis) or None if <2 experiments.
+    """
+    if len(ranking.exp_results) < 2:
+        return None
+
+    ranked_for_synth = sorted(ranking.exp_results, key=lambda r: ranking.adaptive_scores[id(r)], reverse=True)
+    top_exps = ranked_for_synth[:3]
+    logger.info("Synthesizing top %d experiments into merged template", len(top_exps))
+
+    return await synthesize_templates(
+        top_exps,
+        state.style_profile,
+        client=ctx.reasoning_client,
+        model=ctx.config.reasoning_model,
+    )
+
+
+async def _run_synthesis_experiment(
+    synth_template_result: tuple[PromptTemplate, str],
     ranking: IterationRanking,
     state: LoopState,
     ctx: RunContext,
     iteration: int,
 ) -> None:
-    """Phase 3.5: merge top experiments into one template, validate, append to ranking.
+    """Phase 3.5b: run the synthesis experiment and update ranking."""
+    merged_template, merged_hypothesis = synth_template_result
 
-    On success, appends the synth result to ``ranking.exp_results``, refreshes
-    ``ranking.adaptive_scores`` over the enlarged set, stores the synth result
-    on ``ranking.synth_result``, and — if it beat the best individual —
-    updates ``ranking.best_exp``/``ranking.best_score``.  On failure or when
-    there are fewer than 2 experiments, leaves ranking untouched.
-    """
-    if len(ranking.exp_results) < 2:
-        return
+    synth_result = await run_experiment(
+        experiment_id=len(ranking.exp_results),
+        template=merged_template,
+        iteration=iteration,
+        fixed_refs=state.fixed_references,
+        last_results=state.last_iteration_results,
+        hypothesis=merged_hypothesis,
+        experiment_desc="Synthesis of top experiments",
+        **ctx.experiment_kwargs,
+    )
+    merged_score = composite_score(synth_result.aggregated)
+    logger.info(
+        "Synthesis result: DS=%.4f (best individual: %.4f)",
+        synth_result.aggregated.dreamsim_similarity_mean,
+        ranking.best_exp.aggregated.dreamsim_similarity_mean,
+    )
 
-    try:
-        ranked_for_synth = sorted(ranking.exp_results, key=lambda r: ranking.adaptive_scores[id(r)], reverse=True)
-        top_exps = ranked_for_synth[:3]
-        logger.info("Synthesizing top %d experiments into merged template", len(top_exps))
-
-        merged_template, merged_hypothesis = await synthesize_templates(
-            top_exps,
-            state.style_profile,
-            client=ctx.reasoning_client,
-            model=ctx.config.reasoning_model,
-        )
-
-        synth_result = await run_experiment(
-            experiment_id=len(ranking.exp_results),
-            template=merged_template,
-            iteration=iteration,
-            fixed_refs=state.fixed_references,
-            last_results=state.last_iteration_results,
-            hypothesis=merged_hypothesis,
-            experiment_desc="Synthesis of top experiments",
-            **ctx.experiment_kwargs,
-        )
-        merged_score = composite_score(synth_result.aggregated)
-        logger.info(
-            "Synthesis result: DS=%.4f (best individual: %.4f)",
-            synth_result.aggregated.dreamsim_similarity_mean,
-            ranking.best_exp.aggregated.dreamsim_similarity_mean,
-        )
-
-        ranking.exp_results.append(synth_result)
-        ranking.synth_result = synth_result
-        updated_agg = [r.aggregated for r in ranking.exp_results]
-        ranking.adaptive_scores = {
-            id(r): adaptive_composite_score(r.aggregated, updated_agg) for r in ranking.exp_results
-        }
-        if merged_score > ranking.best_score:
-            ranking.best_exp = synth_result
-            ranking.best_score = merged_score
-            logger.info("Synthesis beat best individual — adopting merged template")
-    except Exception:
-        logger.warning("Synthesis failed — continuing with individual experiments only", exc_info=True)
+    ranking.exp_results.append(synth_result)
+    ranking.synth_result = synth_result
+    updated_agg = [r.aggregated for r in ranking.exp_results]
+    ranking.adaptive_scores = {id(r): adaptive_composite_score(r.aggregated, updated_agg) for r in ranking.exp_results}
+    if merged_score > ranking.best_score:
+        ranking.best_exp = synth_result
+        ranking.best_score = merged_score
+        logger.info("Synthesis beat best individual — adopting merged template")
 
 
 def _update_knowledge_base_for_iteration(
@@ -856,8 +859,28 @@ async def run(config: Config) -> LoopState:
             continue
 
         ranking = _score_and_rank(exp_results, state)
-        await _synthesize_top_experiments(ranking, state, ctx, iteration)
-        await _run_pairwise_and_review(ranking, proposals, state, ctx)
+
+        # Run synthesis reasoning + pairwise + review in parallel
+        parallel_results = await asyncio.gather(
+            _synthesize_reasoning(ranking, state, ctx),
+            _run_pairwise_comparison(ranking, state, ctx),
+            _run_independent_review(ranking, proposals, state, ctx),
+            return_exceptions=True,
+        )
+        for i, result in enumerate(parallel_results[1:], start=1):
+            if isinstance(result, BaseException):
+                label = "Pairwise comparison" if i == 1 else "Independent review"
+                logger.warning("%s failed — skipping: %s", label, result)
+
+        # Synthesis experiment needs the template from the reasoning call
+        synth_template = parallel_results[0]
+        if isinstance(synth_template, BaseException):
+            logger.warning("Synthesis reasoning failed — skipping: %s", synth_template)
+        elif synth_template is not None:
+            try:
+                await _run_synthesis_experiment(synth_template, ranking, state, ctx, iteration)
+            except Exception:
+                logger.warning("Synthesis experiment failed — continuing with individual experiments", exc_info=True)
 
         pre_update_metrics = _update_knowledge_base_for_iteration(state, ranking, proposals, iteration)
         _apply_iteration_result(state, ranking)

@@ -40,7 +40,8 @@ class Config:
     caption_model: str
     generator_model: str
     reasoning_model: str
-    reasoning_provider: str  # "anthropic", "zai", or "openai"
+    reasoning_provider: str  # "anthropic", "zai", "openai", or "local"
+    reasoning_base_url: str  # custom base URL for local/remote OpenAI-compatible servers
 
     # Concurrency
     gemini_concurrency: int
@@ -93,14 +94,19 @@ def parse_args(argv: list[str] | None = None) -> Config:
     )
     models.add_argument(
         "--reasoning-provider",
-        choices=["anthropic", "zai", "openai"],
+        choices=["anthropic", "zai", "openai", "local"],
         default="anthropic",
-        help="Reasoning model provider: anthropic (Claude), zai (GLM-5.1), or openai (GPT-5.4)",
+        help="Reasoning model provider: anthropic (Claude), zai (GLM-5.1), openai (GPT-5.4), or local (OpenAI-compatible)",
     )
     models.add_argument(
         "--reasoning-model",
         default=None,
         help="Reasoning model name (default: claude-sonnet-4-6 / glm-5.1 / gpt-5.4)",
+    )
+    models.add_argument(
+        "--reasoning-base-url",
+        default="",
+        help="Base URL for local/remote OpenAI-compatible server (e.g. http://gpu:8000/v1)",
     )
 
     # Concurrency
@@ -129,11 +135,15 @@ def parse_args(argv: list[str] | None = None) -> Config:
         parser.error("ZAI_API_KEY must be set via --zai-api-key or environment variable")
     if provider == "openai" and not openai_key:
         parser.error("OPENAI_API_KEY must be set via --openai-api-key or environment variable")
+    if provider == "local" and not args.reasoning_base_url:
+        parser.error("--reasoning-base-url is required when using --reasoning-provider local")
+    if provider == "local" and not args.reasoning_model:
+        parser.error("--reasoning-model is required when using --reasoning-provider local")
     if not google_key:
         parser.error("GOOGLE_API_KEY must be set via --google-api-key or environment variable")
 
     # Default model based on provider
-    default_models = {"anthropic": "claude-sonnet-4-6", "zai": "glm-5.1", "openai": "gpt-5.4"}
+    default_models = {"anthropic": "claude-sonnet-4-6", "zai": "glm-5.1", "openai": "gpt-5.4", "local": ""}
     reasoning_model = args.reasoning_model or default_models[provider]
 
     if not args.reference_dir.is_dir():
@@ -161,6 +171,7 @@ def parse_args(argv: list[str] | None = None) -> Config:
         generator_model=args.generator_model,
         reasoning_model=reasoning_model,
         reasoning_provider=provider,
+        reasoning_base_url=args.reasoning_base_url or "",
         gemini_concurrency=args.gemini_concurrency,
         eval_concurrency=args.eval_concurrency,
         anthropic_api_key=anthropic_key,

@@ -95,12 +95,17 @@ async def _compare_vision_single(
 
     async def _call() -> tuple[str, VisionScores]:
         async with semaphore:
-            response = await client.aio.models.generate_content(model=model, contents=contents)
+            response = await asyncio.wait_for(
+                client.aio.models.generate_content(model=model, contents=contents),
+                timeout=90,
+            )
         text = response.text or ""
         return text, _parse_vision_verdicts(text)
 
     try:
-        return await async_retry(_call, label=f"Vision {ref_path.name}")
+        from art_style_search.utils import gemini_circuit_breaker
+
+        return await async_retry(_call, label=f"Vision {ref_path.name}", circuit_breaker=gemini_circuit_breaker)
     except RuntimeError:
         logger.error("Vision %s failed after retries — using neutral defaults", ref_path.name)
         return "", VisionScores.default()
@@ -187,7 +192,10 @@ async def pairwise_compare_experiments(
 
     async def _call() -> tuple[str, float]:
         async with semaphore:
-            response = await client.aio.models.generate_content(model=model, contents=contents)
+            response = await asyncio.wait_for(
+                client.aio.models.generate_content(model=model, contents=contents),
+                timeout=120,
+            )
         text = response.text or ""
         winner_match = re.search(r"<winner>(\w+)</winner>", text)
         rationale_match = re.search(r"<rationale>(.*?)</rationale>", text, re.DOTALL)
@@ -197,7 +205,9 @@ async def pairwise_compare_experiments(
         return (rationale, score)
 
     try:
-        return await async_retry(_call, label="Pairwise comparison")
+        from art_style_search.utils import gemini_circuit_breaker
+
+        return await async_retry(_call, label="Pairwise comparison", circuit_breaker=gemini_circuit_breaker)
     except RuntimeError:
         logger.error("Pairwise comparison failed after retries")
         return ("Comparison failed", 0.5)

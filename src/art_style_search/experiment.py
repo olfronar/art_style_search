@@ -9,7 +9,7 @@ from pathlib import Path
 
 from google import genai
 
-from art_style_search.caption import caption_references
+from art_style_search.caption import _caption_single
 from art_style_search.config import Config
 from art_style_search.evaluate import (
     aggregate,
@@ -81,25 +81,28 @@ async def _caption_and_generate(
     iteration: int,
     experiment_id: int,
 ) -> tuple[list[Caption], list[Path], list[tuple[Path, Path]]]:
-    """Caption reference images with the meta-prompt, then generate images from captions.
+    """Caption and generate per-image in a pipeline (no serial boundary).
 
-    Returns (captions, generated_paths, pairs) where pairs maps (original, generated).
+    Each image's caption→generate runs as a single chained task so generation
+    starts as soon as each individual caption completes. Returns (captions,
+    generated_paths, pairs) where pairs maps (original, generated).
     """
-    captions = await caption_references(
-        ref_paths,
-        model=config.caption_model,
-        client=gemini_client,
-        cache_dir=config.log_dir / f"iter_{iteration:03d}" / f"exp_{experiment_id}" / "captions",
-        semaphore=gemini_semaphore,
-        prompt=meta_prompt,
-        cache_key=f"iter{iteration}_e{experiment_id}",
-    )
-
+    cache_dir = config.log_dir / f"iter_{iteration:03d}" / f"exp_{experiment_id}" / "captions"
     gen_dir = config.output_dir / f"iter_{iteration:03d}" / f"exp_{experiment_id}"
     gen_dir.mkdir(parents=True, exist_ok=True)
+    cache_key = f"iter{iteration}_e{experiment_id}"
 
-    gen_tasks = [
-        _generate_single(
+    async def _caption_then_generate(ref_path: Path, i: int) -> tuple[Caption, Path]:
+        caption = await _caption_single(
+            ref_path,
+            prompt=meta_prompt,
+            model=config.caption_model,
+            client=gemini_client,
+            cache_dir=cache_dir,
+            semaphore=gemini_semaphore,
+            cache_key=cache_key,
+        )
+        gen_path = await _generate_single(
             caption.text,
             index=i,
             aspect_ratio=config.aspect_ratio,
@@ -108,19 +111,24 @@ async def _caption_and_generate(
             model=config.generator_model,
             semaphore=gemini_semaphore,
         )
-        for i, caption in enumerate(captions)
-    ]
+        return caption, gen_path
 
-    gen_results = await asyncio.gather(*gen_tasks, return_exceptions=True)
+    results = await asyncio.gather(
+        *[_caption_then_generate(p, i) for i, p in enumerate(ref_paths)],
+        return_exceptions=True,
+    )
 
+    captions: list[Caption] = []
     generated_paths: list[Path] = []
     pairs: list[tuple[Path, Path]] = []
-    for i, (caption, gen_result) in enumerate(zip(captions, gen_results, strict=True)):
-        if isinstance(gen_result, BaseException):
-            logger.warning("Exp %d: generation from caption %d failed: %s", experiment_id, i, gen_result)
+    for i, result in enumerate(results):
+        if isinstance(result, BaseException):
+            logger.warning("Exp %d: image %d (%s) failed: %s", experiment_id, i, ref_paths[i].name, result)
         else:
-            generated_paths.append(gen_result)
-            pairs.append((caption.image_path, gen_result))
+            caption, gen_path = result
+            captions.append(caption)
+            generated_paths.append(gen_path)
+            pairs.append((caption.image_path, gen_path))
 
     return captions, generated_paths, pairs
 

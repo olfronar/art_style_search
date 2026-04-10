@@ -111,7 +111,7 @@ async def propose_initial_templates(
 
     logger.info("Requesting %d initial templates (%s)", num_branches, model)
 
-    text = await client.call(model=model, system=system, user=user, max_tokens=24000)
+    text = await client.call(model=model, system=system, user=user, max_tokens=16000)
 
     templates = _parse_initial_templates(text, num_branches)
 

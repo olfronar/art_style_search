@@ -198,10 +198,15 @@ async def _gemini_analyze(
     logger.info("Sending %d images to Gemini (%s) for style analysis", len(reference_paths), model)
 
     async def _call() -> str:
-        response = await client.aio.models.generate_content(model=model, contents=contents)
+        response = await asyncio.wait_for(
+            client.aio.models.generate_content(model=model, contents=contents),
+            timeout=120,
+        )
         return response.text
 
-    return await async_retry(_call, label="Gemini style analysis")
+    from art_style_search.utils import gemini_circuit_breaker
+
+    return await async_retry(_call, label="Gemini style analysis", circuit_breaker=gemini_circuit_breaker)
 
 
 async def _reasoning_analyze(
@@ -215,7 +220,7 @@ async def _reasoning_analyze(
     user = _REASONING_ANALYSIS_PROMPT.format(captions=captions_text)
 
     logger.info("Sending %d captions to %s for style analysis", len(captions), model)
-    return await client.call(model=model, system=_ANALYSIS_SYSTEM, user=user, max_tokens=32000)
+    return await client.call(model=model, system=_ANALYSIS_SYSTEM, user=user, max_tokens=8000)
 
 
 async def _reasoning_compile(
@@ -232,7 +237,7 @@ async def _reasoning_compile(
     )
 
     logger.info("Compiling style profile via %s", model)
-    raw_text = await client.call(model=model, system=_ANALYSIS_SYSTEM, user=user, max_tokens=32000)
+    raw_text = await client.call(model=model, system=_ANALYSIS_SYSTEM, user=user, max_tokens=12000)
     return _parse_compilation(raw_text, gemini_raw=gemini_analysis, reasoning_raw=reasoning_analysis)
 
 

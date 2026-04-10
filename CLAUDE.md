@@ -8,7 +8,7 @@ Self-improving loop that optimizes a meta-prompt for art-style capture and image
 
 ## Architecture
 
-- **Claude (Anthropic)**: Brain/optimizer. Analyzes reproduction quality, refines the meta-prompt.
+- **Claude (Anthropic) / GPT / GLM / local model**: Brain/optimizer. Analyzes reproduction quality, refines the meta-prompt. Supports `--reasoning-provider local` with `--reasoning-base-url` for OpenAI-compatible servers (vLLM, SGLang, Ollama).
 - **Gemini 3.1 Pro Preview**: Captioner. Describes reference images using the meta-prompt instructions.
 - **Gemini 3.1 Flash Image Preview**: Generator. Produces images from per-image captions.
 
@@ -18,8 +18,8 @@ Self-improving loop that optimizes a meta-prompt for art-style capture and image
 1. Claude proposes N experiments in a single batched call (hypothesis-driven template variants, `<branch>` tags) from shared KB, each with a different hypothesis
 2. Each experiment in parallel: meta-prompt + reference → caption → generate → evaluate
 3. Compare each (original, generated) pair: per-image paired metrics (DreamSim, HPS, aesthetics) + Gemini vision comparison (style + subject fidelity)
-3.5. Top experiments synthesized into merged template
-3.9. Independent review (CycleResearcher-inspired): skeptical assessment of metric movements, noise vs signal, strategic guidance for next iteration
+3.5/3.7/3.9. In parallel: synthesis reasoning + pairwise comparison + independent review. Then synthesis experiment runs on the merged template.
+
 4. Best experiment updates the current template; all results feed into shared KnowledgeBase
 5. Repeat until convergence (max iterations / plateau / Claude stop)
 
@@ -51,6 +51,7 @@ uv tool install pre-commit                           # Install the pre-commit CL
 - `GOOGLE_API_KEY` - Google API key for Gemini models (always required)
 - `ZAI_API_KEY` - Z.AI API key for GLM-5.1 (when using `--reasoning-provider zai`)
 - `OPENAI_API_KEY` - OpenAI API key for GPT-5.4 (when using `--reasoning-provider openai`)
+- `--reasoning-base-url` - Base URL for local/remote OpenAI-compatible server (when using `--reasoning-provider local`)
 
 ## Module Map
 
@@ -59,8 +60,8 @@ uv tool install pre-commit                           # Install the pre-commit CL
 - `analyze.py` - Zero-step: parallel Gemini+Claude style analysis → StyleProfile + initial PromptTemplate
 - `caption.py` - Gemini Pro captioning with disk cache
 - `prompt.py` - Claude meta-prompt proposal/refinement (template structure + values); `propose_experiments` batches N proposals in one call using `<branch>` tags; `RefinementResult` dataclass for structured returns; `review_iteration` provides independent CycleResearcher-inspired review of experiment outcomes
-- `generate.py` - Gemini Flash image generation with semaphore + retry
-- `experiment.py` - Single-experiment execution (caption + generate + evaluate), `ExperimentProposal` dataclass, result collection helpers
+- `generate.py` - Gemini Flash image generation with semaphore + retry + disk cache (skips API on resume)
+- `experiment.py` - Single-experiment execution (pipelined caption→generate per-image + evaluate), `ExperimentProposal` dataclass, result collection helpers
 - `knowledge.py` - Knowledge Base maintenance (hypothesis tracking, open problems); `build_caption_diffs` compares consecutive iterations' best captions for drift detection
 - `models.py` - ModelRegistry: lazy-load DreamSim/HPS/Aesthetics/SSIM with per-model locks
 - `evaluate.py` - Dispatches metrics per image via asyncio.to_thread + Gemini vision comparison; also `pairwise_compare_experiments` (SPO-inspired head-to-head), `check_caption_compliance` (keyword/section/length checks), `compute_style_consistency` (Jaccard overlap of [Art Style] blocks)
@@ -110,9 +111,13 @@ Each metric compares a generated image against its specific paired original (not
 - Caption quality is validated after Gemini returns — empty or too-short captions (<150 chars) raise RuntimeError
 - Open problems in KB are merged across experiments (deduplicated by text, capped at 10), not replaced — earlier experiments' problems survive
 - Vision comparison is per-image (one Gemini call per image pair) with ternary verdicts (MATCH/PARTIAL/MISS → 1.0/0.5/0.0); failures degrade to PARTIAL (0.5) neutral defaults
-- Synthesis always runs when >= 2 experiments exist — top 2-3 by `adaptive_composite_score` are merged regardless of whether they individually beat baseline. This allows cherry-picking best sections from experiments that failed overall but improved different aspects.
+- Synthesis always runs when >= 2 experiments exist — top 2-3 by `adaptive_composite_score` are merged regardless of whether they individually beat baseline. This allows cherry-picking best sections from experiments that failed overall but improved different aspects. Synthesis reasoning runs in parallel with pairwise comparison and independent review; only the synthesis experiment (caption+generate+eval) runs after.
+- Retry and reliability: all Gemini API calls use jittered exponential backoff (`delay * (0.5 + random())`), per-request `asyncio.wait_for` timeouts (180s generation, 90s caption/vision, 120s pairwise), 429 rate-limit detection with 30s base delay, and a shared `gemini_circuit_breaker` that pauses all calls for 60s after 15 consecutive failures.
+- Generated images are disk-cached: `_generate_single` skips the API call if `output_path` already exists with >0 bytes. This makes crash+resume skip the entire generation phase.
+- Caption+generation runs as a per-image pipeline in `_caption_and_generate` — each image's caption→generate is a single chained task so generation starts as soon as each individual caption completes (no serial boundary between phases). Failures are per-image via `return_exceptions=True`.
 - Exploration mechanism: on even plateau counts, the loop adopts the second-best experiment via `_apply_exploration_result` (updates `current_template`/`best_template` only — does NOT touch `best_metrics` or `global_best_*`) and resets `plateau_counter` to 1 to give exploration runway. `_apply_best_result` is used only for genuine improvements and guards `global_best_*` with a score comparison so it never regresses.
 - `ConvergenceReason.REASONING_STOP` (Claude emitted `[CONVERGED]` or the parser returned zero proposals) is gated behind `_should_honor_stop()` in `loop.py`, which requires ALL three: (1) iteration ≥ `max_iterations * _MIN_ITER_FRACTION_FOR_STOP` (0.5), (2) `plateau_counter ≥ max(plateau_window - 1, 2)`, (3) every `CATEGORY_SYNONYMS` key has at least one hypothesis in the KB. If the guard rejects, the `should_stop` flag is dropped, the refinement is kept as a real proposal, and the zero-proposals path returns `([], False)` so the outer loop bumps the plateau counter naturally. The softened `[CONVERGED]` instruction in `prompt/experiments.py` also pushes Claude to self-check the same conditions before emitting the token.
+- Style analysis cache is shared across runs via `runs/.cache/style_{hash}.json` keyed by sorted reference paths+mtimes. New runs with the same ref images skip the 3 API calls entirely. The cache is also copied into each run's `log_dir` for provenance.
 - Resume safety: `run()` checks `state.converged` after `load_state` and returns early if the previous run already converged. The `continue` path (empty experiment results) advances `state.iteration` and calls `save_state` before continuing so that a crash+resume does not replay the same doomed iteration forever.
 - Meta-prompt is 1200-1800 words with 8-15 sections (4-8 sentences each). The FIRST section must be `style_foundation` — a mandatory, non-removable section with fixed style rules from StyleProfile. The first caption output label must be `[Art Style]`.
 - Style consistency is measured via Jaccard word-overlap of [Art Style] blocks across captions and included in composite_score (4% weight).
@@ -123,8 +128,8 @@ Each metric compares a generated image against its specific paired original (not
 - `propose_experiments` system prompt includes PE2-inspired "Optimization dynamics" section with three principles: **Momentum** (double down on confirmed KB insights), **Step size** (adapt change magnitude to current composite score regime: LOW <0.35 = bold, MODERATE 0.35-0.50 = targeted, HIGH >0.50 = surgical), **Diversity pressure** (deprioritize categories with 3+ rejections and no confirmed insights). The user message also includes the current composite score with regime label so Claude can calibrate.
 - Hypothesis variability is enforced at 3 layers: (1) **Prompt-level** — each `<branch>` requires a `<target_category>` tag unique across branches; (2) **Post-parse dedup** — `enforce_hypothesis_diversity()` in `prompt.py` uses the parsed `target_category` from `RefinementResult` (falling back to `classify_hypothesis()` keyword matching if the tag is missing) to drop duplicate-category experiments; (3) **KB-guided targeting** — `KnowledgeBase.suggest_target_categories()` ranks categories by improvement potential (unexplored=1.0, partial success=0.7, diminishing returns=0.1) and injects the ranked list into the user message for Claude. The dedup filter is called in `loop.py` after `propose_experiments()` returns.
 - Number of fixed reference images is configurable via `--num-fixed-refs` (default 20). On resume, existing refs from state.json are used regardless.
-- Independent review loop (CycleResearcher-inspired): after synthesis (Phase 3.9), `review_iteration` in `prompt.py` sends all experiment results to the reasoning model as a skeptical reviewer. The reviewer assesses each experiment as SIGNAL/NOISE/MIXED, identifies which metric movements are real vs noise, and provides strategic guidance. The `strategic_guidance` is stored in `LoopState.review_feedback` (persisted in state.json) and prepended to `roundtrip_fb` at the start of the next iteration so `propose_experiments` can incorporate the reviewer's recommendations.
-- Pairwise experiment comparison (SPO-inspired): after synthesis (Phase 3.7), `pairwise_compare_experiments` in `evaluate.py` sends sampled image trios (original, set A reproduction, set B reproduction) from the top 2 experiments to Gemini vision for a head-to-head comparison. Returns a winner (A/B/TIE) with rationale. The rationale is stored in `LoopState.pairwise_feedback` (persisted in state.json) and prepended to `vision_fb` at the start of the next iteration so `propose_experiments` can learn which experiment's approach was visually superior. `build_ref_gen_pairs` in `utils.py` reconstructs (ref, gen) pairs from `IterationResult` by parsing the caption index from generated filenames; both `loop.py` (for pairwise comparison) and `report.py` (for the image grid) use it.
+- Independent review loop (CycleResearcher-inspired): in parallel with synthesis reasoning (Phase 3.9), `review_iteration` in `prompt.py` sends all experiment results to the reasoning model as a skeptical reviewer. The reviewer assesses each experiment as SIGNAL/NOISE/MIXED, identifies which metric movements are real vs noise, and provides strategic guidance. The `strategic_guidance` is stored in `LoopState.review_feedback` (persisted in state.json) and prepended to `roundtrip_fb` at the start of the next iteration so `propose_experiments` can incorporate the reviewer's recommendations.
+- Pairwise experiment comparison (SPO-inspired): in parallel with synthesis reasoning (Phase 3.7), `pairwise_compare_experiments` in `evaluate.py` sends sampled image trios (original, set A reproduction, set B reproduction) from the top 2 experiments to Gemini vision for a head-to-head comparison. Returns a winner (A/B/TIE) with rationale. The rationale is stored in `LoopState.pairwise_feedback` (persisted in state.json) and prepended to `vision_fb` at the start of the next iteration so `propose_experiments` can learn which experiment's approach was visually superior. `build_ref_gen_pairs` in `utils.py` reconstructs (ref, gen) pairs from `IterationResult` by parsing the caption index from generated filenames; both `loop.py` (for pairwise comparison) and `report.py` (for the image grid) use it.
 - HTML report metric trajectories must use `composite_score` only — `adaptive_composite_score` is min-max normalized within a single batch and is meaningless across iterations. Within an iteration's experiment table, `adaptive_composite_score` is fine (and useful for ranking) because it's recomputed per-batch.
 
 ## Code Style

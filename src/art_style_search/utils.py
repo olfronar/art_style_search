@@ -57,27 +57,95 @@ def extract_xml_tag(text: str, tag: str) -> str:
 T = TypeVar("T")
 
 
+_RATE_LIMIT_DELAY = 30.0
+
+
+def _is_rate_limit(exc: Exception) -> bool:
+    """Detect Gemini 429 / ResourceExhausted errors."""
+    return "resourceexhausted" in type(exc).__name__.lower() or "429" in str(exc)
+
+
+class CircuitBreaker:
+    """Pauses all calls after consecutive failures, then auto-resets after cooldown.
+
+    Use ``record_success``/``record_failure`` around API calls.
+    Call ``await wait_if_open()`` before each attempt — it sleeps
+    if the breaker is tripped, otherwise returns immediately.
+    """
+
+    def __init__(self, failure_threshold: int = 15, cooldown: float = 60.0) -> None:
+        self._threshold = failure_threshold
+        self._cooldown = cooldown
+        self._consecutive_failures = 0
+        self._open_until: float = 0.0
+
+    def record_success(self) -> None:
+        self._consecutive_failures = 0
+
+    def record_failure(self) -> None:
+        import time
+
+        self._consecutive_failures += 1
+        if self._consecutive_failures >= self._threshold:
+            self._open_until = time.monotonic() + self._cooldown
+            logger.warning(
+                "Circuit breaker tripped after %d consecutive failures — pausing %.0fs",
+                self._consecutive_failures,
+                self._cooldown,
+            )
+
+    async def wait_if_open(self) -> None:
+        import time
+
+        remaining = self._open_until - time.monotonic()
+        if remaining > 0:
+            logger.info("Circuit breaker open — waiting %.0fs before retry", remaining)
+            await asyncio.sleep(remaining)
+            self._consecutive_failures = 0
+
+
+# Shared circuit breaker for all Gemini API calls
+gemini_circuit_breaker = CircuitBreaker(failure_threshold=15, cooldown=60.0)
+
+
 async def async_retry(
     coro_fn: Callable[[], Awaitable[T]],
     *,
-    max_retries: int = 3,
-    base_delay: float = 3.0,
+    max_retries: int = 5,
+    base_delay: float = 5.0,
     label: str = "",
+    circuit_breaker: CircuitBreaker | None = None,
 ) -> T:
-    """Generic async retry with exponential backoff.
+    """Generic async retry with jittered exponential backoff and circuit breaker.
 
-    Calls `coro_fn()` up to `max_retries` times. Raises RuntimeError after exhaustion.
+    Calls `coro_fn()` up to `max_retries` times. Uses longer backoff for
+    rate-limit (429) errors. Raises RuntimeError after exhaustion.
+    When *circuit_breaker* is provided, waits if breaker is open and records
+    successes/failures to trip or reset it.
     """
+    import random as _rng
+
+    cb = circuit_breaker
     last_exc: Exception | None = None
     for attempt in range(max_retries):
+        if cb:
+            await cb.wait_if_open()
         try:
-            return await coro_fn()
+            result = await coro_fn()
+            if cb:
+                cb.record_success()
+            return result
         except Exception as exc:
+            if cb:
+                cb.record_failure()
             last_exc = exc
-            delay = base_delay * (2**attempt)
+            rate_limited = _is_rate_limit(exc)
+            base = _RATE_LIMIT_DELAY if rate_limited else base_delay
+            delay = base * (2**attempt) * (0.5 + _rng.random())
             logger.warning(
-                "%s attempt %d/%d failed: %s: %s — retrying in %.0fs",
+                "%s %s %d/%d: %s: %s — retrying in %.0fs",
                 label or "Retry",
+                "rate-limited" if rate_limited else "attempt",
                 attempt + 1,
                 max_retries,
                 type(exc).__name__,
@@ -136,8 +204,10 @@ async def stream_message(client: anthropic.AsyncAnthropic, **kwargs: object) -> 
             async with client.messages.stream(**kwargs) as stream:
                 return await stream.get_final_message()
         except (anthropic.APIConnectionError, anthropic.APITimeoutError) as exc:
+            import random as _rng
+
             last_exc = exc
-            delay = _STREAM_BASE_DELAY * (2**attempt)
+            delay = _STREAM_BASE_DELAY * (2**attempt) * (0.5 + _rng.random())
             logger.warning(
                 "Anthropic stream attempt %d/%d failed: %s — retrying in %.0fs",
                 attempt + 1,
@@ -158,8 +228,10 @@ async def stream_message(client: anthropic.AsyncAnthropic, **kwargs: object) -> 
                 or "connectionerror" in exc_name
             )
             if is_transient:
+                import random as _rng
+
                 last_exc = exc
-                delay = _STREAM_BASE_DELAY * (2**attempt)
+                delay = _STREAM_BASE_DELAY * (2**attempt) * (0.5 + _rng.random())
                 logger.warning(
                     "Anthropic stream attempt %d/%d failed: %s: %s — retrying in %.0fs",
                     attempt + 1,
@@ -182,7 +254,7 @@ async def stream_message(client: anthropic.AsyncAnthropic, **kwargs: object) -> 
 
 
 class ReasoningClient:
-    """Wraps Anthropic (Claude), Z.AI (GLM), or OpenAI (GPT) behind a unified async interface."""
+    """Wraps Anthropic, Z.AI, OpenAI, or a local OpenAI-compatible server behind a unified async interface."""
 
     def __init__(
         self,
@@ -191,6 +263,7 @@ class ReasoningClient:
         anthropic_api_key: str = "",
         zai_api_key: str = "",
         openai_api_key: str = "",
+        base_url: str = "",
     ) -> None:
         self.provider = provider
         if provider == "anthropic":
@@ -214,6 +287,15 @@ class ReasoningClient:
                 api_key=openai_api_key,
                 timeout=httpx.Timeout(600.0, connect=30.0),
             )
+        elif provider == "local":
+            import httpx
+            from openai import AsyncOpenAI
+
+            self._local = AsyncOpenAI(
+                api_key="not-needed",
+                base_url=base_url,
+                timeout=httpx.Timeout(600.0, connect=30.0),
+            )
         else:
             msg = f"Unknown reasoning provider: {provider}"
             raise ValueError(msg)
@@ -231,6 +313,8 @@ class ReasoningClient:
             return await self._call_anthropic(model=model, system=system, user=user, max_tokens=max_tokens)
         if self.provider == "openai":
             return await self._call_openai(model=model, system=system, user=user, max_tokens=max_tokens)
+        if self.provider == "local":
+            return await self._call_local(model=model, system=system, user=user, max_tokens=max_tokens)
         return await self._call_zai(model=model, system=system, user=user, max_tokens=max_tokens)
 
     async def _call_anthropic(self, *, model: str, system: str, user: str, max_tokens: int) -> str:
@@ -277,3 +361,19 @@ class ReasoningClient:
             return response.output_text
 
         return await async_retry(_call, label="OpenAI call", base_delay=_STREAM_BASE_DELAY)
+
+    async def _call_local(self, *, model: str, system: str, user: str, max_tokens: int) -> str:
+        """Call a local OpenAI-compatible server (vLLM, SGLang, Ollama) via chat completions."""
+
+        async def _call() -> str:
+            response = await self._local.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                max_tokens=max_tokens,
+            )
+            return response.choices[0].message.content or ""
+
+        return await async_retry(_call, label="Local model call", base_delay=2.0)

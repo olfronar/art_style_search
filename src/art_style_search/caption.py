@@ -63,16 +63,23 @@ async def _caption_single(
 
     async def _call() -> str:
         async with semaphore:
-            resp = await client.aio.models.generate_content(
-                model=model,
-                contents=[
-                    image_to_gemini_part(image_path),
-                    prompt,
-                ],
+            resp = await asyncio.wait_for(
+                client.aio.models.generate_content(
+                    model=model,
+                    contents=[
+                        image_to_gemini_part(image_path),
+                        prompt,
+                    ],
+                ),
+                timeout=90,
             )
         return resp.text
 
-    caption_text: str = await async_retry(_call, label=f"Caption {image_path.name}")
+    from art_style_search.utils import gemini_circuit_breaker
+
+    caption_text: str = await async_retry(
+        _call, label=f"Caption {image_path.name}", circuit_breaker=gemini_circuit_breaker
+    )
 
     # Validate caption quality — empty or very short captions waste downstream cycles
     min_caption_length = 150
@@ -127,4 +134,11 @@ async def caption_references(
         )
         for path in reference_paths
     ]
-    return list(await asyncio.gather(*tasks))
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    captions: list[Caption] = []
+    for i, result in enumerate(results):
+        if isinstance(result, BaseException):
+            logger.warning("Caption %d (%s) failed: %s", i, reference_paths[i].name, result)
+        else:
+            captions.append(result)
+    return captions
