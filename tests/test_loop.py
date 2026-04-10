@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import random
 from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
 
 from art_style_search.loop import (
     IterationRanking,
@@ -11,8 +14,11 @@ from art_style_search.loop import (
     _apply_best_result,
     _apply_exploration_result,
     _apply_iteration_result,
+    _confirmatory_validation,
     _discover_images,
+    _run_synthesis_experiment,
     _sample,
+    _sanitize_initial_templates,
     _score_and_rank,
     _should_honor_stop,
     _split_information_barrier,
@@ -24,6 +30,10 @@ from art_style_search.types import (
     IterationResult,
     KnowledgeBase,
     MetricScores,
+    PromotionTestResult,
+    PromptSection,
+    PromptTemplate,
+    ReplicatedEvaluation,
 )
 from tests.conftest import make_loop_state, make_prompt_template
 
@@ -179,6 +189,21 @@ def _make_config(tmp_path: Path, *, max_iterations: int = 20, plateau_window: in
         google_api_key="test",
         zai_api_key="",
         openai_api_key="",
+    )
+
+
+def _make_valid_template() -> PromptTemplate:
+    sections = [
+        PromptSection("style_foundation", "Core style", "Shared style rules. " * 4),
+        PromptSection("color_palette", "Colors", "Color guidance. " * 4),
+        PromptSection("composition", "Composition", "Composition guidance. " * 4),
+        PromptSection("technique", "Technique", "Technique guidance. " * 4),
+    ]
+    return PromptTemplate(
+        sections=sections,
+        negative_prompt="avoid blur",
+        caption_sections=["Art Style", "Color Palette", "Composition", "Technique"],
+        caption_length_target=500,
     )
 
 
@@ -389,6 +414,133 @@ class TestApplyIterationResult:
         assert state.plateau_counter == 1  # reset to _EXPLORATION_RESET_PLATEAU
         assert state.best_metrics is original_best_metrics  # NOT changed
         assert state.current_template is result_b.template
+
+
+# ---------------------------------------------------------------------------
+# Rigorous-mode validation + template sanitization
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_confirmatory_validation_overwrites_selected_result_with_replicated_median(
+    tmp_path: Path, monkeypatch
+) -> None:
+    state = make_loop_state()
+    config = _make_config(tmp_path, protocol="rigorous")
+    ctx = RunContext(
+        config=config,
+        gemini_client=MagicMock(),
+        reasoning_client=MagicMock(),
+        registry=MagicMock(),
+        gemini_semaphore=MagicMock(),
+        eval_semaphore=MagicMock(),
+    )
+
+    proposal_best = _make_result(branch_id=0, agg=_make_agg(dreamsim=0.82, color=0.78))
+    proposal_runner_up = _make_result(branch_id=1, agg=_make_agg(dreamsim=0.80, color=0.75))
+    synth = _make_result(branch_id=2, agg=_make_agg(dreamsim=0.79, color=0.76))
+
+    ranking = _score_and_rank([proposal_best, proposal_runner_up, synth], state)
+    ranking.synth_result = synth
+
+    synth_median = _make_agg(dreamsim=0.93, color=0.90)
+    incumbent_median = _make_agg(dreamsim=0.60, color=0.50)
+    median_scores = [MetricScores(dreamsim_similarity=0.93, hps_score=0.25, aesthetics_score=5.0)] * 3
+    incumbent_scores = [MetricScores(dreamsim_similarity=0.60, hps_score=0.25, aesthetics_score=5.0)] * 3
+
+    async def fake_replicate_experiment(*, branch_id, **kwargs):
+        if branch_id == 2:
+            return ReplicatedEvaluation(
+                template=synth.template,
+                branch_id=branch_id,
+                replicate_scores=[median_scores] * 3,
+                replicate_aggregated=[synth_median] * 3,
+                median_per_image=median_scores,
+                median_aggregated=synth_median,
+            )
+        if branch_id == 900:
+            return ReplicatedEvaluation(
+                template=state.best_template,
+                branch_id=branch_id,
+                replicate_scores=[incumbent_scores] * 3,
+                replicate_aggregated=[incumbent_median] * 3,
+                median_per_image=incumbent_scores,
+                median_aggregated=incumbent_median,
+            )
+        low_agg = _make_agg(dreamsim=0.70, color=0.60)
+        low_scores = [MetricScores(dreamsim_similarity=0.70, hps_score=0.25, aesthetics_score=5.0)] * 3
+        return ReplicatedEvaluation(
+            template=_make_valid_template(),
+            branch_id=branch_id,
+            replicate_scores=[low_scores] * 3,
+            replicate_aggregated=[low_agg] * 3,
+            median_per_image=low_scores,
+            median_aggregated=low_agg,
+        )
+
+    monkeypatch.setattr("art_style_search.experiment.replicate_experiment", fake_replicate_experiment)
+    monkeypatch.setattr(
+        "art_style_search.scoring.paired_promotion_test",
+        lambda candidate, incumbent: PromotionTestResult(
+            statistic=3.0,
+            p_value=0.01,
+            effect_size=0.05,
+            ci_lower=0.01,
+            ci_upper=0.09,
+            passed=True,
+        ),
+    )
+
+    await _confirmatory_validation(ranking, state, ctx, iteration=3)
+    _apply_iteration_result(state, ranking, config)
+
+    assert ranking.best_exp is synth
+    assert synth.aggregated is synth_median
+    assert state.best_metrics is synth_median
+    assert ranking.best_replicate_scores == [composite_score(synth_median)] * 3
+
+
+def test_sanitize_initial_templates_replaces_invalid_with_fallback() -> None:
+    invalid = make_prompt_template()
+    fallback = _make_valid_template()
+
+    sanitized = _sanitize_initial_templates([invalid, fallback], fallback=fallback)
+
+    assert sanitized[0] is fallback
+    assert sanitized[1] is fallback
+
+
+@pytest.mark.asyncio
+async def test_run_synthesis_experiment_skips_invalid_template(tmp_path: Path, monkeypatch) -> None:
+    state = make_loop_state()
+    config = _make_config(tmp_path)
+    ctx = RunContext(
+        config=config,
+        gemini_client=MagicMock(),
+        reasoning_client=MagicMock(),
+        registry=MagicMock(),
+        gemini_semaphore=MagicMock(),
+        eval_semaphore=MagicMock(),
+    )
+    result = _make_result(branch_id=0, agg=_make_agg())
+    ranking = IterationRanking(
+        exp_results=[result],
+        adaptive_scores={id(result): composite_score(result.aggregated)},
+        best_exp=result,
+        best_score=composite_score(result.aggregated),
+        baseline_score=0.1,
+        epsilon=0.01,
+    )
+
+    async def should_not_run(*args, **kwargs):
+        raise AssertionError("run_experiment should not be called for invalid synthesis templates")
+
+    monkeypatch.setattr("art_style_search.loop.run_experiment", should_not_run)
+
+    await _run_synthesis_experiment((make_prompt_template(), "bad synthesis"), ranking, state, ctx, iteration=2)
+
+    assert ranking.synth_result is None
+    assert len(ranking.exp_results) == 1
 
 
 # ---------------------------------------------------------------------------

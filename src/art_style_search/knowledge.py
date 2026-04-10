@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import Literal
 
 from art_style_search.experiment import ExperimentProposal
 from art_style_search.scoring import classify_hypothesis
@@ -20,6 +21,32 @@ from art_style_search.types import (
 logger = logging.getLogger(__name__)
 
 _PRIORITY_ORDER = {"HIGH": 0, "MED": 1, "LOW": 2}
+IterationDecision = Literal["promoted", "exploration", "rejected"]
+
+
+def _resolve_category(
+    text: str,
+    category_names: list[str],
+    *,
+    explicit_category: str = "",
+    fallback_category: str = "general",
+) -> str:
+    """Resolve a category with explicit tags taking precedence over keyword fallback."""
+    if explicit_category:
+        return explicit_category
+    if not text:
+        return fallback_category
+    classified = classify_hypothesis(text, category_names)
+    return classified if classified != "general" else fallback_category
+
+
+def _decision_to_outcome(decision: IterationDecision) -> tuple[str, bool]:
+    """Map the orchestration decision to a hypothesis outcome and progress update policy."""
+    if decision == "promoted":
+        return "confirmed", True
+    if decision == "exploration":
+        return "partial", False
+    return "rejected", True
 
 
 def update_knowledge_base(
@@ -29,6 +56,7 @@ def update_knowledge_base(
     best_metrics: AggregatedMetrics | None,
     proposal: ExperimentProposal,
     iteration: int,
+    decision: IterationDecision = "rejected",
 ) -> None:
     """Update the shared KB with one experiment's results."""
     parent_id: str | None = None
@@ -38,7 +66,11 @@ def update_knowledge_base(
             parent_id = f"H{parent_match.group(1)}"
 
     category_names = get_category_names(template)
-    category = classify_hypothesis(result.hypothesis, category_names) if result.hypothesis else "general"
+    category = _resolve_category(
+        result.hypothesis,
+        category_names,
+        explicit_category=proposal.target_category or result.target_category,
+    )
 
     metric_delta: dict[str, float] = {}
     if best_metrics is not None:
@@ -55,6 +87,7 @@ def update_knowledge_base(
 
     lessons = proposal.lessons
     lesson_text = lessons.confirmed or lessons.new_insight or lessons.rejected or ""
+    outcome, update_progress = _decision_to_outcome(decision)
 
     if result.hypothesis:
         kb.add_hypothesis(
@@ -68,6 +101,8 @@ def update_knowledge_base(
             lesson=lesson_text,
             confirmed=lessons.confirmed,
             rejected=lessons.rejected,
+            outcome=outcome,
+            update_progress=update_progress,
         )
 
     if proposal.open_problems:
@@ -78,7 +113,12 @@ def update_knowledge_base(
 
         new_problems: list[OpenProblem] = []
         for prob_text in proposal.open_problems:
-            prob_cat = classify_hypothesis(prob_text, category_names)
+            prob_cat = _resolve_category(
+                prob_text,
+                category_names,
+                explicit_category=proposal.target_category,
+                fallback_category=category,
+            )
             cat_progress = kb.categories.get(prob_cat)
 
             if cat_progress is None or not cat_progress.confirmed_insights:

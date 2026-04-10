@@ -197,3 +197,84 @@ class TestOpenProblemStaleness:
         # After 11 iterations, ALL should be LOW
         low_problems = [p for p in kb.open_problems if p.priority == "LOW"]
         assert len(low_problems) == len(kb.open_problems)
+
+
+class TestKnowledgeBaseDecisionHandling:
+    def _make_result(self, *, kept: bool = False, target_category: str = "") -> IterationResult:
+        agg = AggregatedMetrics(
+            dreamsim_similarity_mean=0.6,
+            dreamsim_similarity_std=0.05,
+            hps_score_mean=0.24,
+            hps_score_std=0.02,
+            aesthetics_score_mean=5.8,
+            aesthetics_score_std=0.5,
+        )
+        return IterationResult(
+            branch_id=0,
+            iteration=2,
+            template=PromptTemplate(),
+            rendered_prompt="",
+            image_paths=[],
+            per_image_scores=[],
+            aggregated=agg,
+            claude_analysis="",
+            template_changes="",
+            kept=kept,
+            hypothesis="Unclassified hypothesis text",
+            experiment="Test experiment",
+            target_category=target_category,
+        )
+
+    def test_exploration_is_not_recorded_as_confirmed(self) -> None:
+        kb = KnowledgeBase()
+        proposal = ExperimentProposal(
+            template=PromptTemplate(),
+            hypothesis="Unclassified hypothesis text",
+            experiment_desc="Test experiment",
+            builds_on=None,
+            open_problems=[],
+            lessons=Lessons(new_insight="Maybe useful later"),
+            target_category="lighting",
+        )
+
+        update_knowledge_base(
+            kb,
+            self._make_result(kept=True, target_category="lighting"),
+            PromptTemplate(),
+            None,
+            proposal,
+            iteration=2,
+            decision="exploration",
+        )
+
+        hyp = kb.hypotheses[0]
+        cat = kb.categories["lighting"]
+        assert hyp.outcome == "partial"
+        assert cat.confirmed_insights == []
+        assert cat.rejected_approaches == []
+        assert cat.hypothesis_ids == ["H1"]
+
+    def test_target_category_overrides_keyword_fallback_for_hypothesis_and_problems(self) -> None:
+        kb = KnowledgeBase()
+        proposal = ExperimentProposal(
+            template=PromptTemplate(),
+            hypothesis="Completely generic wording",
+            experiment_desc="Test experiment",
+            builds_on=None,
+            open_problems=["Still vague wording"],
+            lessons=Lessons(rejected="did not help"),
+            target_category="texture",
+        )
+
+        update_knowledge_base(
+            kb,
+            self._make_result(target_category="texture"),
+            PromptTemplate(),
+            None,
+            proposal,
+            iteration=1,
+            decision="rejected",
+        )
+
+        assert kb.hypotheses[0].category == "texture"
+        assert kb.open_problems[0].category == "texture"

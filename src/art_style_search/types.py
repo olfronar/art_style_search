@@ -275,22 +275,26 @@ class KnowledgeBase:
         lesson: str,
         confirmed: str,
         rejected: str,
+        *,
+        outcome: str | None = None,
+        update_progress: bool = True,
     ) -> Hypothesis:
         """Create a hypothesis, append it, and update category progress."""
         hid = f"H{self.next_id}"
         self.next_id += 1
 
-        # Determine outcome from kept + lesson text signals
-        if kept and confirmed and not rejected:
-            outcome = "confirmed"
-        elif not kept and rejected:
-            outcome = "rejected"
-        elif kept and rejected:
-            outcome = "partial"
-        elif not kept:
-            outcome = "rejected"
-        else:
-            outcome = "confirmed" if kept else "rejected"
+        # Backward-compatible default when callers do not provide an explicit outcome.
+        if outcome is None:
+            if kept and confirmed and not rejected:
+                outcome = "confirmed"
+            elif not kept and rejected:
+                outcome = "rejected"
+            elif kept and rejected:
+                outcome = "partial"
+            elif not kept:
+                outcome = "rejected"
+            else:
+                outcome = "confirmed" if kept else "rejected"
 
         hyp = Hypothesis(
             id=hid,
@@ -312,6 +316,9 @@ class KnowledgeBase:
             cat = CategoryProgress(category=category)
             self.categories[category] = cat
         cat.hypothesis_ids.append(hid)
+
+        if not update_progress:
+            return hyp
 
         max_insights = 5
 

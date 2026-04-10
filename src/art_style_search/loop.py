@@ -47,7 +47,7 @@ from art_style_search.experiment import (
     collect_experiment_results,
     run_experiment,
 )
-from art_style_search.knowledge import build_caption_diffs, update_knowledge_base
+from art_style_search.knowledge import IterationDecision, build_caption_diffs, update_knowledge_base
 from art_style_search.models import ModelRegistry
 from art_style_search.prompt import (
     Lessons,
@@ -199,6 +199,45 @@ def _ref_cache_key(paths: list[Path]) -> str:
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()[:16]
 
 
+def _validate_template_or_raise(template: PromptTemplate, *, context: str) -> None:
+    """Raise a RuntimeError when a model-produced template violates required invariants."""
+    errors = validate_template(template)
+    if not errors:
+        return
+    msg = f"{context} produced invalid template: {'; '.join(errors)}"
+    raise RuntimeError(msg)
+
+
+def _sanitize_initial_templates(
+    templates: list[PromptTemplate],
+    *,
+    fallback: PromptTemplate,
+) -> list[PromptTemplate]:
+    """Replace empty or invalid initial templates with the validated compiled fallback."""
+    validated: list[PromptTemplate] = []
+    for i, template in enumerate(templates):
+        errors = validate_template(template)
+        if template.sections and not errors:
+            validated.append(template)
+            continue
+        if errors:
+            logger.warning("Initial template %d invalid — falling back: %s", i, "; ".join(errors))
+        validated.append(fallback)
+    return validated
+
+
+def _candidate_results_for_validation(ranking: IterationRanking) -> list[IterationResult]:
+    """Return the top proposal candidates plus synthesis candidate, if present."""
+    proposal_results = [
+        result for result in ranking.exp_results if ranking.synth_result is None or result is not ranking.synth_result
+    ]
+    sorted_proposals = sorted(proposal_results, key=lambda r: ranking.adaptive_scores[id(r)], reverse=True)
+    candidates = sorted_proposals[:2]
+    if ranking.synth_result is not None and ranking.synth_result not in candidates:
+        candidates.append(ranking.synth_result)
+    return candidates
+
+
 def _hash_reference_images(ref_dir: Path) -> dict[str, str]:
     """SHA-256 hash every image in *ref_dir*, keyed by filename."""
     return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in _discover_images(ref_dir)}
@@ -297,18 +336,29 @@ def _log_promotion_decision(
     decision: str,
     reason: str,
     config: Config,
+    *,
+    candidate: IterationResult | None = None,
+    candidate_score: float | None = None,
+    replicate_scores: list[float] | None = None,
+    promotion_test: PromotionTestResult | None = None,
 ) -> None:
     """Log a promotion decision to promotion_log.jsonl."""
+    selected = candidate or ranking.best_exp
+    score = candidate_score if candidate_score is not None else composite_score(selected.aggregated)
+    test_result = promotion_test if promotion_test is not None else (ranking.promotion_test if selected is ranking.best_exp else None)
     pd = PromotionDecision(
         iteration=state.iteration,
-        candidate_score=ranking.best_score,
+        candidate_score=score,
         baseline_score=ranking.baseline_score,
         epsilon=ranking.epsilon,
-        delta=ranking.best_score - ranking.baseline_score,
+        delta=score - ranking.baseline_score,
         decision=decision,
         reason=reason,
-        candidate_branch_id=ranking.best_exp.branch_id,
-        candidate_hypothesis=ranking.best_exp.hypothesis,
+        candidate_branch_id=selected.branch_id,
+        candidate_hypothesis=selected.hypothesis,
+        replicate_scores=replicate_scores,
+        p_value=test_result.p_value if test_result is not None else None,
+        test_statistic=test_result.statistic if test_result is not None else None,
     )
     append_promotion_log(pd, config.run_dir / "promotion_log.jsonl")
 
@@ -355,6 +405,7 @@ class IterationRanking:
     epsilon: float
     synth_result: IterationResult | None = None
     promotion_test: PromotionTestResult | None = None
+    best_replicate_scores: list[float] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -579,6 +630,7 @@ async def _zero_step(ctx: RunContext, all_ref_paths: list[Path]) -> LoopState:
         reasoning_model=config.reasoning_model,
         cache_path=shared_cache,
     )
+    _validate_template_or_raise(initial_template, context="Zero-step compiled template")
 
     # Copy into run dir for provenance
     if shared_cache.exists() and not run_cache.exists():
@@ -591,10 +643,7 @@ async def _zero_step(ctx: RunContext, all_ref_paths: list[Path]) -> LoopState:
         client=ctx.reasoning_client,
         model=config.reasoning_model,
     )
-
-    for i, t in enumerate(initial_templates):
-        if not t.sections:
-            initial_templates[i] = initial_template
+    initial_templates = _sanitize_initial_templates(initial_templates, fallback=initial_template)
 
     state = LoopState(
         iteration=0,
@@ -854,15 +903,15 @@ async def _confirmatory_validation(
     if ctx.config.protocol != "rigorous":
         return
 
-    # Identify top-2 by adaptive score
-    sorted_exps = sorted(ranking.exp_results, key=lambda r: ranking.adaptive_scores[id(r)], reverse=True)
-    top_exps = sorted_exps[:2]
+    candidates = _candidate_results_for_validation(ranking)
+    if not candidates:
+        return
 
-    logger.info("Confirmatory validation: replicating %d candidates + incumbent", len(top_exps))
+    logger.info("Confirmatory validation: replicating %d candidates + incumbent", len(candidates))
 
     # Build replicate tasks: top-2 candidates (existing scores as rep 0) + incumbent
     tasks = []
-    for exp in top_exps:
+    for exp in candidates:
         tasks.append(
             replicate_experiment(
                 template=exp.template,
@@ -904,8 +953,8 @@ async def _confirmatory_validation(
         if isinstance(result, BaseException):
             logger.warning("Confirmatory replicate %d failed: %s", i, result)
             continue
-        if i < len(top_exps):
-            candidate_evals.append((top_exps[i], result))
+        if i < len(candidates):
+            candidate_evals.append((candidates[i], result))
         else:
             incumbent_eval = result
 
@@ -913,12 +962,18 @@ async def _confirmatory_validation(
         logger.warning("Confirmatory validation incomplete — falling back to single-pass scores")
         return
 
-    # Update ranking with median scores from best candidate
-    best_candidate_exp, best_candidate_eval = max(
-        candidate_evals, key=lambda x: composite_score(x[1].median_aggregated)
-    )
+    # Replace single-pass candidate results with replicated medians before promotion or persistence.
+    for exp, evaluation in candidate_evals:
+        exp.per_image_scores = list(evaluation.median_per_image)
+        exp.aggregated = evaluation.median_aggregated
+
+    updated_agg = [r.aggregated for r in ranking.exp_results]
+    ranking.adaptive_scores = {id(r): adaptive_composite_score(r.aggregated, updated_agg) for r in ranking.exp_results}
+
+    best_candidate_exp, best_candidate_eval = max(candidate_evals, key=lambda x: composite_score(x[1].median_aggregated))
     ranking.best_exp = best_candidate_exp
-    ranking.best_score = composite_score(best_candidate_eval.median_aggregated)
+    ranking.best_score = composite_score(best_candidate_exp.aggregated)
+    ranking.best_replicate_scores = [composite_score(agg) for agg in best_candidate_eval.replicate_aggregated]
 
     # Run statistical test: best candidate vs incumbent
     test_result = paired_promotion_test(
@@ -972,6 +1027,10 @@ async def _run_synthesis_experiment(
 ) -> None:
     """Phase 3.5b: run the synthesis experiment and update ranking."""
     merged_template, merged_hypothesis = synth_template_result
+    errors = validate_template(merged_template)
+    if errors:
+        logger.warning("Synthesis template invalid — skipping: %s", "; ".join(errors))
+        return
 
     synth_result = await run_experiment(
         experiment_id=len(ranking.exp_results),
@@ -1008,15 +1067,18 @@ def _update_knowledge_base_for_iteration(
     state: LoopState,
     ranking: IterationRanking,
     proposals: list[ExperimentProposal],
+    baseline_metrics: AggregatedMetrics | None,
     iteration: int,
-) -> AggregatedMetrics | None:
-    """Phase 4 (KB): snapshot pre-update baseline and update KB with all experiments.
+) -> None:
+    """Phase 4 (KB): update the knowledge base after the iteration decision is known."""
+    decision_by_id: dict[int, IterationDecision] = {r.branch_id: "rejected" for r in ranking.exp_results}
+    selected = next((result for result in ranking.exp_results if result.kept), None)
+    if selected is not None:
+        if selected is ranking.best_exp and selected.kept and state.best_metrics is selected.aggregated:
+            decision_by_id[selected.branch_id] = "promoted"
+        elif selected.kept:
+            decision_by_id[selected.branch_id] = "exploration"
 
-    Returned ``pre_update_metrics`` is the snapshot of ``state.best_metrics``
-    taken BEFORE any mutation, so that ``_record_iteration_state`` can reuse
-    it for the late synthesis KB update.
-    """
-    pre_update_metrics = state.best_metrics
     # Synthesis result (if any) is appended to exp_results but has no matching
     # proposal — zip() with strict=False stops at the shorter of the two.
     for exp_result, proposal in zip(ranking.exp_results, proposals, strict=False):
@@ -1024,14 +1086,35 @@ def _update_knowledge_base_for_iteration(
             state.knowledge_base,
             exp_result,
             exp_result.template,
-            pre_update_metrics,
+            baseline_metrics,
             proposal,
             iteration,
+            decision=decision_by_id[exp_result.branch_id],
         )
-    return pre_update_metrics
+
+    if ranking.synth_result is not None:
+        synth_result = ranking.synth_result
+        synth_proposal = ExperimentProposal(
+            template=synth_result.template,
+            hypothesis=synth_result.hypothesis,
+            experiment_desc=synth_result.experiment,
+            builds_on=None,
+            open_problems=[],
+            lessons=Lessons(),
+            target_category=synth_result.target_category,
+        )
+        update_knowledge_base(
+            state.knowledge_base,
+            synth_result,
+            synth_result.template,
+            baseline_metrics,
+            synth_proposal,
+            iteration,
+            decision=decision_by_id[synth_result.branch_id],
+        )
 
 
-def _apply_iteration_result(state: LoopState, ranking: IterationRanking, config: Config) -> None:
+def _apply_iteration_result(state: LoopState, ranking: IterationRanking, config: Config) -> IterationDecision:
     """Decide improvement vs plateau and update state accordingly.
 
     On a genuine improvement: call ``_apply_best_result`` and reset plateau.
@@ -1054,8 +1137,15 @@ def _apply_iteration_result(state: LoopState, ranking: IterationRanking, config:
     if improved:
         _apply_best_result(state, ranking.best_exp)
         state.plateau_counter = 0
-        _log_promotion_decision(state, ranking, "promoted", "Exceeded baseline + epsilon", config)
-        return
+        _log_promotion_decision(
+            state,
+            ranking,
+            "promoted",
+            "Exceeded baseline + epsilon",
+            config,
+            replicate_scores=ranking.best_replicate_scores,
+        )
+        return "promoted"
 
     state.plateau_counter += 1
     # Exploration: on even plateau counts, adopt second-best to escape local optima.
@@ -1075,7 +1165,15 @@ def _apply_iteration_result(state: LoopState, ranking: IterationRanking, config:
         logger.info("Exploration: adopting second-best experiment to escape potential local optimum")
         _apply_exploration_result(state, second_best)
         state.plateau_counter = _EXPLORATION_RESET_PLATEAU
-        _log_promotion_decision(state, ranking, "exploration", "Plateau escape via second-best", config)
+        _log_promotion_decision(
+            state,
+            ranking,
+            "exploration",
+            "Plateau escape via second-best",
+            config,
+            candidate=second_best,
+        )
+        return "exploration"
     else:
         _log_promotion_decision(
             state,
@@ -1083,17 +1181,18 @@ def _apply_iteration_result(state: LoopState, ranking: IterationRanking, config:
             "rejected",
             f"Delta {ranking.best_score - ranking.baseline_score:.5f} < epsilon {ranking.epsilon:.5f}",
             config,
+            replicate_scores=ranking.best_replicate_scores,
         )
+        return "rejected"
 
 
 def _record_iteration_state(
     state: LoopState,
     ranking: IterationRanking,
-    pre_update_metrics: AggregatedMetrics | None,
     iteration: int,
     ctx: RunContext,
 ) -> None:
-    """Persist iteration results: prev captions, history, synth KB update, logs, save_state."""
+    """Persist iteration results: prev captions, history, logs, save_state."""
     # Preserve current best captions for next iteration's diff (N-1 vs N-2)
     current_best = best_kept_result(state.last_iteration_results)
     if current_best and current_best.iteration_captions:
@@ -1104,26 +1203,6 @@ def _record_iteration_state(
     # Cap persisted history to avoid unbounded state.json growth
     if len(state.experiment_history) > _MAX_PERSISTED_HISTORY:
         state.experiment_history = state.experiment_history[-_MAX_PERSISTED_HISTORY:]
-
-    # Record synthesis experiment separately (it has no matching proposal)
-    if ranking.synth_result is not None:
-        synth_result = ranking.synth_result
-        synth_proposal = ExperimentProposal(
-            template=synth_result.template,
-            hypothesis=synth_result.hypothesis,
-            experiment_desc=synth_result.experiment,
-            builds_on=None,
-            open_problems=[],
-            lessons=Lessons(),
-        )
-        update_knowledge_base(
-            state.knowledge_base,
-            synth_result,
-            synth_result.template,
-            pre_update_metrics,
-            synth_proposal,
-            iteration,
-        )
 
     _log_experiment_results(ranking.exp_results, ctx.config.log_dir)
     # Strip heavy fields from non-kept results AFTER logging (iteration logs keep full data)
@@ -1251,12 +1330,6 @@ async def run(config: Config) -> LoopState:
 
         ranking = _score_and_rank(exp_results, state)
 
-        # Phase 3.1: Confirmatory validation (rigorous mode only)
-        try:
-            await _confirmatory_validation(ranking, state, ctx, iteration)
-        except Exception:
-            logger.warning("Confirmatory validation failed — falling back to single-pass", exc_info=True)
-
         # Run synthesis reasoning + pairwise + review in parallel
         synth_result, pairwise_result, review_result = await asyncio.gather(
             _synthesize_reasoning(ranking, state, ctx),
@@ -1279,9 +1352,16 @@ async def run(config: Config) -> LoopState:
             except Exception:
                 logger.warning("Synthesis experiment failed — continuing with individual experiments", exc_info=True)
 
-        pre_update_metrics = _update_knowledge_base_for_iteration(state, ranking, proposals, iteration)
+        # Phase 3.1: Confirmatory validation (rigorous mode only)
+        try:
+            await _confirmatory_validation(ranking, state, ctx, iteration)
+        except Exception:
+            logger.warning("Confirmatory validation failed — falling back to single-pass", exc_info=True)
+
+        baseline_metrics = state.best_metrics
         _apply_iteration_result(state, ranking, ctx.config)
-        _record_iteration_state(state, ranking, pre_update_metrics, iteration, ctx)
+        _update_knowledge_base_for_iteration(state, ranking, proposals, baseline_metrics, iteration)
+        _record_iteration_state(state, ranking, iteration, ctx)
 
         if _check_plateau_convergence(state, ctx):
             break

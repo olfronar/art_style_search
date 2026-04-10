@@ -23,21 +23,18 @@ from __future__ import annotations
 import html
 import json
 import logging
-import os
-import re
 import webbrowser
-from dataclasses import dataclass, field
 from pathlib import Path
 
 from art_style_search._report_css import REPORT_CSS
+from art_style_search.report_data import ReportData, _rel, load_report_data
+from art_style_search.report_data import _load_iteration_logs as _load_iteration_logs_impl
 from art_style_search.scoring import adaptive_composite_score, composite_score
-from art_style_search.state import load_iteration_log, load_state
 from art_style_search.types import (
     CategoryProgress,
     Hypothesis,
     IterationResult,
     KnowledgeBase,
-    LoopState,
     MetricScores,
     OpenProblem,
 )
@@ -53,7 +50,6 @@ _FONTS_CDN = (
     "&display=swap"
 )
 _MAX_TREE_DEPTH = 6
-_LOG_PATTERN = re.compile(r"iter_(\d+)_branch_(\d+)\.json$")
 
 # Editorial palette — used in CSS *and* cascaded into Plotly charts so the
 # two visual languages stay consistent.
@@ -65,94 +61,9 @@ _COLOR_ACCENT = "#d9543a"  # vermilion — winners, highlights
 _COLOR_GOLD = "#c9a961"  # muted gold — global best context
 
 
-# ---------------------------------------------------------------------------
-# Data loading
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class ReportData:
-    """Everything the renderer needs for one run."""
-
-    run_name: str
-    run_dir: Path
-    state: LoopState
-    iteration_logs: dict[int, list[IterationResult]] = field(default_factory=dict)
-
-    def iteration_numbers(self) -> list[int]:
-        """Sorted list of iteration indices that have at least one log."""
-        return sorted(self.iteration_logs.keys())
-
-    def winner_of(self, iteration: int) -> IterationResult | None:
-        """Return the experiment with the highest ``composite_score`` for *iteration*."""
-        results = self.iteration_logs.get(iteration, [])
-        if not results:
-            return None
-        return max(results, key=lambda r: composite_score(r.aggregated))
-
-
 def _load_iteration_logs(log_dir: Path) -> dict[int, list[IterationResult]]:
-    """Parse every ``iter_NNN_branch_M.json`` under *log_dir*.
-
-    Malformed files are logged and skipped — a partial crash mid-write
-    shouldn't break the whole report.
-    """
-    result: dict[int, list[IterationResult]] = {}
-    if not log_dir.is_dir():
-        return result
-
-    for path in sorted(log_dir.glob("iter_*_branch_*.json")):
-        match = _LOG_PATTERN.search(path.name)
-        if not match:
-            continue
-        try:
-            record = load_iteration_log(path)
-        except (json.JSONDecodeError, KeyError, ValueError) as exc:
-            logger.warning("Skipping malformed iteration log %s: %s", path, exc)
-            continue
-        result.setdefault(record.iteration, []).append(record)
-
-    for iteration_results in result.values():
-        iteration_results.sort(key=lambda r: r.branch_id)
-    return result
-
-
-def load_report_data(run_dir: Path) -> ReportData:
-    """Load *state.json* and all iteration logs from *run_dir*.
-
-    Raises ``FileNotFoundError`` if the state file is missing (run not
-    started).
-    """
-    state_file = run_dir / "state.json"
-    state = load_state(state_file)
-    if state is None:
-        raise FileNotFoundError(f"No state.json found in {run_dir} — run not started yet")
-
-    return ReportData(
-        run_name=run_dir.name,
-        run_dir=run_dir,
-        state=state,
-        iteration_logs=_load_iteration_logs(run_dir / "logs"),
-    )
-
-
-# ---------------------------------------------------------------------------
-# Path helpers
-# ---------------------------------------------------------------------------
-
-
-def _rel(target: Path, report_dir: Path) -> str:
-    """Return an ``<img src>``-safe relative path from *report_dir* to *target*.
-
-    Falls back to a ``file://`` URI for cross-volume paths (Windows) where
-    ``relpath`` raises ``ValueError``.
-    """
-    try:
-        rel = os.path.relpath(target.resolve(), report_dir.resolve())
-    except ValueError:
-        return target.resolve().as_uri()
-    # Use forward slashes even on Windows so the HTML is portable.
-    return rel.replace(os.sep, "/")
+    """Compatibility wrapper re-exporting report-data loading helpers."""
+    return _load_iteration_logs_impl(log_dir)
 
 
 # ---------------------------------------------------------------------------
