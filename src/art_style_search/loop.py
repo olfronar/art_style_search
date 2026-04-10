@@ -23,11 +23,16 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import hashlib
+import json
 import logging
+import math
+import platform as _platform
 import random
 import shutil
+import subprocess
+import sys
 from dataclasses import dataclass, field
-from datetime import UTC
+from datetime import UTC, datetime
 from pathlib import Path
 
 from google import genai
@@ -68,6 +73,7 @@ from art_style_search.types import (
     KnowledgeBase,
     LoopState,
     PromotionDecision,
+    PromotionTestResult,
     PromptTemplate,
     RunManifest,
 )
@@ -192,12 +198,13 @@ def _ref_cache_key(paths: list[Path]) -> str:
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()[:16]
 
 
+def _hash_reference_images(ref_dir: Path) -> dict[str, str]:
+    """SHA-256 hash every image in *ref_dir*, keyed by filename."""
+    return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in _discover_images(ref_dir)}
+
+
 def _build_manifest(config: Config) -> RunManifest:
     """Build a RunManifest from the current config and environment."""
-    import platform as _platform
-    import subprocess
-    import sys
-    from datetime import datetime
 
     git_sha: str | None = None
     try:
@@ -212,10 +219,7 @@ def _build_manifest(config: Config) -> RunManifest:
     if uv_lock.exists():
         uv_lock_hash = hashlib.sha256(uv_lock.read_bytes()).hexdigest()
 
-    ref_hashes: dict[str, str] = {}
-    for p in sorted(config.reference_dir.iterdir()):
-        if p.suffix.lower() in IMAGE_EXTENSIONS:
-            ref_hashes[p.name] = hashlib.sha256(p.read_bytes()).hexdigest()
+    ref_hashes = _hash_reference_images(config.reference_dir)
 
     protocol_version = "rigorous_v1" if config.protocol == "rigorous" else "classic"
 
@@ -256,11 +260,7 @@ def _verify_manifest(config: Config, manifest: RunManifest) -> None:
             msg = f"Seed mismatch: manifest has {manifest.seed}, CLI has {config.seed}"
             raise RuntimeError(msg)
         # Verify reference image hashes
-        current_hashes: dict[str, str] = {}
-        for p in sorted(config.reference_dir.iterdir()):
-            if p.suffix.lower() in IMAGE_EXTENSIONS:
-                current_hashes[p.name] = hashlib.sha256(p.read_bytes()).hexdigest()
-        if current_hashes != manifest.reference_image_hashes:
+        if _hash_reference_images(config.reference_dir) != manifest.reference_image_hashes:
             msg = "Reference images changed since run started — aborting resume in rigorous mode"
             raise RuntimeError(msg)
     else:
@@ -278,7 +278,6 @@ def _split_information_barrier(
     In rigorous mode: ceil(0.7 * N) feedback, rest silent (min 2 silent).
     In classic mode: all feedback, none silent.
     """
-    import math
 
     if protocol != "rigorous" or len(fixed_refs) < 4:
         return list(fixed_refs), []
@@ -354,6 +353,7 @@ class IterationRanking:
     baseline_score: float
     epsilon: float
     synth_result: IterationResult | None = None
+    promotion_test: PromotionTestResult | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -491,25 +491,25 @@ def _finalize_run(state: LoopState, ctx: RunContext) -> LoopState:
     return state
 
 
+def _extract_silent_scores(results: list[IterationResult], silent_set: frozenset[Path]) -> list[float]:
+    """Extract per-image composite scores for silent images from results."""
+    from art_style_search.scoring import per_image_composite
+
+    scores: list[float] = []
+    for r in results:
+        for cap, sc in zip(r.iteration_captions, r.per_image_scores, strict=False):
+            if cap.image_path in silent_set:
+                scores.append(per_image_composite(sc))
+    return scores
+
+
 def _write_holdout_summary(state: LoopState, ctx: RunContext) -> None:
     """Compute and save holdout summary for silent images."""
-    import json
 
     if not state.silent_refs:
         return
 
     silent_set = frozenset(state.silent_refs)
-
-    def _extract_silent_scores(results: list[IterationResult]) -> list[float]:
-        """Extract per-image composite scores for silent images from results."""
-        from art_style_search.scoring import per_image_composite
-
-        scores: list[float] = []
-        for r in results:
-            for cap, sc in zip(r.iteration_captions, r.per_image_scores, strict=False):
-                if cap.image_path in silent_set:
-                    scores.append(per_image_composite(sc))
-        return scores
 
     # Iteration 0 scores (from experiment_history or last_iteration_results)
     iter0_results = [r for r in state.experiment_history if r.iteration == 0 and r.kept]
@@ -517,8 +517,8 @@ def _write_holdout_summary(state: LoopState, ctx: RunContext) -> None:
     if not final_results:
         final_results = state.last_iteration_results[:1]
 
-    iter0_scores = _extract_silent_scores(iter0_results)
-    final_scores = _extract_silent_scores(final_results)
+    iter0_scores = _extract_silent_scores(iter0_results, silent_set)
+    final_scores = _extract_silent_scores(final_results, silent_set)
 
     summary = {
         "silent_image_count": len(state.silent_refs),
@@ -670,8 +670,8 @@ def _build_iteration_context(state: LoopState) -> tuple[str, str, str]:
     roundtrip_fb = best_last.roundtrip_feedback if best_last else ""
 
     # Information barrier: filter per-image feedback to feedback_refs only
-    if state.silent_refs and best_last:
-        feedback_set = frozenset(state.feedback_refs)
+    feedback_set = frozenset(state.feedback_refs) if state.silent_refs else None
+    if feedback_set and best_last:
         vision_fb = _filter_feedback_by_refs(vision_fb, feedback_set)
         roundtrip_fb = _filter_feedback_by_refs(roundtrip_fb, feedback_set)
 
@@ -680,8 +680,7 @@ def _build_iteration_context(state: LoopState) -> tuple[str, str, str]:
         captions_for_diff = best_last.iteration_captions
         scores_for_diff = best_last.per_image_scores
         # Information barrier: only show caption diffs for feedback images
-        if state.silent_refs:
-            feedback_set = frozenset(state.feedback_refs)
+        if feedback_set:
             paired = [
                 (c, s) for c, s in zip(captions_for_diff, scores_for_diff, strict=False) if c.image_path in feedback_set
             ]
@@ -917,7 +916,7 @@ async def _confirmatory_validation(
     )
 
     # Store test result on ranking for use in _apply_iteration_result
-    ranking.promotion_test = test_result  # type: ignore[attr-defined]
+    ranking.promotion_test = test_result
     ranking.baseline_score = composite_score(incumbent_eval.median_aggregated)
 
 
@@ -1025,7 +1024,7 @@ def _apply_iteration_result(state: LoopState, ranking: IterationRanking, config:
 
     # In rigorous mode, also require statistical confirmation
     if improved and config.protocol == "rigorous":
-        promotion_test = getattr(ranking, "promotion_test", None)
+        promotion_test = ranking.promotion_test
         if promotion_test is not None and not promotion_test.passed:
             logger.info(
                 "Epsilon check passed but statistical test failed (p=%.4f) — rejecting promotion",

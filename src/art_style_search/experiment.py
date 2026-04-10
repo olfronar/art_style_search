@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
+import statistics
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -100,9 +102,7 @@ async def _caption_and_generate(
     gen_dir.mkdir(parents=True, exist_ok=True)
     # In rigorous mode, include prompt hash so cache invalidates when meta-prompt changes
     cache_key = f"iter{iteration}_e{experiment_id}"
-    if getattr(config, "protocol", "classic") == "rigorous":
-        import hashlib
-
+    if config.protocol == "rigorous":
         prompt_hash = hashlib.sha256(meta_prompt.encode()).hexdigest()[:8]
         cache_key = f"{cache_key}_p{prompt_hash}"
 
@@ -283,7 +283,6 @@ def _median_metric_scores(replicate_scores: list[list[MetricScores]]) -> list[Me
     ``replicate_scores[r][i]`` is replicate *r*, image *i*.
     Returns a list of length n_images with median scores.
     """
-    import statistics
 
     n_images = len(replicate_scores[0])
     result: list[MetricScores] = []
@@ -333,7 +332,7 @@ async def replicate_experiment(
         all_replicate_agg.append(aggregate(existing_scores))
         start_rep = 1
 
-    for rep in range(start_rep, n_replicates):
+    async def _run_one_replicate(rep: int) -> tuple[list[MetricScores], AggregatedMetrics] | None:
         rep_id = branch_id * 100 + rep  # unique experiment_id per replicate
         captions, generated_paths, pairs = await _caption_and_generate(
             fixed_refs,
@@ -346,21 +345,20 @@ async def replicate_experiment(
         )
         if not generated_paths:
             logger.warning("Replicate %d/%d for branch %d: no images generated", rep, n_replicates, branch_id)
-            continue
+            return None
 
         gen_paths = [gen for _, gen in pairs]
-        ref_paths = [orig for orig, _ in pairs]
+        ref_paths_eval = [orig for orig, _ in pairs]
         caption_by_path = {c.image_path: c.text for c in captions}
         eval_captions = [caption_by_path[orig] for orig, _ in pairs]
 
         (metric_scores, _), (_, vision_scores_list) = await asyncio.gather(
-            evaluate_images(gen_paths, ref_paths, eval_captions, registry=registry, semaphore=eval_semaphore),
+            evaluate_images(gen_paths, ref_paths_eval, eval_captions, registry=registry, semaphore=eval_semaphore),
             compare_vision_per_image(
                 pairs, eval_captions, client=gemini_client, model=config.caption_model, semaphore=gemini_semaphore
             ),
         )
 
-        # Merge vision scores into metric scores
         scores: list[MetricScores] = []
         for i in range(len(metric_scores)):
             vs = vision_scores_list[i]
@@ -372,9 +370,20 @@ async def replicate_experiment(
                     vision_composition=vs.composition.score,
                 )
             )
+        return scores, aggregate(scores)
 
-        all_replicate_scores.append(scores)
-        all_replicate_agg.append(aggregate(scores))
+    # Run all replicates in parallel
+    rep_results = await asyncio.gather(
+        *[_run_one_replicate(rep) for rep in range(start_rep, n_replicates)],
+        return_exceptions=True,
+    )
+    for r in rep_results:
+        if isinstance(r, BaseException):
+            logger.warning("Replicate failed for branch %d: %s", branch_id, r)
+        elif r is not None:
+            scores, agg = r
+            all_replicate_scores.append(scores)
+            all_replicate_agg.append(agg)
 
     if not all_replicate_scores:
         msg = f"All replicates failed for branch {branch_id}"

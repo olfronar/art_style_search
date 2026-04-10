@@ -113,6 +113,8 @@ uv run python -m art_style_search clean --all
 | `--plateau-window` | `5` | Iterations without improvement before stop |
 | `--num-branches` | `5` | Parallel experiments per iteration |
 | `--num-fixed-refs` | `20` | Fixed reference images for optimization |
+| `--protocol` | `classic` | `classic` (default) or `rigorous` (info barrier + replication + statistical testing) |
+| `--seed` | random | RNG seed for reproducible reference selection |
 | `--aspect-ratio` | `1:1` | Aspect ratio for generated images |
 | `--caption-model` | `gemini-3.1-pro-preview` | Gemini model for captioning |
 | `--generator-model` | `gemini-3.1-flash-image-preview` | Gemini model for generation |
@@ -146,6 +148,20 @@ Each metric compares a generated image against its specific paired original:
 
 A consistency penalty (30% weight on per-image std of DreamSim and color) penalizes high variance across images.
 
+## Scientific Rigor Mode
+
+Pass `--protocol rigorous` (optionally with `--seed 42` for reproducibility) to upgrade from the default exploratory loop to a controlled experimental protocol:
+
+- **Information barrier**: reference images are split into *feedback* (70%, shown to the reasoning model in per-image feedback) and *silent* (30%, evaluated but hidden from the optimizer). Improvements on silent images indicate genuine generalization, not overfitting to feedback signals.
+- **Confirmatory replication**: the top-2 candidates and the current incumbent are each regenerated 3 times. Per-image medians replace single-pass scores, reducing generation noise.
+- **Statistical testing**: promotion requires a Wilcoxon signed-rank test (p < 0.10, one-sided) on per-image composite-score differences, plus a bootstrap 95% CI on the mean delta. This prevents lucky single generations from being mistaken for real improvements.
+- **Run provenance**: a `run_manifest.json` records the seed, git SHA, model versions, reference-image hashes, and platform. On resume in rigorous mode, mismatches abort to prevent silent state drift.
+- **Promotion log**: every iteration's promotion decision (score, delta, epsilon, p-value, verdict) is appended to `promotion_log.jsonl` for post-hoc audit.
+
+Classic mode (`--protocol classic`, the default) is unchanged — no replication, no barrier, no statistical gating. The only always-on additions are the manifest and promotion log (observability, zero cost).
+
+Cost: rigorous mode is ~2.8x more expensive per iteration (confirmatory replication of 3 templates x 3 replicates x N images).
+
 ## Project Structure
 
 ```
@@ -156,8 +172,9 @@ src/art_style_search/
   analyze.py     Zero-step: parallel Gemini vision + reasoning-model style analysis
   caption.py     Gemini Pro captioning with disk cache
   generate.py    Gemini Flash image generation with retry
-  experiment.py  Single-experiment execution pipeline
+  experiment.py  Single-experiment execution pipeline + replicated evaluation
   evaluate.py    Per-image paired metrics + Gemini vision comparison
+  scoring.py     Composite scoring, per-image scoring, Wilcoxon promotion test
   knowledge.py   Knowledge Base maintenance (hypothesis tracking)
   models.py      Lazy-loaded DreamSim/HPS/Aesthetics/SSIM models
   runs.py        Run directory management (isolation, listing, cleanup)

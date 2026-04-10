@@ -16,6 +16,18 @@ from art_style_search.utils import CATEGORY_SYNONYMS as _CATEGORY_SYNONYMS
 
 _HPS_CEILING = 0.35  # default empirical max for HPS v2 scores; used to normalize to [0, 1]
 
+# Fixed metric weights for composite scoring (sum = 0.96; style_consistency has no per-image equivalent)
+_W_DREAMSIM = 0.40
+_W_HPS = 0.05
+_W_AESTHETICS = 0.06
+_W_COLOR = 0.22
+_W_SSIM = 0.11
+_W_STYLE_CON = 0.04
+_W_VISION_STYLE = 0.04
+_W_VISION_SUBJECT = 0.04
+_W_VISION_COMP = 0.04
+_W_VARIANCE_PENALTY = 0.30
+
 # Improvement must exceed this threshold to be accepted (filters generation noise)
 IMPROVEMENT_EPSILON = 0.005
 _EPSILON_FLOOR = 0.001  # Minimum epsilon to prevent false-positive improvements at high baselines
@@ -45,18 +57,18 @@ def composite_score(m: AggregatedMetrics) -> float:
     Includes a consistency penalty based on per-image score variance.
     """
     base = (
-        0.40 * m.dreamsim_similarity_mean
-        + 0.05 * _normalize_hps(m.hps_score_mean)
-        + 0.06 * (m.aesthetics_score_mean / 10.0)
-        + 0.22 * m.color_histogram_mean
-        + 0.11 * m.ssim_mean
-        + 0.04 * m.style_consistency
-        + 0.04 * m.vision_style
-        + 0.04 * m.vision_subject
-        + 0.04 * m.vision_composition
+        _W_DREAMSIM * m.dreamsim_similarity_mean
+        + _W_HPS * _normalize_hps(m.hps_score_mean)
+        + _W_AESTHETICS * (m.aesthetics_score_mean / 10.0)
+        + _W_COLOR * m.color_histogram_mean
+        + _W_SSIM * m.ssim_mean
+        + _W_STYLE_CON * m.style_consistency
+        + _W_VISION_STYLE * m.vision_style
+        + _W_VISION_SUBJECT * m.vision_subject
+        + _W_VISION_COMP * m.vision_composition
     )
     # Penalize inconsistency: high std across images means unreliable reproduction
-    variance_penalty = 0.30 * (m.dreamsim_similarity_std + m.color_histogram_std) / 2.0
+    variance_penalty = _W_VARIANCE_PENALTY * (m.dreamsim_similarity_std + m.color_histogram_std) / 2.0
     return base - variance_penalty
 
 
@@ -155,14 +167,14 @@ def per_image_composite(s: MetricScores) -> float:
     the score for a single image — no variance penalty since there's only one observation.
     """
     return (
-        0.40 * s.dreamsim_similarity
-        + 0.05 * _normalize_hps(s.hps_score)
-        + 0.06 * (s.aesthetics_score / 10.0)
-        + 0.22 * s.color_histogram
-        + 0.11 * s.ssim
-        + 0.04 * s.vision_style
-        + 0.04 * s.vision_subject
-        + 0.04 * s.vision_composition
+        _W_DREAMSIM * s.dreamsim_similarity
+        + _W_HPS * _normalize_hps(s.hps_score)
+        + _W_AESTHETICS * (s.aesthetics_score / 10.0)
+        + _W_COLOR * s.color_histogram
+        + _W_SSIM * s.ssim
+        + _W_VISION_STYLE * s.vision_style
+        + _W_VISION_SUBJECT * s.vision_subject
+        + _W_VISION_COMP * s.vision_composition
     )
 
 
