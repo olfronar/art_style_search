@@ -826,6 +826,9 @@ async def run(config: Config) -> LoopState:
     state = load_state(config.state_file)
     if state is not None:
         logger.info("Resumed from iteration %d with %d fixed references", state.iteration, len(state.fixed_references))
+        if state.converged:
+            logger.info("Previous run already converged (%s) — skipping loop", state.convergence_reason)
+            return _finalize_run(state, ctx)
     else:
         state = await _zero_step(ctx, all_ref_paths)
 
@@ -844,6 +847,8 @@ async def run(config: Config) -> LoopState:
         if not exp_results:
             logger.warning("All experiments failed this iteration")
             state.plateau_counter += 1
+            state.iteration = iteration + 1  # advance so resume skips this iteration
+            save_state(state, config.state_file)
             if state.plateau_counter >= config.plateau_window:
                 state.converged = True
                 state.convergence_reason = ConvergenceReason.PLATEAU
