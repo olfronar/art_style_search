@@ -30,6 +30,7 @@ from art_style_search.types import (
     MetricScores,
     PromptTemplate,
     ReplicatedEvaluation,
+    VisionScores,
     verdict_label,
 )
 
@@ -37,6 +38,13 @@ logger = logging.getLogger(__name__)
 
 # Reject experiments where fewer than this fraction of images were generated
 _MIN_COMPLETION_RATE = 0.5
+
+
+def _merge_vision(ms: MetricScores, vs: VisionScores) -> MetricScores:
+    """Merge per-image vision scores into a MetricScores instance."""
+    return replace(
+        ms, vision_style=vs.style.score, vision_subject=vs.subject.score, vision_composition=vs.composition.score
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -93,13 +101,12 @@ async def _caption_and_generate(
     gemini_semaphore: asyncio.Semaphore,
     iteration: int,
     experiment_id: int,
-) -> tuple[list[Caption], list[Path], list[tuple[Path, Path]], int, int]:
+) -> tuple[list[Caption], list[Path], list[tuple[Path, Path]]]:
     """Caption and generate per-image in a pipeline (no serial boundary).
 
     Each image's caption→generate runs as a single chained task so generation
     starts as soon as each individual caption completes. Returns (captions,
-    generated_paths, pairs, n_attempted, n_succeeded) where pairs maps
-    (original, generated).
+    generated_paths, pairs) where pairs maps (original, generated).
     """
     cache_dir = config.log_dir / f"iter_{iteration:03d}" / f"exp_{experiment_id}" / "captions"
     gen_dir = config.output_dir / f"iter_{iteration:03d}" / f"exp_{experiment_id}"
@@ -148,7 +155,7 @@ async def _caption_and_generate(
             generated_paths.append(gen_path)
             pairs.append((caption.image_path, gen_path))
 
-    return captions, generated_paths, pairs, len(ref_paths), len(generated_paths)
+    return captions, generated_paths, pairs
 
 
 async def run_experiment(
@@ -170,7 +177,7 @@ async def run_experiment(
     meta_prompt = template.render()
     logger.info("Exp %d iter %d — meta-prompt: %.100s...", experiment_id, iteration, meta_prompt)
 
-    captions, generated_paths, pairs, n_attempted, n_succeeded = await _caption_and_generate(
+    captions, generated_paths, pairs = await _caption_and_generate(
         fixed_refs,
         meta_prompt,
         config=config,
@@ -180,10 +187,13 @@ async def run_experiment(
         experiment_id=experiment_id,
     )
 
+    n_attempted = len(fixed_refs)
+    n_succeeded = len(generated_paths)
+
     if not generated_paths:
         raise RuntimeError(f"Experiment {experiment_id}: no images generated")
 
-    completion_rate_gen = n_succeeded / n_attempted if n_attempted > 0 else 0.0
+    completion_rate_gen = n_succeeded / n_attempted
     if completion_rate_gen < _MIN_COMPLETION_RATE:
         raise RuntimeError(
             f"Experiment {experiment_id}: only {n_succeeded}/{n_attempted} "
@@ -212,25 +222,14 @@ async def run_experiment(
     section_names = [s.name for s in template.sections]
     compliance = check_caption_compliance(section_names, captions, caption_sections=template.caption_sections)
 
-    # Merge vision scores into MetricScores in ORIGINAL order (aligned with pairs/captions/paths)
-    original_scores: list[MetricScores] = []
-    for i in range(len(metric_scores)):
-        sc, vs = metric_scores[i], vision_scores_list[i]
-        original_scores.append(
-            replace(
-                sc,
-                vision_style=vs.style.score,
-                vision_subject=vs.subject.score,
-                vision_composition=vs.composition.score,
-            )
-        )
+    # Merge vision scores in original order (aligned with pairs/captions/paths)
+    original_scores = [_merge_vision(ms, vs) for ms, vs in zip(metric_scores, vision_scores_list, strict=True)]
 
-    # Compute completion rate including eval failures
+    # Completion rate accounts for both generation and evaluation failures
     total_succeeded = max(n_succeeded - n_eval_failed, 0)
-    completion_rate = total_succeeded / n_attempted if n_attempted > 0 else 0.0
+    completion_rate = total_succeeded / n_attempted
 
     aggregated = aggregate(original_scores, completion_rate=completion_rate)
-    # Measure how consistent the [Art Style] blocks are across captions
     style_con = compute_style_consistency(captions)
     aggregated = replace(aggregated, style_consistency=style_con)
 
@@ -357,7 +356,7 @@ async def replicate_experiment(
 
     async def _run_one_replicate(rep: int) -> tuple[list[MetricScores], AggregatedMetrics] | None:
         rep_id = branch_id * 100 + rep  # unique experiment_id per replicate
-        captions, generated_paths, pairs, _n_att, _n_succ = await _caption_and_generate(
+        captions, generated_paths, pairs = await _caption_and_generate(
             fixed_refs,
             meta_prompt,
             config=config,
@@ -382,17 +381,7 @@ async def replicate_experiment(
             ),
         )
 
-        scores: list[MetricScores] = []
-        for i in range(len(metric_scores)):
-            vs = vision_scores_list[i]
-            scores.append(
-                replace(
-                    metric_scores[i],
-                    vision_style=vs.style.score,
-                    vision_subject=vs.subject.score,
-                    vision_composition=vs.composition.score,
-                )
-            )
+        scores = [_merge_vision(ms, vs) for ms, vs in zip(metric_scores, vision_scores_list, strict=True)]
         return scores, aggregate(scores)
 
     # Run all replicates in parallel
