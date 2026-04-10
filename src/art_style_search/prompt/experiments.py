@@ -9,6 +9,8 @@ from art_style_search.prompt._format import (
     _format_style_profile,
     _format_template,
     _truncate_words,
+    format_knowledge_base,
+    suggest_target_categories,
 )
 from art_style_search.prompt._parse import (
     Lessons,
@@ -234,7 +236,7 @@ async def propose_experiments(
         user_parts.append(f"\nCurrent composite score: {score:.4f} ({regime} regime)\n")
 
     # Knowledge base — structured lessons from all previous experiments
-    kb_text = knowledge_base.render_for_reasoning_model()
+    kb_text = format_knowledge_base(knowledge_base)
     if kb_text:
         user_parts.append("\n\n")
         user_parts.append(kb_text)
@@ -243,7 +245,7 @@ async def propose_experiments(
     # available, including on iteration 1, so the unexplored synonym-map categories
     # (lighting, texture, background, caption_structure, …) surface at priority 1.0.
     category_names = get_category_names(current_template)
-    suggested = knowledge_base.suggest_target_categories(num_experiments, category_names) if knowledge_base else []
+    suggested = suggest_target_categories(knowledge_base, num_experiments, category_names) if knowledge_base else []
     if suggested:
         user_parts.append(
             "\n## Suggested Target Categories (ranked by improvement potential; "

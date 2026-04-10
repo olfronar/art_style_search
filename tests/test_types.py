@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from art_style_search.prompt._format import format_knowledge_base
 from art_style_search.scoring import (
     IMPROVEMENT_EPSILON,
     classify_hypothesis,
@@ -32,7 +33,8 @@ class TestCompositeScore:
             aesthetics_score_std=0.5,
         )
         # Current formula: DreamSim 40%, Color 22%, SSIM 11%, HPS 5%,
-        # Aesthetics 6%, StyleConsistency 4%, Vision 4%+4%+4%=12%.
+        # Aesthetics 6%, StyleConsistency 6%, Vision(style) 5% + Vision(subject) 1%
+        # + Vision(composition) 4% = 10%.
         # color_histogram/ssim default to 0.0, vision_* default to 0.5
         # HPS normalized: min(0.28/0.35, 1.0) = 0.8
         base = (
@@ -41,9 +43,9 @@ class TestCompositeScore:
             + 0.06 * (7.0 / 10.0)
             + 0.22 * 0.0  # color_histogram
             + 0.11 * 0.0  # ssim
-            + 0.04 * 0.0  # style_consistency
-            + 0.04 * 0.5  # vision_style
-            + 0.04 * 0.5  # vision_subject
+            + 0.06 * 0.0  # style_consistency
+            + 0.05 * 0.5  # vision_style
+            + 0.01 * 0.5  # vision_subject
             + 0.04 * 0.5  # vision_composition
         )
         # Consistency penalty: 0.30 * (dreamsim_std + color_histogram_std) / 2.0
@@ -61,7 +63,7 @@ class TestCompositeScore:
             aesthetics_score_std=0.0,
         )
         # vision_style/subject/composition default to 0.5; all other metrics zero
-        expected = 0.04 * 0.5 + 0.04 * 0.5 + 0.04 * 0.5
+        expected = 0.05 * 0.5 + 0.01 * 0.5 + 0.04 * 0.5
         assert abs(composite_score(m) - expected) < 1e-9
 
     def test_higher_dreamsim_yields_higher_score(self) -> None:
@@ -91,7 +93,7 @@ class TestCompositeScore:
 
     def test_weights_sum_to_one(self) -> None:
         """Verify the coefficient magnitudes sum to 1.0 (9 metrics)."""
-        assert abs((0.40 + 0.05 + 0.06 + 0.22 + 0.11 + 0.04 + 0.04 + 0.04 + 0.04) - 1.0) < 1e-9
+        assert abs((0.40 + 0.05 + 0.06 + 0.22 + 0.11 + 0.06 + 0.05 + 0.01 + 0.04) - 1.0) < 1e-9
 
     def test_hps_normalized(self) -> None:
         """HPS v2 scores (~0.25-0.35) should be normalized to [0,1] via /0.35 ceiling."""
@@ -103,8 +105,8 @@ class TestCompositeScore:
             aesthetics_score_mean=0.0,
             aesthetics_score_std=0.0,
         )
-        # HPS: 0.05 * min(0.35/0.35, 1.0) = 0.05, plus 3 vision defaults at 0.5
-        expected = 0.05 * 1.0 + 0.04 * 0.5 + 0.04 * 0.5 + 0.04 * 0.5
+        # HPS: 0.05 * min(0.35/0.35, 1.0) = 0.05, plus vision defaults at 0.5
+        expected = 0.05 * 1.0 + 0.05 * 0.5 + 0.01 * 0.5 + 0.04 * 0.5
         assert abs(composite_score(m) - expected) < 1e-9
 
     def test_hps_clamped_above_ceiling(self) -> None:
@@ -118,7 +120,7 @@ class TestCompositeScore:
             aesthetics_score_std=0.0,
         )
         # Clamped: min(0.50/0.35, 1.0) = 1.0
-        expected = 0.05 * 1.0 + 0.04 * 0.5 + 0.04 * 0.5 + 0.04 * 0.5
+        expected = 0.05 * 1.0 + 0.05 * 0.5 + 0.01 * 0.5 + 0.04 * 0.5
         assert abs(composite_score(m) - expected) < 1e-9
 
     def test_aesthetics_divided_by_ten(self) -> None:
@@ -131,9 +133,23 @@ class TestCompositeScore:
             aesthetics_score_mean=10.0,
             aesthetics_score_std=0.0,
         )
-        # Aesthetics: 0.06 * (10.0 / 10.0) = 0.06, plus 3 vision defaults at 0.5
-        expected = 0.06 * (10.0 / 10.0) + 0.04 * 0.5 + 0.04 * 0.5 + 0.04 * 0.5
+        # Aesthetics: 0.06 * (10.0 / 10.0) = 0.06, plus vision defaults at 0.5
+        expected = 0.06 * (10.0 / 10.0) + 0.05 * 0.5 + 0.01 * 0.5 + 0.04 * 0.5
         assert abs(composite_score(m) - expected) < 1e-9
+
+    def test_composite_score_floor_clamp(self) -> None:
+        """Composite score should never go negative even with extreme variance penalty."""
+        m = AggregatedMetrics(
+            dreamsim_similarity_mean=0.1,
+            dreamsim_similarity_std=0.9,
+            hps_score_mean=0.0,
+            hps_score_std=0.0,
+            aesthetics_score_mean=0.0,
+            aesthetics_score_std=0.0,
+            color_histogram_std=0.9,
+        )
+        score = composite_score(m)
+        assert score >= 0.0, f"composite_score should be >= 0.0, got {score}"
 
 
 # -- improvement_epsilon ------------------------------------------------------
@@ -484,7 +500,7 @@ class TestKnowledgeBase:
 
     def test_render_empty_kb(self) -> None:
         kb = KnowledgeBase()
-        assert kb.render_for_reasoning_model() == ""
+        assert format_knowledge_base(kb) == ""
 
     def test_render_includes_hypothesis_chain(self) -> None:
         kb = KnowledgeBase()
@@ -512,7 +528,7 @@ class TestKnowledgeBase:
             confirmed="temperature helps",
             rejected="",
         )
-        output = kb.render_for_reasoning_model()
+        output = format_knowledge_base(kb)
         assert "H1" in output
         assert "H2" in output
         assert "builds on H1" in output
@@ -544,7 +560,7 @@ class TestKnowledgeBase:
             confirmed="yes",
             rejected="",
         )
-        output = kb.render_for_reasoning_model()
+        output = format_knowledge_base(kb)
         assert "Open Problems" in output
         assert "HIGH" in output
         assert "Color matching on dark palettes" in output
@@ -564,7 +580,7 @@ class TestKnowledgeBase:
             confirmed="",
             rejected="brushstrokes ignored",
         )
-        output = kb.render_for_reasoning_model()
+        output = format_knowledge_base(kb)
         assert "REJECTED" in output
         assert "detailed brushstrokes" in output
         assert "Do NOT Repeat" not in output  # merged into tree

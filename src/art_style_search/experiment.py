@@ -62,6 +62,10 @@ class ExperimentProposal:
     builds_on: str | None
     open_problems: list[str]
     lessons: Lessons
+    analysis: str = ""
+    template_changes: str = ""
+    changed_section: str = ""
+    target_category: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +176,10 @@ async def run_experiment(
     last_results: list[IterationResult],
     hypothesis: str = "",
     experiment_desc: str = "",
+    analysis: str = "",
+    template_changes: str = "",
+    changed_section: str = "",
+    target_category: str = "",
 ) -> IterationResult:
     """Execute one experiment: caption -> generate -> evaluate (no reasoning-model call here)."""
     meta_prompt = template.render()
@@ -281,8 +289,8 @@ async def run_experiment(
         image_paths=generated_paths,
         per_image_scores=original_scores,
         aggregated=aggregated,
-        claude_analysis="",
-        template_changes="",
+        claude_analysis=analysis,
+        template_changes=template_changes,
         kept=False,
         hypothesis=hypothesis,
         experiment=experiment_desc,
@@ -291,6 +299,8 @@ async def run_experiment(
         iteration_captions=captions,
         n_images_attempted=n_attempted,
         n_images_succeeded=n_succeeded,
+        changed_section=changed_section,
+        target_category=target_category,
     )
 
 

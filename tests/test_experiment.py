@@ -7,7 +7,7 @@ from art_style_search.experiment import (
     best_kept_result,
     collect_experiment_results,
 )
-from tests.test_state import make_iteration_result, make_metric_scores
+from tests.conftest import make_iteration_result, make_metric_scores
 
 # ---------------------------------------------------------------------------
 # collect_experiment_results

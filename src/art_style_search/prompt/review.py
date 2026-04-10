@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from art_style_search.prompt._format import _format_metrics
+from art_style_search.prompt._format import _format_metrics, format_knowledge_base
 from art_style_search.types import AggregatedMetrics, IterationResult, KnowledgeBase, ReviewResult
 from art_style_search.utils import ReasoningClient, extract_xml_tag
 
@@ -53,7 +53,7 @@ async def review_iteration(
         user_parts.append(
             f"### Experiment {exp.branch_id}\n"
             f"Hypothesis: {prop.hypothesis}\n"
-            f"Changed section: {prop.experiment_desc}\n"
+            f"Changed section: {prop.changed_section}\n"
             f"Kept: {exp.kept}\n"
             f"Metrics: {_format_metrics(m)}\n"
         )
@@ -66,7 +66,7 @@ async def review_iteration(
     if baseline_metrics:
         user_parts.append(f"\n## Baseline Metrics\n{_format_metrics(baseline_metrics)}\n")
 
-    kb_text = knowledge_base.render_for_reasoning_model(max_words=500)
+    kb_text = format_knowledge_base(knowledge_base, max_words=500)
     if kb_text:
         user_parts.append(f"\n{kb_text}\n")
 

@@ -222,3 +222,44 @@ def _parse_refinement_branches(text: str, num_experiments: int) -> list[Refineme
         logger.warning("Got %d valid branches but requested %d", len(results), num_experiments)
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Template validation
+# ---------------------------------------------------------------------------
+
+# Relaxed bounds — tighter than the prompt instructions (8-15) to allow edge cases
+_MIN_SECTIONS = 4
+_MAX_SECTIONS = 20
+_MIN_CAPTION_LENGTH = 100
+_MAX_CAPTION_LENGTH = 2000
+
+
+def validate_template(template: PromptTemplate, changed_section: str = "") -> list[str]:
+    """Return a list of validation errors (empty list = valid template).
+
+    Enforces structural invariants that are specified in the prompt text
+    but were previously not checked in code.
+    """
+    errors: list[str] = []
+
+    if template.sections and template.sections[0].name != "style_foundation":
+        errors.append(f"First section must be 'style_foundation', got '{template.sections[0].name}'")
+
+    if template.caption_sections and template.caption_sections[0] != "Art Style":
+        errors.append(f"First caption section must be 'Art Style', got '{template.caption_sections[0]}'")
+
+    n = len(template.sections)
+    if n < _MIN_SECTIONS or n > _MAX_SECTIONS:
+        errors.append(f"Section count {n} outside bounds [{_MIN_SECTIONS}, {_MAX_SECTIONS}]")
+
+    clt = template.caption_length_target
+    if clt != 0 and (clt < _MIN_CAPTION_LENGTH or clt > _MAX_CAPTION_LENGTH):
+        errors.append(f"Caption length target {clt} outside bounds [{_MIN_CAPTION_LENGTH}, {_MAX_CAPTION_LENGTH}]")
+
+    if changed_section:
+        names = {s.name for s in template.sections}
+        if changed_section not in names:
+            errors.append(f"changed_section '{changed_section}' not in template sections: {sorted(names)}")
+
+    return errors

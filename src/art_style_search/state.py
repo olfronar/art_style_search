@@ -90,6 +90,7 @@ def _metric_scores_from_dict(d: dict[str, Any]) -> MetricScores:
         vision_style=d.get("vision_style", 0.5),
         vision_subject=d.get("vision_subject", 0.5),
         vision_composition=d.get("vision_composition", 0.5),
+        is_fallback=d.get("is_fallback", False),
     )
 
 
@@ -167,6 +168,8 @@ def _iteration_result_from_dict(d: dict[str, Any]) -> IterationResult:
         iteration_captions=[_caption_from_dict(c) for c in d.get("iteration_captions", [])],
         n_images_attempted=d.get("n_images_attempted", 0),
         n_images_succeeded=d.get("n_images_succeeded", 0),
+        changed_section=d.get("changed_section", ""),
+        target_category=d.get("target_category", ""),
     )
 
 
@@ -252,9 +255,13 @@ def _loop_state_from_dict(d: dict[str, Any]) -> LoopState:
 # ---------------------------------------------------------------------------
 
 
+_SCHEMA_VERSION = 3  # v1: dino_similarity era, v2: vision+KB+rigorous, v3: changed_section+target_category
+
+
 def save_state(state: LoopState, path: Path) -> None:
     """Serialize *state* to JSON, writing atomically via temp-file + rename."""
     data = to_dict(state)
+    data["_schema_version"] = _SCHEMA_VERSION
     path.parent.mkdir(parents=True, exist_ok=True)
 
     # Write to a temp file in the same directory, then atomically rename.
@@ -278,6 +285,10 @@ def load_state(path: Path) -> LoopState | None:
 
     logger.info("Loading state from %s", path)
     raw = json.loads(path.read_text(encoding="utf-8"))
+    version = raw.pop("_schema_version", 1)
+    logger.info("State schema version: %d (current: %d)", version, _SCHEMA_VERSION)
+    # All backward compat is handled by .get() defaults in _*_from_dict functions.
+    # Future migrations can be routed here by version number.
     return _loop_state_from_dict(raw)
 
 

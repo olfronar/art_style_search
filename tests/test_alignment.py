@@ -15,7 +15,7 @@ from art_style_search.types import (
     MetricScores,
 )
 from art_style_search.utils import build_ref_gen_pairs
-from tests.test_state import make_aggregated_metrics, make_prompt_template
+from tests.conftest import make_aggregated_metrics, make_prompt_template
 
 
 def _make_scores(dreamsim: float) -> MetricScores:

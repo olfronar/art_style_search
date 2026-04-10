@@ -174,11 +174,18 @@ async def pairwise_compare_experiments(
     experiment.  Returns (rationale, score_for_a) where score_for_a is 1.0 if
     A wins, 0.0 if B wins, 0.5 for tie.
     """
+    import random as _random
+
     n = min(len(pairs_a), len(pairs_b))
     if n == 0:
         return ("No images to compare", 0.5)
     step = max(1, n // max_images)
     indices = list(range(0, n, step))[:max_images]
+
+    # Randomize A/B ordering to eliminate position bias in LLM comparisons
+    swapped = _random.random() < 0.5
+    if swapped:
+        pairs_a, pairs_b = pairs_b, pairs_a
 
     contents: list[object] = []
     for idx in indices:
@@ -211,10 +218,15 @@ async def pairwise_compare_experiments(
         return (rationale, score)
 
     try:
-        return await async_retry(_call, label="Pairwise comparison", circuit_breaker=gemini_circuit_breaker)
+        rationale, score = await async_retry(_call, label="Pairwise comparison", circuit_breaker=gemini_circuit_breaker)
     except RuntimeError:
         logger.error("Pairwise comparison failed after retries")
         return ("Comparison failed", 0.5)
+
+    # Flip the score back if we swapped A/B for position-bias mitigation
+    if swapped:
+        score = 1.0 - score
+    return (rationale, score)
 
 
 def _check_section_ordering(caption_text: str, expected_sections: list[str]) -> str:
@@ -377,8 +389,14 @@ def compute_style_consistency(captions: list[Caption]) -> float:
 
 
 def aggregate(scores: list[MetricScores], *, completion_rate: float = 1.0) -> AggregatedMetrics:
-    """Compute mean and std for each metric across a list of per-image scores."""
-    n = len(scores)
+    """Compute mean and std for each metric across a list of per-image scores.
+
+    Fallback scores (``is_fallback=True``) are excluded from aggregation to
+    prevent zero-score sentinels from contaminating means and inflating std.
+    """
+    # Filter out fallback sentinels for aggregation (they exist only for index alignment)
+    genuine = [s for s in scores if not s.is_fallback]
+    n = len(genuine)
     if n == 0:
         return AggregatedMetrics(
             dreamsim_similarity_mean=0.0,
@@ -397,14 +415,14 @@ def aggregate(scores: list[MetricScores], *, completion_rate: float = 1.0) -> Ag
         m = _mean(vals)
         return (sum((v - m) ** 2 for v in vals) / len(vals)) ** 0.5
 
-    dreamsim_vals = [s.dreamsim_similarity for s in scores]
-    hps = [s.hps_score for s in scores]
-    aes = [s.aesthetics_score for s in scores]
-    color_vals = [s.color_histogram for s in scores]
-    ssim_vals = [s.ssim for s in scores]
-    v_style = [s.vision_style for s in scores]
-    v_subject = [s.vision_subject for s in scores]
-    v_composition = [s.vision_composition for s in scores]
+    dreamsim_vals = [s.dreamsim_similarity for s in genuine]
+    hps = [s.hps_score for s in genuine]
+    aes = [s.aesthetics_score for s in genuine]
+    color_vals = [s.color_histogram for s in genuine]
+    ssim_vals = [s.ssim for s in genuine]
+    v_style = [s.vision_style for s in genuine]
+    v_subject = [s.vision_subject for s in genuine]
+    v_composition = [s.vision_composition for s in genuine]
 
     return AggregatedMetrics(
         dreamsim_similarity_mean=_mean(dreamsim_vals),
@@ -436,6 +454,7 @@ _ZERO_SCORES = MetricScores(
     vision_style=0.0,
     vision_subject=0.0,
     vision_composition=0.0,
+    is_fallback=True,
 )
 
 

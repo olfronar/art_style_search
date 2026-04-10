@@ -56,6 +56,7 @@ from art_style_search.prompt import (
     propose_initial_templates,
     review_iteration,
     synthesize_templates,
+    validate_template,
 )
 from art_style_search.scoring import adaptive_composite_score, composite_score, improvement_epsilon
 from art_style_search.state import (
@@ -753,6 +754,10 @@ async def _propose_iteration_experiments(
                 builds_on=refinement.builds_on,
                 open_problems=refinement.open_problems,
                 lessons=refinement.lessons,
+                analysis=refinement.analysis,
+                template_changes=refinement.template_changes,
+                changed_section=refinement.changed_section,
+                target_category=refinement.target_category,
             )
         )
 
@@ -767,6 +772,16 @@ async def _propose_iteration_experiments(
         # the next propose call benefits from the widened ranked-category pressure.
         logger.warning("No experiments proposed — guard rejected, continuing with empty batch")
         return [], False
+
+    # Validate templates — reject proposals with structural invariant violations
+    valid_proposals: list[ExperimentProposal] = []
+    for p in proposals:
+        errors = validate_template(p.template, p.changed_section)
+        if errors:
+            logger.warning("Skipping invalid proposal (hyp: %.80s): %s", p.hypothesis, "; ".join(errors))
+            continue
+        valid_proposals.append(p)
+    proposals = valid_proposals
 
     return proposals, False
 
@@ -795,6 +810,10 @@ async def _run_experiments_parallel(
             last_results=state.last_iteration_results,
             hypothesis=p.hypothesis,
             experiment_desc=p.experiment_desc,
+            analysis=p.analysis,
+            template_changes=p.template_changes,
+            changed_section=p.changed_section,
+            target_category=p.target_category,
         )
         for i, p in enumerate(proposals)
     ]
@@ -1081,6 +1100,11 @@ def _record_iteration_state(
         state.prev_best_captions = list(current_best.iteration_captions)
 
     state.last_iteration_results = ranking.exp_results
+    # Strip heavy fields from non-kept results before persisting (full data is in iteration logs)
+    for r in ranking.exp_results:
+        if not r.kept:
+            r.iteration_captions = []
+            r.rendered_prompt = ""
     state.experiment_history.extend(ranking.exp_results)
     # Cap persisted history to avoid unbounded state.json growth
     if len(state.experiment_history) > _MAX_PERSISTED_HISTORY:

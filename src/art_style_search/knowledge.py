@@ -124,7 +124,17 @@ def update_knowledge_base(
         existing_by_text = {p.text: p for p in kb.open_problems}
         for p in new_problems:
             existing_by_text[p.text] = p  # newer version wins for duplicates
-        kb.open_problems = sorted(existing_by_text.values(), key=lambda p: _PRIORITY_ORDER.get(p.priority, 3))[:10]
+        kb.open_problems = list(existing_by_text.values())
+
+    # Age stale problems — demote priority if they haven't been solved (always runs)
+    for p in kb.open_problems:
+        age = iteration - p.since_iteration
+        if age > 10:
+            p.priority = "LOW"
+        elif age > 5 and p.priority == "HIGH":
+            p.priority = "MED"
+
+    kb.open_problems = sorted(kb.open_problems, key=lambda p: _PRIORITY_ORDER.get(p.priority, 3))[:10]
 
 
 def build_caption_diffs(prev_captions: list[Caption], worst_captions: list[Caption]) -> str:

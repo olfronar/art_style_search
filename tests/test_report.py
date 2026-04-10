@@ -22,7 +22,7 @@ from art_style_search.types import (
     KnowledgeBase,
     OpenProblem,
 )
-from tests.test_state import (
+from tests.conftest import (
     make_iteration_result,
     make_loop_state,
 )

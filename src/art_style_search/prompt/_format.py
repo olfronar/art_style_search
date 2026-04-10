@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from art_style_search.types import AggregatedMetrics, PromptTemplate, StyleProfile
+from art_style_search.types import (
+    AggregatedMetrics,
+    KnowledgeBase,
+    PromptTemplate,
+    StyleProfile,
+)
 
 
 def _format_style_profile(profile: StyleProfile, compact: bool = False) -> str:
@@ -63,3 +68,138 @@ def _truncate_words(text: str, max_words: int, *, suffix: str = "...") -> str:
     if len(words) <= max_words:
         return text
     return " ".join(words[:max_words]) + suffix
+
+
+# ---------------------------------------------------------------------------
+# KnowledgeBase rendering (moved from types.py)
+# ---------------------------------------------------------------------------
+
+
+def format_knowledge_base(kb: KnowledgeBase, max_words: int = 1500) -> str:
+    """Produce a structured, budget-enforced prompt section for the reasoning model.
+
+    Priority order (fill until budget exhausted):
+    1. Open Problems (~60 words)
+    2. Per-Category Status — count + latest insight only (not all insights)
+    3. Hypothesis Chain — last 5 full, rest as one-liners
+    Rejected hypotheses are already marked REJECTED in the tree — no standalone section.
+    """
+    from art_style_search.types import Hypothesis
+
+    if not kb.hypotheses:
+        return ""
+
+    num_cats = len(kb.categories)
+    header = f"## Knowledge Base ({len(kb.hypotheses)} hypotheses across {num_cats} categories)\n"
+
+    # --- Section 1: Open Problems (always included) ---
+    problems_text = ""
+    if kb.open_problems:
+        lines = ["### Open Problems"]
+        for i, prob in enumerate(kb.open_problems, 1):
+            gap_str = f" \u2014 gap: {prob.metric_gap:.3f}" if prob.metric_gap is not None else ""
+            lines.append(f"{i}. [{prob.priority}] {prob.text}{gap_str}")
+        problems_text = "\n".join(lines)
+
+    # --- Section 2: Per-Category Status (compact: count + latest insight) ---
+    cat_lines = ["### Per-Category Status"]
+    for cat_name in sorted(kb.categories):
+        cat = kb.categories[cat_name]
+        delta_str = f", best Δ: {cat.best_perceptual_delta:+.3f}" if cat.best_perceptual_delta is not None else ""
+        n_conf = len(cat.confirmed_insights)
+        n_rej = len(cat.rejected_approaches)
+        cat_lines.append(
+            f"**{cat_name}** [{len(cat.hypothesis_ids)} hyp, {n_conf} confirmed, {n_rej} rejected{delta_str}]"
+        )
+        if cat.confirmed_insights:
+            cat_lines.append(f"  Latest: {cat.confirmed_insights[-1][:120]}")
+        if cat.rejected_approaches:
+            cat_lines.append(f"  Last rejected: {cat.rejected_approaches[-1][:150]}")
+    cat_text = "\n".join(cat_lines)
+
+    # --- Section 3: Hypothesis Chain (last 5 full, rest collapsed) ---
+    recent_ids = {h.id for h in kb.hypotheses[-5:]}
+
+    def _render_hyp(h: Hypothesis, indent: int, full: bool) -> str:
+        prefix = "  " * indent + ("\u2514\u2500 " if indent > 0 else "")
+        builds = f", builds on {h.parent_id}" if h.parent_id else ""
+        if full:
+            stmt = h.statement[:80] + ("..." if len(h.statement) > 80 else "")
+            return f'{prefix}{h.id} (iter {h.iteration}, {h.category}{builds}) \u2192 {h.outcome.upper()}: "{stmt}"'
+        return f"{prefix}{h.id} (iter {h.iteration}, {h.category}) \u2192 {h.outcome.upper()}"
+
+    roots: list[Hypothesis] = []
+    children_map: dict[str, list[Hypothesis]] = {}
+    for h in kb.hypotheses:
+        if h.parent_id is None:
+            roots.append(h)
+        else:
+            children_map.setdefault(h.parent_id, []).append(h)
+
+    tree_lines: list[str] = ["### Hypothesis Chain"]
+
+    def _walk(h: Hypothesis, indent: int) -> None:
+        tree_lines.append(_render_hyp(h, indent, full=(h.id in recent_ids)))
+        for child in children_map.get(h.id, []):
+            _walk(child, indent + 1)
+
+    for root in roots:
+        _walk(root, 0)
+    # Orphans
+    known_ids = {h.id for h in kb.hypotheses}
+    for h in kb.hypotheses:
+        if h.parent_id and h.parent_id not in known_ids and h not in roots:
+            tree_lines.append(_render_hyp(h, 0, full=(h.id in recent_ids)))
+
+    tree_text = "\n".join(tree_lines)
+
+    # --- Assemble with budget enforcement ---
+    # Priority: header + problems + categories + tree
+    result_parts = [header]
+    budget_remaining = max_words
+
+    if problems_text:
+        pw = len(problems_text.split())
+        result_parts.append(problems_text)
+        budget_remaining -= pw
+
+    cw = len(cat_text.split())
+    if cw <= budget_remaining:
+        result_parts.append("\n" + cat_text)
+        budget_remaining -= cw
+
+    tw = len(tree_text.split())
+    if tw <= budget_remaining:
+        result_parts.append("\n" + tree_text)
+    elif budget_remaining > 100:
+        # Truncate tree: only show last 5 hypotheses
+        short_lines = ["### Hypothesis Chain (recent)"]
+        for h in kb.hypotheses[-5:]:
+            short_lines.append(_render_hyp(h, 0, full=True))
+        result_parts.append("\n" + "\n".join(short_lines))
+
+    return "\n".join(result_parts)
+
+
+def suggest_target_categories(kb: KnowledgeBase, num_targets: int, categories: list[str]) -> list[str]:
+    """Rank categories by improvement potential for diverse experiment targeting."""
+    scored: list[tuple[str, float]] = []
+    for cat in categories:
+        progress = kb.categories.get(cat)
+        if not progress:
+            scored.append((cat, 1.0))  # unexplored = high priority
+            continue
+        n_confirmed = len(progress.confirmed_insights)
+        n_rejected = len(progress.rejected_approaches)
+        n_total = len(progress.hypothesis_ids)
+
+        if n_rejected >= 3 and n_confirmed == 0:
+            score = 0.1  # diminishing returns
+        elif n_confirmed > 0 and progress.best_perceptual_delta and progress.best_perceptual_delta > 0:
+            score = 0.7  # partial success, room to build
+        else:
+            score = 0.5 / max(n_total, 1)
+        scored.append((cat, score))
+
+    scored.sort(key=lambda x: -x[1])
+    return [cat for cat, _ in scored[:num_targets]]

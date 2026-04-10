@@ -30,6 +30,7 @@ from art_style_search.prompt._parse import (
     _parse_target_category,
     _parse_template,
     _parse_template_changes,
+    validate_template,
 )
 from art_style_search.prompt.experiments import enforce_hypothesis_diversity, propose_experiments
 from art_style_search.prompt.initial import propose_initial_templates
@@ -37,14 +38,11 @@ from art_style_search.prompt.review import review_iteration
 from art_style_search.prompt.synthesis import synthesize_templates
 
 __all__ = [
-    # Dataclasses
     "Lessons",
     "RefinementResult",
-    # Formatting helpers (private but used by tests)
     "_format_metrics",
     "_format_style_profile",
     "_format_template",
-    # Parsing helpers (private but used by tests)
     "_parse_analysis",
     "_parse_builds_on",
     "_parse_changed_section",
@@ -58,10 +56,10 @@ __all__ = [
     "_parse_target_category",
     "_parse_template",
     "_parse_template_changes",
-    # Public flows
     "enforce_hypothesis_diversity",
     "propose_experiments",
     "propose_initial_templates",
     "review_iteration",
     "synthesize_templates",
+    "validate_template",
 ]

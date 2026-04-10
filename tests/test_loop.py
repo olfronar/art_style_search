@@ -25,7 +25,7 @@ from art_style_search.types import (
     KnowledgeBase,
     MetricScores,
 )
-from tests.test_state import make_loop_state, make_prompt_template
+from tests.conftest import make_loop_state, make_prompt_template
 
 # ---------------------------------------------------------------------------
 # _discover_images

@@ -13,6 +13,7 @@ from art_style_search.prompt import (
     _parse_open_problems,
     _parse_template,
     _parse_template_changes,
+    validate_template,
 )
 from art_style_search.types import AggregatedMetrics, PromptSection, PromptTemplate
 
@@ -387,3 +388,69 @@ class TestParseChangedSection:
 
     def test_whitespace_trimmed(self) -> None:
         assert _parse_changed_section("<changed_section>  mood_atmosphere  </changed_section>") == "mood_atmosphere"
+
+
+# ---------------------------------------------------------------------------
+# validate_template
+# ---------------------------------------------------------------------------
+
+
+def _make_valid_template() -> PromptTemplate:
+    """Build a minimal valid template for validation tests."""
+    sections = [
+        PromptSection(name="style_foundation", description="Style rules", value="Foundation rules."),
+        PromptSection(name="color_palette", description="Colors", value="Color rules."),
+        PromptSection(name="composition", description="Layout", value="Comp rules."),
+        PromptSection(name="technique", description="Technique", value="Tech rules."),
+    ]
+    return PromptTemplate(
+        sections=sections,
+        caption_sections=["Art Style", "Color Palette", "Composition"],
+        caption_length_target=500,
+    )
+
+
+class TestValidateTemplate:
+    def test_valid_template_passes(self) -> None:
+        assert validate_template(_make_valid_template()) == []
+
+    def test_missing_style_foundation_first(self) -> None:
+        t = _make_valid_template()
+        t.sections[0], t.sections[1] = t.sections[1], t.sections[0]
+        errors = validate_template(t)
+        assert len(errors) == 1
+        assert "style_foundation" in errors[0]
+
+    def test_missing_art_style_first_caption(self) -> None:
+        t = _make_valid_template()
+        t.caption_sections = ["Color Palette", "Art Style"]
+        errors = validate_template(t)
+        assert len(errors) == 1
+        assert "Art Style" in errors[0]
+
+    def test_too_few_sections(self) -> None:
+        t = _make_valid_template()
+        t.sections = t.sections[:2]
+        errors = validate_template(t)
+        assert any("Section count" in e for e in errors)
+
+    def test_caption_length_out_of_bounds(self) -> None:
+        t = _make_valid_template()
+        t.caption_length_target = 50
+        errors = validate_template(t)
+        assert any("Caption length" in e for e in errors)
+
+    def test_changed_section_not_in_template(self) -> None:
+        t = _make_valid_template()
+        errors = validate_template(t, changed_section="nonexistent_section")
+        assert len(errors) == 1
+        assert "nonexistent_section" in errors[0]
+
+    def test_changed_section_valid(self) -> None:
+        t = _make_valid_template()
+        assert validate_template(t, changed_section="color_palette") == []
+
+    def test_zero_caption_length_allowed(self) -> None:
+        t = _make_valid_template()
+        t.caption_length_target = 0
+        assert validate_template(t) == []

@@ -16,15 +16,15 @@ from art_style_search.utils import CATEGORY_SYNONYMS as _CATEGORY_SYNONYMS
 
 _HPS_CEILING = 0.35  # default empirical max for HPS v2 scores; used to normalize to [0, 1]
 
-# Fixed metric weights for composite scoring (sum = 0.96; style_consistency has no per-image equivalent)
+# Fixed metric weights for composite scoring (sum = 0.94; style_consistency has no per-image equivalent)
 _W_DREAMSIM = 0.40
 _W_HPS = 0.05
 _W_AESTHETICS = 0.06
 _W_COLOR = 0.22
 _W_SSIM = 0.11
-_W_STYLE_CON = 0.04
-_W_VISION_STYLE = 0.04
-_W_VISION_SUBJECT = 0.04
+_W_STYLE_CON = 0.06
+_W_VISION_STYLE = 0.05
+_W_VISION_SUBJECT = 0.01
 _W_VISION_COMP = 0.04
 _W_VARIANCE_PENALTY = 0.30
 
@@ -53,7 +53,8 @@ def composite_score(m: AggregatedMetrics) -> float:
 
     All metrics normalized to ~[0, 1] before weighting.
     Weights: DreamSim 40%, Color 22%, SSIM 11%, HPS 5%,
-    Aesthetics 6%, StyleConsistency 4%, Vision 4%+4%+4%=12%.  Total = 1.00.
+    Aesthetics 6%, StyleConsistency 6%, Vision(style) 5% + Vision(subject) 1%
+    + Vision(composition) 4% = 10%.  Total = 1.00.
     Includes a consistency penalty based on per-image score variance.
     """
     base = (
@@ -71,7 +72,7 @@ def composite_score(m: AggregatedMetrics) -> float:
     variance_penalty = _W_VARIANCE_PENALTY * (m.dreamsim_similarity_std + m.color_histogram_std) / 2.0
     # Penalize incomplete experiments: missing images should not inflate scores
     completion_penalty = (1.0 - m.completion_rate) * 0.15
-    return base - variance_penalty - completion_penalty
+    return max(0.0, base - variance_penalty - completion_penalty)
 
 
 def adaptive_composite_score(
