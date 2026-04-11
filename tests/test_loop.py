@@ -299,9 +299,9 @@ class TestApplyExplorationResult:
 
         assert state.best_metrics is original_best_metrics
         assert state.global_best_metrics is original_global_metrics
-        # But templates should be updated
+        # current_template should be updated, best_template must NOT change
         assert state.current_template is result.template
-        assert state.best_template is result.template
+        assert state.best_template is not result.template
 
 
 # ---------------------------------------------------------------------------
@@ -535,7 +535,7 @@ async def test_run_synthesis_experiment_skips_invalid_template(tmp_path: Path, m
     async def should_not_run(*args, **kwargs):
         raise AssertionError("run_experiment should not be called for invalid synthesis templates")
 
-    monkeypatch.setattr("art_style_search.loop.run_experiment", should_not_run)
+    monkeypatch.setattr("art_style_search.workflow.iteration.run_experiment", should_not_run)
 
     await _run_synthesis_experiment((make_prompt_template(), "bad synthesis"), ranking, state, ctx, iteration=2)
 

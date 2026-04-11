@@ -35,6 +35,9 @@ def _as_str(data: object, *, label: str, default: str = "") -> str:
 def _as_int(data: object, *, label: str, default: int = 0) -> int:
     if data is None:
         return default
+    if isinstance(data, bool):
+        msg = f"{label} must be an integer, not a boolean"
+        raise ValueError(msg)
     if isinstance(data, int):
         return data
     if isinstance(data, str) and data.strip().isdigit():
@@ -82,7 +85,7 @@ def style_profile_to_payload(profile: StyleProfile) -> dict[str, Any]:
 
 def payload_to_template(data: object, *, label: str = "template") -> PromptTemplate:
     obj = _require_dict(data, label=label)
-    sections_raw = _require_list(obj.get("sections", []), label=f"{label}.sections")
+    sections_raw = _require_list(obj.get("sections") or [], label=f"{label}.sections")
     sections: list[PromptSection] = []
     for i, item in enumerate(sections_raw):
         sec = _require_dict(item, label=f"{label}.sections[{i}]")
@@ -99,7 +102,7 @@ def payload_to_template(data: object, *, label: str = "template") -> PromptTempl
         label=f"{label}.negative_prompt",
         default="",
     )
-    caption_sections = _as_str_list(obj.get("caption_sections", []), label=f"{label}.caption_sections")
+    caption_sections = _as_str_list(obj.get("caption_sections") or [], label=f"{label}.caption_sections")
     caption_length_target = _as_int(
         obj.get("caption_length_target", obj.get("caption_length")),
         label=f"{label}.caption_length_target",
@@ -116,7 +119,10 @@ def payload_to_template(data: object, *, label: str = "template") -> PromptTempl
 
 def validate_initial_templates_payload(data: object, *, num_branches: int) -> list[PromptTemplate]:
     obj = _require_dict(data, label="initial_templates_response")
-    templates = [payload_to_template(item, label=f"templates[{i}]") for i, item in enumerate(_require_list(obj.get("templates", []), label="templates"))]
+    templates = [
+        payload_to_template(item, label=f"templates[{i}]")
+        for i, item in enumerate(_require_list(obj.get("templates") or [], label="templates"))
+    ]
     if not templates:
         raise ValueError("templates must contain at least one template")
     while len(templates) < num_branches:
@@ -126,12 +132,12 @@ def validate_initial_templates_payload(data: object, *, num_branches: int) -> li
 
 def validate_experiment_batch_payload(data: object, *, num_experiments: int) -> tuple[list[RefinementResult], bool]:
     obj = _require_dict(data, label="experiment_batch_response")
-    experiments = _require_list(obj.get("experiments", []), label="experiments")
+    experiments = _require_list(obj.get("experiments") or [], label="experiments")
     results: list[RefinementResult] = []
     for i, item in enumerate(experiments):
         exp = _require_dict(item, label=f"experiments[{i}]")
-        lessons_obj = _require_dict(exp.get("lessons", {}), label=f"experiments[{i}].lessons")
-        template = payload_to_template(exp.get("template", {}), label=f"experiments[{i}].template")
+        lessons_obj = _require_dict(exp.get("lessons") or {}, label=f"experiments[{i}].lessons")
+        template = payload_to_template(exp.get("template") or {}, label=f"experiments[{i}].template")
         results.append(
             RefinementResult(
                 template=template,
@@ -153,7 +159,7 @@ def validate_experiment_batch_payload(data: object, *, num_experiments: int) -> 
                     ),
                 ),
                 builds_on=_as_str(exp.get("builds_on"), label=f"experiments[{i}].builds_on", default="") or None,
-                open_problems=_as_str_list(exp.get("open_problems", []), label=f"experiments[{i}].open_problems"),
+                open_problems=_as_str_list(exp.get("open_problems") or [], label=f"experiments[{i}].open_problems"),
                 changed_section=_as_str(
                     exp.get("changed_section"),
                     label=f"experiments[{i}].changed_section",
@@ -174,7 +180,7 @@ def validate_experiment_batch_payload(data: object, *, num_experiments: int) -> 
 
 def validate_synthesis_payload(data: object) -> tuple[PromptTemplate, str]:
     obj = _require_dict(data, label="synthesis_response")
-    template = payload_to_template(obj.get("template", {}), label="template")
+    template = payload_to_template(obj.get("template") or {}, label="template")
     rationale = _as_str(obj.get("rationale"), label="rationale")
     return template, rationale
 
@@ -182,10 +188,10 @@ def validate_synthesis_payload(data: object) -> tuple[PromptTemplate, str]:
 def validate_review_payload(data: object) -> ReviewResult:
     obj = _require_dict(data, label="review_response")
     return ReviewResult(
-        experiment_assessments=_as_str_list(obj.get("experiment_assessments", []), label="experiment_assessments"),
+        experiment_assessments=_as_str_list(obj.get("experiment_assessments") or [], label="experiment_assessments"),
         noise_vs_signal=_as_str(obj.get("noise_vs_signal"), label="noise_vs_signal"),
         strategic_guidance=_as_str(obj.get("strategic_guidance"), label="strategic_guidance"),
-        recommended_categories=_as_str_list(obj.get("recommended_categories", []), label="recommended_categories"),
+        recommended_categories=_as_str_list(obj.get("recommended_categories") or [], label="recommended_categories"),
     )
 
 
@@ -196,8 +202,8 @@ def validate_style_compilation_payload(
     reasoning_raw: str,
 ) -> tuple[StyleProfile, PromptTemplate]:
     obj = _require_dict(data, label="style_compilation_response")
-    profile_obj = _require_dict(obj.get("style_profile", {}), label="style_profile")
-    template = payload_to_template(obj.get("initial_template", {}), label="initial_template")
+    profile_obj = _require_dict(obj.get("style_profile") or {}, label="style_profile")
+    template = payload_to_template(obj.get("initial_template") or {}, label="initial_template")
     profile = StyleProfile(
         color_palette=_as_str(profile_obj.get("color_palette"), label="style_profile.color_palette"),
         composition=_as_str(profile_obj.get("composition"), label="style_profile.composition"),

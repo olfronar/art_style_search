@@ -11,11 +11,10 @@ from google import genai
 
 from art_style_search.prompt.json_contracts import schema_hint, validate_style_compilation_payload
 from art_style_search.state import prompt_template_from_dict, style_profile_from_dict, to_dict
-from art_style_search.types import Caption, PromptSection, PromptTemplate, StyleProfile
+from art_style_search.types import Caption, PromptTemplate, StyleProfile
 from art_style_search.utils import (
     ReasoningClient,
     async_retry,
-    extract_xml_tag,
     gemini_circuit_breaker,
     image_to_gemini_part,
 )
@@ -114,68 +113,6 @@ _COMPILATION_PROMPT = (
     "  }\n"
     "}"
 )
-
-
-# ---------------------------------------------------------------------------
-# XML parsing helpers
-# ---------------------------------------------------------------------------
-
-
-_extract_tag = extract_xml_tag  # local alias for tests that import it
-
-
-def _parse_sections(xml: str) -> list[PromptSection]:
-    """Parse all <section name="..." description="...">value</section> tags.
-
-    Uses the shared regexes from ``prompt/_parse.py`` (strict, then loose fallback).
-    """
-    from art_style_search.prompt._parse import _SECTION_RE, _SECTION_RE_LOOSE
-
-    sections = [
-        PromptSection(name=m.group("name").strip(), description=m.group("desc").strip(), value=m.group("value").strip())
-        for m in _SECTION_RE.finditer(xml)
-    ]
-    if not sections:
-        sections = [
-            PromptSection(
-                name=m.group("name").strip(), description=m.group("desc").strip(), value=m.group("value").strip()
-            )
-            for m in _SECTION_RE_LOOSE.finditer(xml)
-        ]
-    return sections
-
-
-def _parse_compilation(text: str, gemini_raw: str, reasoning_raw: str) -> tuple[StyleProfile, PromptTemplate]:
-    """Parse the reasoning-model compilation response into StyleProfile + PromptTemplate."""
-    profile = StyleProfile(
-        color_palette=_extract_tag(text, "color_palette"),
-        composition=_extract_tag(text, "composition"),
-        technique=_extract_tag(text, "technique"),
-        mood_atmosphere=_extract_tag(text, "mood_atmosphere"),
-        subject_matter=_extract_tag(text, "subject_matter"),
-        influences=_extract_tag(text, "influences"),
-        gemini_raw_analysis=gemini_raw,
-        claude_raw_analysis=reasoning_raw,
-    )
-
-    template_block = _extract_tag(text, "initial_template")
-    sections = _parse_sections(template_block)
-    negative = _extract_tag(template_block, "negative")
-
-    caption_sections_raw = _extract_tag(template_block, "caption_sections")
-    caption_sections = [s.strip() for s in caption_sections_raw.split(",") if s.strip()] if caption_sections_raw else []
-
-    caption_length_raw = _extract_tag(template_block, "caption_length")
-    caption_length_target = int(caption_length_raw) if caption_length_raw.isdigit() else 0
-
-    template = PromptTemplate(
-        sections=sections,
-        negative_prompt=negative or None,
-        caption_sections=caption_sections,
-        caption_length_target=caption_length_target,
-    )
-
-    return profile, template
 
 
 # ---------------------------------------------------------------------------

@@ -37,10 +37,15 @@ def _apply_best_result(state: LoopState, result: IterationResult) -> None:
 
 
 def _apply_exploration_result(state: LoopState, result: IterationResult) -> None:
-    """Adopt a result for exploration while preserving the best known metrics."""
+    """Adopt a result for exploration while preserving the best known metrics.
+
+    Only ``current_template`` is updated so that proposals diverge from the
+    exploration direction.  ``best_template`` stays in sync with
+    ``best_metrics`` — this is critical for rigorous-mode confirmatory
+    validation, which replicates the incumbent using ``best_template``.
+    """
     result.kept = True
     state.current_template = result.template
-    state.best_template = result.template
 
 
 def _candidate_results_for_validation(ranking: IterationRanking) -> list[IterationResult]:
