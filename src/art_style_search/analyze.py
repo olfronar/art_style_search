@@ -105,7 +105,7 @@ _COMPILATION_PROMPT = (
     "  <influences>detailed description of influences</influences>\n"
     "</style_profile>\n"
     "<initial_template>\n"
-    '  <section name="art_style_overview" description="core art style identity and rules">'
+    '  <section name="style_foundation" description="core art style identity and rules">'
     "detailed style identity with embedded rules (4-8 sentences)</section>\n"
     '  <section name="medium_and_technique" description="art medium, rendering style, brushwork">'
     "detailed technique description with style rules (4-8 sentences)</section>\n"
