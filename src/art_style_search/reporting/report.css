@@ -559,10 +559,12 @@ h3 {
   font-variation-settings: "opsz" 18, "wght" 400;
 }
 .cat-bar {
-  height: 3px;
+  height: 8px;
   background: var(--rule);
   display: flex;
   position: relative;
+  border-radius: 4px;
+  overflow: hidden;
 }
 .cat-bar-confirmed {
   background: var(--accent);

@@ -8,10 +8,11 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from art_style_search.scoring import composite_score
-from art_style_search.state import load_iteration_log, load_state
-from art_style_search.types import IterationResult, LoopState
+from art_style_search.state import load_iteration_log, load_manifest, load_promotion_log, load_state
+from art_style_search.types import IterationResult, LoopState, PromotionDecision, RunManifest
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,9 @@ class ReportData:
     run_dir: Path
     state: LoopState
     iteration_logs: dict[int, list[IterationResult]] = field(default_factory=dict)
+    manifest: RunManifest | None = None
+    promotion_decisions: list[PromotionDecision] = field(default_factory=list)
+    holdout_summary: dict[str, Any] | None = None
 
     def iteration_numbers(self) -> list[int]:
         """Sorted list of iteration indices that have at least one log."""
@@ -61,6 +65,21 @@ def _load_iteration_logs(log_dir: Path) -> dict[int, list[IterationResult]]:
     return result
 
 
+def _load_holdout_summary(run_dir: Path) -> dict[str, Any] | None:
+    """Load holdout_summary.json if it exists and has silent images."""
+    holdout_path = run_dir / "holdout_summary.json"
+    if not holdout_path.exists():
+        return None
+    try:
+        summary = json.loads(holdout_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("Skipping malformed holdout summary: %s", exc)
+        return None
+    if summary.get("silent_image_count", 0) == 0:
+        return None
+    return summary
+
+
 def load_report_data(run_dir: Path) -> ReportData:
     """Load *state.json* and all iteration logs from *run_dir*."""
     state_file = run_dir / "state.json"
@@ -73,6 +92,9 @@ def load_report_data(run_dir: Path) -> ReportData:
         run_dir=run_dir,
         state=state,
         iteration_logs=_load_iteration_logs(run_dir / "logs"),
+        manifest=load_manifest(run_dir / "run_manifest.json"),
+        promotion_decisions=load_promotion_log(run_dir / "promotion_log.jsonl"),
+        holdout_summary=_load_holdout_summary(run_dir),
     )
 
 

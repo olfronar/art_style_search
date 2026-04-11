@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import html
-import json
 import logging
 from pathlib import Path
 
 from art_style_search.report_data import ReportData, _rel
 from art_style_search.scoring import adaptive_composite_score, composite_score
-from art_style_search.state import load_manifest, load_promotion_log
 from art_style_search.types import (
     CategoryProgress,
     Hypothesis,
@@ -22,6 +20,7 @@ from art_style_search.types import (
 logger = logging.getLogger(__name__)
 
 _MAX_TREE_DEPTH = 6
+_PRIORITY_PREFIXES = ("[HIGH] ", "[MED] ", "[LOW] ", "[HIGH]", "[MED]", "[LOW]")
 
 
 def _h(text: str | None) -> str:
@@ -287,6 +286,21 @@ def _render_iteration_drilldown(data: ReportData, report_dir: Path) -> str:
   </div>
 </details>"""
         )
+    legend = (
+        '<details class="fold metric-legend">'
+        "<summary><span class='fold-cue'>&sect;</span> Metric abbreviations</summary>"
+        "<dl class='kv'>"
+        "<div class='kv-row'><dt>DS</dt><dd>DreamSim perceptual similarity (human-aligned)</dd></div>"
+        "<div class='kv-row'><dt>Color</dt><dd>HSV color histogram intersection</dd></div>"
+        "<div class='kv-row'><dt>SSIM</dt><dd>Structural similarity index</dd></div>"
+        "<div class='kv-row'><dt>HPS</dt><dd>Human Preference Score v2 (caption-image alignment)</dd></div>"
+        "<div class='kv-row'><dt>Aes</dt><dd>LAION Aesthetics predictor (1-10 scale)</dd></div>"
+        "<div class='kv-row'><dt>V[S]</dt><dd>Vision style fidelity (MATCH/PARTIAL/MISS)</dd></div>"
+        "<div class='kv-row'><dt>V[Su]</dt><dd>Vision subject fidelity</dd></div>"
+        "<div class='kv-row'><dt>V[Co]</dt><dd>Vision composition fidelity</dd></div>"
+        "</dl></details>"
+    )
+
     return f"""
 <section class="iterations">
   <div class="section-head">
@@ -294,6 +308,7 @@ def _render_iteration_drilldown(data: ReportData, report_dir: Path) -> str:
     <h2>Iterations</h2>
     <p class="section-kicker">Per-iteration experiments with their hypotheses, scores, and the winner's reference / generated pairs.</p>
   </div>
+  {legend}
   {"".join(blocks)}
 </section>
 """
@@ -386,7 +401,7 @@ def _render_hypothesis_tree(kb: KnowledgeBase) -> str:
         inner = "".join(_render_node(child, depth + 1) for child in children)
         if children:
             return (
-                f"<details class='{css_class}' open>"
+                f"<details class='{css_class}'>"
                 f"<summary><span class='hyp-meta'>{meta}</span></summary>"
                 f"<div class='hyp-statement'>{statement}</div>"
                 f"{lesson}"
@@ -412,11 +427,17 @@ def _render_open_problems(problems: list[OpenProblem]) -> str:
     for idx, problem in enumerate(problems, start=1):
         gap = f"{problem.metric_gap:+.3f}" if problem.metric_gap is not None else "—"
         priority = problem.priority or "LOW"
+        # Strip redundant priority prefix from text (e.g. "[HIGH] ...")
+        display_text = problem.text
+        for prefix in _PRIORITY_PREFIXES:
+            if display_text.startswith(prefix):
+                display_text = display_text[len(prefix) :]
+                break
         items.append(
             f"<li class='prio-{_h(priority.lower())}'>"
             f"<span class='prob-num'>{idx:02d}</span>"
             f"<span class='prio-chip'>{_h(priority)}</span>"
-            f"<span class='prob-text'>{_h(problem.text)}</span>"
+            f"<span class='prob-text'>{_h(display_text)}</span>"
             f"<span class='prob-meta'>"
             f"<span>{_h(problem.category.replace('_', ' '))}</span>"
             f"<span>iter {problem.since_iteration}</span>"
@@ -453,7 +474,7 @@ def _render_kb_section(data: ReportData) -> str:
 
 
 def _render_protocol_section(data: ReportData) -> str:
-    manifest = load_manifest(data.run_dir / "run_manifest.json")
+    manifest = data.manifest
     if manifest is None:
         return ""
 
@@ -492,7 +513,7 @@ def _render_protocol_section(data: ReportData) -> str:
 
 
 def _render_promotion_section(data: ReportData) -> str:
-    decisions = load_promotion_log(data.run_dir / "promotion_log.jsonl")
+    decisions = data.promotion_decisions
     if not decisions:
         return ""
 
@@ -518,12 +539,18 @@ def _render_promotion_section(data: ReportData) -> str:
 
     n_promoted = sum(1 for decision in decisions if decision.decision == "promoted")
     n_explored = sum(1 for decision in decisions if decision.decision == "exploration")
+    n_rejected = len(decisions) - n_promoted - n_explored
+    kicker = (
+        f"{n_promoted} promoted, "
+        f"{n_explored} {'exploration' if n_explored == 1 else 'explorations'}, "
+        f"{n_rejected} rejected."
+    )
     return f"""
 <section class="promotion-section">
   <div class="section-head">
     <span class="section-numeral">V</span>
     <h2>Promotion Decisions</h2>
-    <p class="section-kicker">{n_promoted} promoted, {n_explored} explorations, {len(decisions) - n_promoted - n_explored} rejected.</p>
+    <p class="section-kicker">{kicker}</p>
   </div>
   <div class="table-wrap">
     <table class="experiment-table promotion-table">
@@ -540,14 +567,18 @@ def _render_promotion_section(data: ReportData) -> str:
 
 
 def _render_holdout_section(data: ReportData) -> str:
-    holdout_path = data.run_dir / "holdout_summary.json"
-    if not holdout_path.exists():
-        return ""
+    summary = data.holdout_summary
+    if summary is None:
+        return (
+            '<section class="holdout-section">'
+            '<div class="section-head"><span class="section-numeral">VI</span>'
+            "<h2>Silent-Image Holdout</h2></div>"
+            '<p class="empty">No holdout data available for this run. '
+            "Enable the rigorous protocol with an information barrier to generate holdout metrics.</p>"
+            "</section>"
+        )
 
-    summary = json.loads(holdout_path.read_text(encoding="utf-8"))
     n_silent = summary.get("silent_image_count", 0)
-    if n_silent == 0:
-        return ""
 
     iter0_mean = summary.get("iteration_0_mean")
     final_mean = summary.get("final_mean")

@@ -21,6 +21,7 @@ from art_style_search.types import (
 logger = logging.getLogger(__name__)
 
 _PRIORITY_ORDER = {"HIGH": 0, "MED": 1, "LOW": 2}
+_PRIORITY_PREFIX_RE = re.compile(r"^\[(HIGH|MED|LOW)\]\s*", re.IGNORECASE)
 IterationDecision = Literal["promoted", "exploration", "rejected"]
 
 
@@ -65,7 +66,16 @@ def _manage_open_problems(
         prev_problem_texts = {p.text: p.since_iteration for p in kb.open_problems}
 
         new_problems: list[OpenProblem] = []
-        for prob_text in proposal.open_problems:
+        for raw_prob_text in proposal.open_problems:
+            # Strip LLM-emitted priority prefix (e.g. "[HIGH] ...") and use it
+            prefix_match = _PRIORITY_PREFIX_RE.match(raw_prob_text)
+            if prefix_match:
+                llm_priority: str | None = prefix_match.group(1).upper()
+                prob_text = raw_prob_text[prefix_match.end() :]
+            else:
+                llm_priority = None
+                prob_text = raw_prob_text
+
             prob_cat = _resolve_category(
                 prob_text,
                 category_names,
@@ -74,7 +84,9 @@ def _manage_open_problems(
             )
             cat_progress = kb.categories.get(prob_cat)
 
-            if cat_progress is None or not cat_progress.confirmed_insights:
+            if llm_priority and llm_priority in _PRIORITY_ORDER:
+                priority = llm_priority
+            elif cat_progress is None or not cat_progress.confirmed_insights:
                 priority = "HIGH"
             elif cat_progress.rejected_approaches and len(cat_progress.rejected_approaches) >= len(
                 cat_progress.confirmed_insights
