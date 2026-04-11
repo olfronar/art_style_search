@@ -6,7 +6,7 @@ import logging
 
 from art_style_search.contracts import ExperimentProposal
 from art_style_search.prompt import enforce_hypothesis_diversity, propose_experiments, validate_template
-from art_style_search.types import LoopState
+from art_style_search.types import ConvergenceReason, LoopState
 from art_style_search.workflow.context import RunContext
 from art_style_search.workflow.policy import _should_honor_stop
 
@@ -42,8 +42,6 @@ async def _propose_iteration_experiments(
             if _should_honor_stop(state, ctx, reason="reasoning model emitted stop"):
                 logger.info("Reasoning model signaled convergence — honored")
                 state.converged = True
-                from art_style_search.types import ConvergenceReason
-
                 state.convergence_reason = ConvergenceReason.REASONING_STOP
                 return [], True
             refinement.should_stop = False
@@ -66,8 +64,6 @@ async def _propose_iteration_experiments(
         if _should_honor_stop(state, ctx, reason="no experiments proposed"):
             logger.warning("No experiments proposed — honoring stop")
             state.converged = True
-            from art_style_search.types import ConvergenceReason
-
             state.convergence_reason = ConvergenceReason.REASONING_STOP
             return [], True
         logger.warning("No experiments proposed — guard rejected, continuing with empty batch")
