@@ -634,7 +634,24 @@ async def _zero_step(ctx: RunContext, all_ref_paths: list[Path]) -> LoopState:
         reasoning_model=config.reasoning_model,
         cache_path=shared_cache,
     )
-    _validate_template_or_raise(initial_template, context="Zero-step compiled template")
+    cache_errors = validate_template(initial_template)
+    if cache_errors:
+        logger.warning(
+            "Cached style template invalid (%s) — re-running analysis",
+            "; ".join(cache_errors),
+        )
+        if shared_cache.exists():
+            shared_cache.unlink()
+        style_profile, initial_template = await analyze_style(
+            fixed_refs,
+            captions,
+            gemini_client=ctx.gemini_client,
+            reasoning_client=ctx.reasoning_client,
+            caption_model=config.caption_model,
+            reasoning_model=config.reasoning_model,
+            cache_path=shared_cache,
+        )
+        _validate_template_or_raise(initial_template, context="Zero-step compiled template")
 
     # Copy into run dir for provenance
     if shared_cache.exists() and not run_cache.exists():
