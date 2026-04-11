@@ -218,7 +218,7 @@ async def run_experiment(
     eval_captions = [caption_by_path[orig] for orig, _ in pairs]
 
     # Run metric evaluation and vision comparison in parallel
-    (metric_scores, _, n_eval_failed), (vision_feedbacks, vision_scores_list) = await asyncio.gather(
+    (metric_scores, n_eval_failed), (vision_feedbacks, vision_scores_list) = await asyncio.gather(
         evaluate_images(
             gen_paths_for_eval, ref_paths_for_eval, eval_captions, registry=registry, semaphore=eval_semaphore
         ),
@@ -384,7 +384,7 @@ async def replicate_experiment(
         caption_by_path = {c.image_path: c.text for c in captions}
         eval_captions = [caption_by_path[orig] for orig, _ in pairs]
 
-        (metric_scores, _, _n_eval_failed), (_, vision_scores_list) = await asyncio.gather(
+        (metric_scores, _n_eval_failed), (_, vision_scores_list) = await asyncio.gather(
             evaluate_images(gen_paths, ref_paths_eval, eval_captions, registry=registry, semaphore=eval_semaphore),
             compare_vision_per_image(
                 pairs, eval_captions, client=gemini_client, model=config.caption_model, semaphore=gemini_semaphore

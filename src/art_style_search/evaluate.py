@@ -480,14 +480,14 @@ async def evaluate_images(
     *,
     registry: ModelRegistry,
     semaphore: asyncio.Semaphore,
-) -> tuple[list[MetricScores], AggregatedMetrics, int]:
+) -> tuple[list[MetricScores], int]:
     """Evaluate each generated image against its paired reference.
 
     Each generated image is compared against ONLY its corresponding reference
     (not the mean of all references).  HPS is scored against the per-image
     caption (the actual generation prompt), not the meta-prompt.
 
-    Returns (per-image scores, aggregated statistics, n_eval_failed).
+    Returns (per-image scores, n_eval_failed).
     Failed evaluations get zero-score sentinels to preserve index alignment.
     """
 
@@ -517,6 +517,5 @@ async def evaluate_images(
     if n_eval_failed:
         logger.warning("evaluate_images: %d/%d evaluations failed, using zero scores", n_eval_failed, len(results))
     scores = [r if r is not None else _ZERO_SCORES for r in results]
-    aggregated = aggregate(scores)
 
-    return scores, aggregated, n_eval_failed
+    return scores, n_eval_failed

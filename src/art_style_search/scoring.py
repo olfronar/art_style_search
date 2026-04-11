@@ -27,6 +27,7 @@ _W_VISION_STYLE = 0.05
 _W_VISION_SUBJECT = 0.01
 _W_VISION_COMP = 0.04
 _W_VARIANCE_PENALTY = 0.30
+_W_COMPLETION_PENALTY = 0.15
 
 # Improvement must exceed this threshold to be accepted (filters generation noise)
 IMPROVEMENT_EPSILON = 0.005
@@ -71,7 +72,7 @@ def composite_score(m: AggregatedMetrics) -> float:
     # Penalize inconsistency: high std across images means unreliable reproduction
     variance_penalty = _W_VARIANCE_PENALTY * (m.dreamsim_similarity_std + m.color_histogram_std) / 2.0
     # Penalize incomplete experiments: missing images should not inflate scores
-    completion_penalty = (1.0 - m.completion_rate) * 0.15
+    completion_penalty = (1.0 - m.completion_rate) * _W_COMPLETION_PENALTY
     return max(0.0, base - variance_penalty - completion_penalty)
 
 

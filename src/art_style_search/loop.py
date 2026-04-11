@@ -345,7 +345,11 @@ def _log_promotion_decision(
     """Log a promotion decision to promotion_log.jsonl."""
     selected = candidate or ranking.best_exp
     score = candidate_score if candidate_score is not None else composite_score(selected.aggregated)
-    test_result = promotion_test if promotion_test is not None else (ranking.promotion_test if selected is ranking.best_exp else None)
+    test_result = (
+        promotion_test
+        if promotion_test is not None
+        else (ranking.promotion_test if selected is ranking.best_exp else None)
+    )
     pd = PromotionDecision(
         iteration=state.iteration,
         candidate_score=score,
@@ -970,7 +974,9 @@ async def _confirmatory_validation(
     updated_agg = [r.aggregated for r in ranking.exp_results]
     ranking.adaptive_scores = {id(r): adaptive_composite_score(r.aggregated, updated_agg) for r in ranking.exp_results}
 
-    best_candidate_exp, best_candidate_eval = max(candidate_evals, key=lambda x: composite_score(x[1].median_aggregated))
+    best_candidate_exp, best_candidate_eval = max(
+        candidate_evals, key=lambda x: composite_score(x[1].median_aggregated)
+    )
     ranking.best_exp = best_candidate_exp
     ranking.best_score = composite_score(best_candidate_exp.aggregated)
     ranking.best_replicate_scores = [composite_score(agg) for agg in best_candidate_eval.replicate_aggregated]
@@ -1069,15 +1075,13 @@ def _update_knowledge_base_for_iteration(
     proposals: list[ExperimentProposal],
     baseline_metrics: AggregatedMetrics | None,
     iteration: int,
+    decision: IterationDecision = "rejected",
 ) -> None:
     """Phase 4 (KB): update the knowledge base after the iteration decision is known."""
     decision_by_id: dict[int, IterationDecision] = {r.branch_id: "rejected" for r in ranking.exp_results}
     selected = next((result for result in ranking.exp_results if result.kept), None)
     if selected is not None:
-        if selected is ranking.best_exp and selected.kept and state.best_metrics is selected.aggregated:
-            decision_by_id[selected.branch_id] = "promoted"
-        elif selected.kept:
-            decision_by_id[selected.branch_id] = "exploration"
+        decision_by_id[selected.branch_id] = decision
 
     # Synthesis result (if any) is appended to exp_results but has no matching
     # proposal — zip() with strict=False stops at the shorter of the two.
@@ -1359,8 +1363,8 @@ async def run(config: Config) -> LoopState:
             logger.warning("Confirmatory validation failed — falling back to single-pass", exc_info=True)
 
         baseline_metrics = state.best_metrics
-        _apply_iteration_result(state, ranking, ctx.config)
-        _update_knowledge_base_for_iteration(state, ranking, proposals, baseline_metrics, iteration)
+        decision = _apply_iteration_result(state, ranking, ctx.config)
+        _update_knowledge_base_for_iteration(state, ranking, proposals, baseline_metrics, iteration, decision)
         _record_iteration_state(state, ranking, iteration, ctx)
 
         if _check_plateau_convergence(state, ctx):
