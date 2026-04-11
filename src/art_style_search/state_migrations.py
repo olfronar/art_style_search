@@ -40,6 +40,21 @@ def _migrate_iteration_result_payload(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _migrate_category_progress_payload(data: dict[str, Any]) -> dict[str, Any]:
+    if "best_perceptual_delta" not in data and "best_dino_delta" in data:
+        data["best_perceptual_delta"] = data.pop("best_dino_delta")
+    return data
+
+
+def _migrate_knowledge_base_payload(data: dict[str, Any]) -> dict[str, Any]:
+    categories = data.get("categories", {})
+    if isinstance(categories, dict):
+        data["categories"] = {
+            k: _migrate_category_progress_payload(dict(v)) if isinstance(v, dict) else v for k, v in categories.items()
+        }
+    return data
+
+
 def _migrate_state_payload(raw: dict[str, Any], version: int) -> dict[str, Any]:
     data = dict(raw)
     if version < 2:
@@ -64,6 +79,8 @@ def _migrate_state_payload(raw: dict[str, Any], version: int) -> dict[str, Any]:
         data["best_metrics"] = _migrate_aggregated_metrics_payload(dict(data["best_metrics"]))
     if "global_best_metrics" in data and isinstance(data["global_best_metrics"], dict):
         data["global_best_metrics"] = _migrate_aggregated_metrics_payload(dict(data["global_best_metrics"]))
+    if "knowledge_base" in data and isinstance(data["knowledge_base"], dict):
+        data["knowledge_base"] = _migrate_knowledge_base_payload(dict(data["knowledge_base"]))
     return data
 
 
