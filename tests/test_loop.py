@@ -448,7 +448,18 @@ async def test_confirmatory_validation_overwrites_selected_result_with_replicate
     median_scores = [MetricScores(dreamsim_similarity=0.93, hps_score=0.25, aesthetics_score=5.0)] * 3
     incumbent_scores = [MetricScores(dreamsim_similarity=0.60, hps_score=0.25, aesthetics_score=5.0)] * 3
 
-    async def fake_replicate_experiment(*, branch_id, **kwargs):
+    async def fake_replicate_experiment(
+        *,
+        template,
+        branch_id,
+        iteration,
+        fixed_refs,
+        config,
+        services,
+        n_replicates=3,
+        existing_result=None,
+        existing_scores=None,
+    ):
         if branch_id == 2:
             return ReplicatedEvaluation(
                 template=synth.template,
@@ -525,10 +536,21 @@ async def test_confirmatory_validation_seeds_candidates_with_existing_result(
 
     seen_existing_results: dict[int, IterationResult] = {}
 
-    async def fake_replicate_experiment(*, branch_id, **kwargs):
+    async def fake_replicate_experiment(
+        *,
+        template,
+        branch_id,
+        iteration,
+        fixed_refs,
+        config,
+        services,
+        n_replicates=3,
+        existing_result=None,
+        existing_scores=None,
+    ):
         if branch_id in (0, 1):
-            seen_existing_results[branch_id] = kwargs["existing_result"]
-            assert kwargs["existing_scores"] is None
+            seen_existing_results[branch_id] = existing_result
+            assert existing_scores is None
         return ReplicatedEvaluation(
             template=_make_valid_template(),
             branch_id=branch_id,

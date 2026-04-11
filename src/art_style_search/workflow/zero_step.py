@@ -9,7 +9,8 @@ from pathlib import Path
 
 from art_style_search.analyze import analyze_style
 from art_style_search.experiment import collect_experiment_results, run_experiment
-from art_style_search.prompt import propose_initial_templates, validate_template
+from art_style_search.prompt._parse import validate_template
+from art_style_search.prompt.initial import propose_initial_templates
 from art_style_search.scoring import composite_score
 from art_style_search.state import save_iteration_log, save_state
 from art_style_search.types import KnowledgeBase, LoopState, PromptTemplate
@@ -139,10 +140,6 @@ async def _zero_step(ctx: RunContext, all_ref_paths: list[Path]) -> LoopState:
                 iteration=0,
                 fixed_refs=fixed_refs,
                 config=ctx.config,
-                gemini_client=ctx.gemini_client,
-                registry=ctx.registry,
-                gemini_semaphore=ctx.gemini_semaphore,
-                eval_semaphore=ctx.eval_semaphore,
                 last_results=[],
                 hypothesis=f"Initial template {i}",
                 experiment_desc="Zero-step diverse template",

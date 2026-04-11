@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 
 from art_style_search.contracts import ExperimentProposal
-from art_style_search.prompt import enforce_hypothesis_diversity, propose_experiments, validate_template
+from art_style_search.prompt._parse import validate_template
+from art_style_search.prompt.experiments import enforce_hypothesis_diversity, propose_experiments
 from art_style_search.types import ConvergenceReason, LoopState
 from art_style_search.workflow.context import RunContext
 from art_style_search.workflow.policy import _should_honor_stop

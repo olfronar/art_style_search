@@ -12,7 +12,9 @@ from art_style_search.experiment import (
     replicate_experiment,
     run_experiment,
 )
-from art_style_search.prompt import review_iteration, synthesize_templates, validate_template
+from art_style_search.prompt._parse import validate_template
+from art_style_search.prompt.review import review_iteration
+from art_style_search.prompt.synthesis import synthesize_templates
 from art_style_search.scoring import (
     adaptive_composite_score,
     composite_score,
@@ -56,10 +58,6 @@ async def _run_experiments_parallel(
             iteration=iteration,
             fixed_refs=state.fixed_references,
             config=ctx.config,
-            gemini_client=ctx.gemini_client,
-            registry=ctx.registry,
-            gemini_semaphore=ctx.gemini_semaphore,
-            eval_semaphore=ctx.eval_semaphore,
             last_results=state.last_iteration_results,
             hypothesis=proposal.hypothesis,
             experiment_desc=proposal.experiment_desc,
@@ -162,10 +160,6 @@ async def _confirmatory_validation(
                 iteration=iteration,
                 fixed_refs=state.fixed_references,
                 config=ctx.config,
-                gemini_client=ctx.gemini_client,
-                registry=ctx.registry,
-                gemini_semaphore=ctx.gemini_semaphore,
-                eval_semaphore=ctx.eval_semaphore,
                 n_replicates=3,
                 existing_result=exp,
                 services=ctx.services,
@@ -179,10 +173,6 @@ async def _confirmatory_validation(
                 iteration=iteration,
                 fixed_refs=state.fixed_references,
                 config=ctx.config,
-                gemini_client=ctx.gemini_client,
-                registry=ctx.registry,
-                gemini_semaphore=ctx.gemini_semaphore,
-                eval_semaphore=ctx.eval_semaphore,
                 n_replicates=3,
                 services=ctx.services,
             )
@@ -271,10 +261,6 @@ async def _run_synthesis_experiment(
         iteration=iteration,
         fixed_refs=state.fixed_references,
         config=ctx.config,
-        gemini_client=ctx.gemini_client,
-        registry=ctx.registry,
-        gemini_semaphore=ctx.gemini_semaphore,
-        eval_semaphore=ctx.eval_semaphore,
         last_results=state.last_iteration_results,
         hypothesis=merged_hypothesis,
         experiment_desc="Synthesis of top experiments",

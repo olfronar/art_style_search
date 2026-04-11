@@ -7,15 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from art_style_search.report import (
-    _count_descendants,
-    _load_iteration_logs,
-    _rel,
-    _render_hypothesis_tree,
-    _render_open_problems,
-    build_report,
-    load_report_data,
-)
+from art_style_search.report import build_report
+from art_style_search.report_data import _load_iteration_logs, _rel, load_report_data
+from art_style_search.reporting.render import _count_descendants, _render_hypothesis_tree, _render_open_problems
 from art_style_search.state import save_iteration_log, save_state
 from art_style_search.types import (
     Hypothesis,

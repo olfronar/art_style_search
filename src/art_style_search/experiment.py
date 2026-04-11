@@ -10,7 +10,6 @@ from dataclasses import replace
 from pathlib import Path
 
 from art_style_search.config import Config
-from art_style_search.contracts import ExperimentProposal as ExperimentProposal
 from art_style_search.evaluate import (
     aggregate,
     check_caption_compliance,
@@ -195,11 +194,6 @@ async def run_experiment(
     template_changes: str = "",
     changed_section: str = "",
     target_category: str = "",
-    # Deprecated — accepted but ignored for backward compatibility with tests.
-    gemini_client: object = None,
-    registry: object = None,
-    gemini_semaphore: object = None,
-    eval_semaphore: object = None,
 ) -> IterationResult:
     """Execute one experiment: caption -> generate -> evaluate (no reasoning-model call here)."""
     meta_prompt = template.render()
@@ -330,11 +324,6 @@ async def replicate_experiment(
     n_replicates: int = 3,
     existing_result: IterationResult | None = None,
     existing_scores: list[MetricScores] | None = None,
-    # Deprecated — accepted but ignored for backward compatibility with tests.
-    gemini_client: object = None,
-    registry: object = None,
-    gemini_semaphore: object = None,
-    eval_semaphore: object = None,
 ) -> ReplicatedEvaluation:
     """Run replicated caption+generate+evaluate cycles for confirmatory validation.
 

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from art_style_search.report import _per_image_score_for
+from art_style_search.reporting.render import _per_image_score_for
 from art_style_search.scoring import composite_score, per_image_composite
 from art_style_search.types import (
     Caption,

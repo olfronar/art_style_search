@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from art_style_search.experiment import ExperimentProposal
+from art_style_search.contracts import ExperimentProposal, Lessons
 from art_style_search.knowledge import build_caption_diffs, update_knowledge_base
-from art_style_search.prompt import Lessons
 from art_style_search.types import (
     AggregatedMetrics,
     Caption,

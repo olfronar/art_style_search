@@ -20,8 +20,8 @@ import pytest
 from PIL import Image
 
 from art_style_search.config import Config
+from art_style_search.contracts import Lessons, RefinementResult
 from art_style_search.evaluate import aggregate
-from art_style_search.prompt import Lessons, RefinementResult
 from art_style_search.state import save_state
 from art_style_search.types import (
     AggregatedMetrics,
@@ -221,7 +221,7 @@ def _apply_all_patches(monkeypatch, tmp_path: Path, ref_paths: list[Path]):
     )
 
     # 1. Mock _setup_run_context to avoid real client construction + model loading
-    from art_style_search.loop import RunContext
+    from art_style_search.workflow.context import RunContext
 
     async def fake_setup_run_context(config):
         return RunContext(
@@ -261,10 +261,7 @@ def _apply_all_patches(monkeypatch, tmp_path: Path, ref_paths: list[Path]):
         fixed_refs,
         config,
         *,
-        gemini_client,
-        registry,
-        gemini_semaphore,
-        eval_semaphore,
+        services,
         last_results,
         hypothesis="",
         experiment_desc="",
@@ -272,7 +269,6 @@ def _apply_all_patches(monkeypatch, tmp_path: Path, ref_paths: list[Path]):
         template_changes="",
         changed_section="",
         target_category="",
-        services=None,
     ):
         from art_style_search.types import IterationResult
 
