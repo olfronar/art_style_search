@@ -7,7 +7,7 @@ import json
 import logging
 from pathlib import Path
 
-from google import genai
+from google import genai  # type: ignore[attr-defined]
 
 from art_style_search.prompt.json_contracts import schema_hint, validate_style_compilation_payload
 from art_style_search.state import prompt_template_from_dict, style_profile_from_dict, to_dict

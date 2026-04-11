@@ -8,7 +8,7 @@ import random
 import re
 from pathlib import Path
 
-from google import genai
+from google import genai  # type: ignore[attr-defined]
 from PIL import Image
 
 from art_style_search.models import ModelRegistry

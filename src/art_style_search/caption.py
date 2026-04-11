@@ -7,7 +7,7 @@ import json
 import logging
 from pathlib import Path
 
-from google import genai
+from google import genai  # type: ignore[attr-defined]
 
 from art_style_search.types import Caption
 from art_style_search.utils import async_retry, caption_circuit_breaker, image_to_gemini_part

@@ -8,8 +8,8 @@ import os
 import tempfile
 from pathlib import Path
 
-from google import genai
-from google.genai import types as genai_types
+from google import genai  # type: ignore[attr-defined]
+from google.genai import types as genai_types  # type: ignore[attr-defined]
 
 from art_style_search.utils import async_retry, generation_circuit_breaker
 

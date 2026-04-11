@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from google.genai import types as genai_types
+from google.genai import types as genai_types  # type: ignore[attr-defined]
 
 if TYPE_CHECKING:
     from art_style_search.types import IterationResult

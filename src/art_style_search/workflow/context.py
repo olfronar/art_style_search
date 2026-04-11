@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from google import genai
+from google import genai  # type: ignore[attr-defined]
 
 from art_style_search.config import Config
 from art_style_search.models import ModelRegistry

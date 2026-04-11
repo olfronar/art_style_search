@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
 
-from google import genai
+from google import genai  # type: ignore[attr-defined]
 
 from art_style_search.caption import caption_references, caption_single
 from art_style_search.evaluate import compare_vision_per_image, evaluate_images, pairwise_compare_experiments

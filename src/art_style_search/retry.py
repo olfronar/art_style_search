@@ -23,7 +23,7 @@ def _is_rate_limit(exc: Exception) -> bool:
         return True
     # Check explicit class if google.api_core is available
     try:
-        from google.api_core.exceptions import ResourceExhausted
+        from google.api_core.exceptions import ResourceExhausted  # type: ignore[attr-defined]
 
         if isinstance(exc, ResourceExhausted):
             return True
