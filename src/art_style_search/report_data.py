@@ -36,10 +36,13 @@ class ReportData:
         return sorted(self.iteration_logs.keys())
 
     def winner_of(self, iteration: int) -> IterationResult | None:
-        """Return the experiment with the highest ``composite_score`` for *iteration*."""
+        """Return the kept experiment, falling back to highest ``composite_score``."""
         results = self.iteration_logs.get(iteration, [])
         if not results:
             return None
+        kept = [r for r in results if r.kept]
+        if kept:
+            return max(kept, key=lambda r: composite_score(r.aggregated))
         return max(results, key=lambda r: composite_score(r.aggregated))
 
 

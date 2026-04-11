@@ -23,6 +23,122 @@ _MAX_TREE_DEPTH = 6
 _PRIORITY_PREFIXES = ("[HIGH] ", "[MED] ", "[LOW] ", "[HIGH]", "[MED]", "[LOW]")
 
 
+def _strip_priority_prefix(text: str) -> str:
+    """Strip leading [HIGH]/[MED]/[LOW] prefix from problem text."""
+    for prefix in _PRIORITY_PREFIXES:
+        if text.startswith(prefix):
+            return text[len(prefix) :]
+    return text
+
+
+_VERDICT_TAG_RE = __import__("re").compile(
+    r"<(style|subject|composition)\s+verdict=\"(MATCH|PARTIAL|MISS)\">(.*?)</\1>",
+    __import__("re").DOTALL,
+)
+_IMAGE_HEADER_RE = __import__("re").compile(r"^\*\*(.+?)\*\*\s*\[([^\]]+)\]:\s*", __import__("re").MULTILINE)
+
+_VERDICT_CSS = {"MATCH": "verdict-match", "PARTIAL": "verdict-partial", "MISS": "verdict-miss"}
+_VERDICT_LABEL = {"MATCH": "Match", "PARTIAL": "Partial", "MISS": "Miss"}
+_DIM_LABEL = {"style": "Style", "subject": "Subject", "composition": "Composition"}
+
+
+def _format_vision_feedback(raw: str) -> str:
+    """Convert raw vision feedback with XML-like verdict tags into styled HTML."""
+    # Split into per-image blocks by the **filename** [codes]: pattern
+    parts = _IMAGE_HEADER_RE.split(raw)
+    if len(parts) < 4:
+        # No recognisable structure — fall back to escaped pre
+        return f"<pre>{html.escape(raw)}</pre>"
+
+    blocks: list[str] = []
+    # parts[0] is text before first match (usually empty), then groups of 3
+    preamble = parts[0].strip()
+    if preamble:
+        blocks.append(f"<p class='vision-preamble'>{html.escape(preamble)}</p>")
+
+    for i in range(1, len(parts), 3):
+        if i + 2 >= len(parts):
+            break
+        filename = parts[i]
+        codes = parts[i + 1]
+        body = parts[i + 2]
+
+        # Parse verdict tags within this image's body
+        verdicts: list[str] = []
+        for match in _VERDICT_TAG_RE.finditer(body):
+            dim = match.group(1) or ""
+            verdict = match.group(2) or ""
+            text = (match.group(3) or "").strip()
+            css = _VERDICT_CSS.get(verdict, "")
+            dim_label = _DIM_LABEL.get(dim) or dim.title()
+            v_label = _VERDICT_LABEL.get(verdict) or verdict
+            verdicts.append(
+                f"<div class='vision-verdict {css}'>"
+                f"<span class='vision-dim'>{html.escape(dim_label)}</span>"
+                f"<span class='vision-badge'>{html.escape(v_label)}</span>"
+                f"<span class='vision-text'>{html.escape(text)}</span>"
+                f"</div>"
+            )
+
+        if not verdicts:
+            # No tags parsed — show body as plain text
+            verdicts.append(f"<p>{html.escape(body.strip())}</p>")
+
+        # Truncate long filenames for display
+        short_name = filename[:32] + ("…" if len(filename) > 32 else "")
+        blocks.append(
+            f"<div class='vision-image'>"
+            f"<div class='vision-image-header'>"
+            f"<span class='vision-filename'>{html.escape(short_name)}</span>"
+            f"<span class='vision-codes'>{html.escape(codes)}</span>"
+            f"</div>"
+            f"{''.join(verdicts)}"
+            f"</div>"
+        )
+
+    return f"<div class='vision-feedback'>{''.join(blocks)}</div>"
+
+
+def _render_prompt_diff(old_prompt: str, new_prompt: str) -> str:
+    """Render a unified diff between two prompts as styled HTML."""
+    import difflib
+
+    old_lines = old_prompt.splitlines(keepends=True)
+    new_lines = new_prompt.splitlines(keepends=True)
+    diff = difflib.unified_diff(old_lines, new_lines, fromfile="previous", tofile="current", n=2)
+    diff_lines: list[str] = []
+    for line in diff:
+        escaped = html.escape(line.rstrip("\n"))
+        if line.startswith("+") and not line.startswith("+++"):
+            diff_lines.append(f"<span class='diff-add'>{escaped}</span>")
+        elif line.startswith("-") and not line.startswith("---"):
+            diff_lines.append(f"<span class='diff-del'>{escaped}</span>")
+        elif line.startswith("@@"):
+            diff_lines.append(f"<span class='diff-hunk'>{escaped}</span>")
+        else:
+            diff_lines.append(escaped)
+    if not diff_lines:
+        return "<p class='empty'>No changes.</p>"
+    nl = "\n"
+    return f"<pre class='diff-block'>{nl.join(diff_lines)}{nl}</pre>"
+
+
+def _render_captions(winner: IterationResult) -> str:
+    """Render the winner's captions as a collapsible list."""
+    if not winner.iteration_captions:
+        return ""
+    items: list[str] = []
+    for caption in winner.iteration_captions:
+        name = caption.image_path.stem[:32] + ("…" if len(caption.image_path.stem) > 32 else "")
+        items.append(
+            f"<details class='caption-item'>"
+            f"<summary><span class='caption-name'>{html.escape(name)}</span></summary>"
+            f"<pre class='caption-text'>{html.escape(caption.text)}</pre>"
+            f"</details>"
+        )
+    return f"<div class='captions-list'>{''.join(items)}</div>"
+
+
 def _h(text: str | None) -> str:
     return html.escape(text or "", quote=True)
 
@@ -118,6 +234,73 @@ def _render_header(data: ReportData) -> str:
 """
 
 
+def _render_summary_section(data: ReportData) -> str:
+    """Render a concise run summary synthesizing KB learnings and score trajectory."""
+    kb = data.state.knowledge_base
+    iterations = data.iteration_numbers()
+    if not iterations:
+        return ""
+
+    # Score trajectory
+    first_winner = data.winner_of(iterations[0])
+    first_score = composite_score(first_winner.aggregated) if first_winner else 0.0
+    best_score = composite_score(data.state.global_best_metrics) if data.state.global_best_metrics else 0.0
+    delta = best_score - first_score
+
+    # Hypothesis stats
+    n_total = len(kb.hypotheses)
+    n_confirmed = sum(1 for h in kb.hypotheses if h.outcome == "confirmed")
+    n_rejected = sum(1 for h in kb.hypotheses if h.outcome == "rejected")
+    n_partial = n_total - n_confirmed - n_rejected
+
+    # Confirmed insights
+    confirmed = [h for h in kb.hypotheses if h.outcome == "confirmed" and h.lesson]
+    insight_items = "".join(
+        f"<li><strong>{_h(h.category.replace('_', ' '))}:</strong> {_h(h.lesson)}</li>" for h in confirmed[:5]
+    )
+    insights_html = f"<ul class='summary-insights'>{insight_items}</ul>" if insight_items else ""
+
+    # Top open problems
+    top_problems = kb.open_problems[:3]
+    problem_items = "".join(f"<li>{_h(_strip_priority_prefix(p.text))}</li>" for p in top_problems)
+    problems_html = f"<ul class='summary-problems'>{problem_items}</ul>" if problem_items else ""
+
+    # Promotion stats
+    decisions = data.promotion_decisions
+    n_promoted = sum(1 for d in decisions if d.decision == "promoted")
+
+    return f"""
+<section class="summary-section">
+  <div class="section-head">
+    <span class="section-numeral">&Sigma;</span>
+    <h2>Run Summary</h2>
+    <p class="section-kicker">What this run learned, measured, and left unsolved.</p>
+  </div>
+  <div class="summary-grid">
+    <div class="summary-card">
+      <h3>Score trajectory</h3>
+      <p>Started at <code>{_fmt_score(first_score)}</code>, reached
+      <code class="summary-highlight">{_fmt_score(best_score)}</code>
+      ({delta:+.3f}) over {len(iterations)} iterations.
+      {n_promoted} of {len(decisions)} candidates promoted.</p>
+    </div>
+    <div class="summary-card">
+      <h3>Hypothesis outcomes</h3>
+      <p><strong>{n_confirmed}</strong> confirmed, <strong>{n_partial}</strong> partial,
+      <strong>{n_rejected}</strong> rejected out of {n_total} tested
+      ({n_confirmed * 100 // max(n_total, 1)}% confirmation rate).</p>
+      {insights_html}
+    </div>
+    <div class="summary-card">
+      <h3>Open problems</h3>
+      <p>{len(kb.open_problems)} unresolved {"problem" if len(kb.open_problems) == 1 else "problems"} remain.</p>
+      {problems_html}
+    </div>
+  </div>
+</section>
+"""
+
+
 def _render_trajectories_section(composite_json: str, multi_json: str) -> str:
     if not composite_json:
         return (
@@ -153,16 +336,20 @@ def _render_experiment_table(results: list[IterationResult]) -> str:
         return "<p class='empty'>No experiments logged.</p>"
 
     batch = [result.aggregated for result in results]
-    winner_id = max(results, key=lambda result: composite_score(result.aggregated)).branch_id
+    # Highlight the kept experiment; fall back to highest composite if none was kept
+    kept_ids = {r.branch_id for r in results if r.kept}
+    if not kept_ids:
+        kept_ids = {max(results, key=lambda r: composite_score(r.aggregated)).branch_id}
     rows: list[str] = []
     for result in results:
         score = composite_score(result.aggregated)
         adaptive = adaptive_composite_score(result.aggregated, batch) if len(batch) >= 2 else None
         adaptive_cell = _fmt_score(adaptive) if adaptive is not None else "—"
-        winner_mark = "<span class='winner-star'>✦</span>" if result.branch_id == winner_id else ""
+        is_highlighted = result.branch_id in kept_ids
+        winner_mark = "<span class='winner-star'>✦</span>" if is_highlighted else ""
         kept_cell = "kept" if result.kept else "cut"
         kept_class = "kept-yes" if result.kept else "kept-no"
-        row_class = " class='winner-row'" if result.branch_id == winner_id else ""
+        row_class = " class='winner-row'" if is_highlighted else ""
         hyp = _h(result.hypothesis)
         truncated = hyp[:160] + ("…" if len(result.hypothesis) > 160 else "")
         rows.append(
@@ -248,6 +435,7 @@ def _render_iteration_drilldown(data: ReportData, report_dir: Path) -> str:
         )
 
     latest = iterations[-1]
+    prev_winner: IterationResult | None = None
     blocks: list[str] = []
     for iteration in iterations:
         results = data.iteration_logs[iteration]
@@ -266,9 +454,23 @@ def _render_iteration_drilldown(data: ReportData, report_dir: Path) -> str:
                 ("Round-trip feedback", winner.roundtrip_feedback),
             ):
                 if text and text.strip():
+                    body = _format_vision_feedback(text) if label == "Vision feedback" else f"<pre>{_h(text)}</pre>"
                     narrative_blocks.append(
-                        f"<details class='narrative'><summary>{_h(label)}</summary><pre>{_h(text)}</pre></details>"
+                        f"<details class='narrative'><summary>{_h(label)}</summary>{body}</details>"
                     )
+            # Prompt diff vs previous iteration
+            if prev_winner and winner.rendered_prompt and prev_winner.rendered_prompt:
+                diff_html = _render_prompt_diff(prev_winner.rendered_prompt, winner.rendered_prompt)
+                narrative_blocks.append(
+                    f"<details class='narrative'><summary>Prompt diff vs previous</summary>{diff_html}</details>"
+                )
+            # Captions
+            captions_html = _render_captions(winner)
+            if captions_html:
+                narrative_blocks.append(
+                    f"<details class='narrative'><summary>Captions ({len(winner.iteration_captions)})</summary>"
+                    f"{captions_html}</details>"
+                )
         open_attr = " open" if iteration == latest else ""
         blocks.append(
             f"""
@@ -286,6 +488,8 @@ def _render_iteration_drilldown(data: ReportData, report_dir: Path) -> str:
   </div>
 </details>"""
         )
+        if winner:
+            prev_winner = winner
     legend = (
         '<details class="fold metric-legend">'
         "<summary><span class='fold-cue'>&sect;</span> Metric abbreviations</summary>"
@@ -427,12 +631,7 @@ def _render_open_problems(problems: list[OpenProblem]) -> str:
     for idx, problem in enumerate(problems, start=1):
         gap = f"{problem.metric_gap:+.3f}" if problem.metric_gap is not None else "—"
         priority = problem.priority or "LOW"
-        # Strip redundant priority prefix from text (e.g. "[HIGH] ...")
-        display_text = problem.text
-        for prefix in _PRIORITY_PREFIXES:
-            if display_text.startswith(prefix):
-                display_text = display_text[len(prefix) :]
-                break
+        display_text = _strip_priority_prefix(problem.text)
         items.append(
             f"<li class='prio-{_h(priority.lower())}'>"
             f"<span class='prob-num'>{idx:02d}</span>"

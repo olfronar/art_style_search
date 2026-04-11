@@ -11,35 +11,17 @@ import logging
 import webbrowser
 from pathlib import Path
 
-from art_style_search.report_data import ReportData, _rel, load_report_data
-from art_style_search.report_data import _load_iteration_logs as _load_iteration_logs_impl
+from art_style_search.report_data import ReportData, load_report_data
 from art_style_search.reporting.document import _assemble_html
-from art_style_search.reporting.render import (
-    _count_descendants,
-    _per_image_score_for,
-    _render_hypothesis_tree,
-    _render_open_problems,
-)
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "ReportData",
-    "_count_descendants",
-    "_load_iteration_logs",
-    "_per_image_score_for",
-    "_rel",
-    "_render_hypothesis_tree",
-    "_render_open_problems",
     "build_all_reports",
     "build_report",
     "load_report_data",
 ]
-
-
-def _load_iteration_logs(log_dir: Path):
-    """Compatibility wrapper re-exporting report-data loading helpers."""
-    return _load_iteration_logs_impl(log_dir)
 
 
 def build_report(run_dir: Path, *, open_browser: bool = False, offline: bool = False) -> Path:

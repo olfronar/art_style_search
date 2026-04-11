@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 from importlib import resources
 
 from art_style_search.report_data import ReportData
@@ -14,10 +15,15 @@ from art_style_search.reporting.render import (
     _render_kb_section,
     _render_promotion_section,
     _render_protocol_section,
+    _render_summary_section,
     _render_trajectories_section,
 )
 
-REPORT_CSS = resources.files("art_style_search.reporting").joinpath("report.css").read_text(encoding="utf-8")
+
+@functools.cache
+def _load_report_css() -> str:
+    return resources.files("art_style_search.reporting").joinpath("report.css").read_text(encoding="utf-8")
+
 
 _PLOTLY_CDN = "https://cdn.plot.ly/plotly-2.35.2.min.js"
 _FONTS_CDN = (
@@ -47,6 +53,7 @@ def _assemble_html(data: ReportData, report_dir, *, offline: bool = False) -> st
         multi_json = _build_per_metric_trajectories(data)
 
     header = _render_header(data)
+    summary_section = _render_summary_section(data)
     trajectories = _render_trajectories_section(composite_json, multi_json)
     iterations_section = _render_iteration_drilldown(data, report_dir)
     kb_section = _render_kb_section(data)
@@ -85,11 +92,12 @@ def _assemble_html(data: ReportData, report_dir, *, offline: bool = False) -> st
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="{_FONTS_CDN}">
   {_plotly_script_tag(offline=offline)}
-  <style>{REPORT_CSS}</style>
+  <style>{_load_report_css()}</style>
 </head>
 <body>
   <main class="page">
     {header}
+    {summary_section}
     {trajectories}
     {iterations_section}
     {kb_section}

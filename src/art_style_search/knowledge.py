@@ -24,6 +24,29 @@ _PRIORITY_ORDER = {"HIGH": 0, "MED": 1, "LOW": 2}
 _PRIORITY_PREFIX_RE = re.compile(r"^\[(HIGH|MED|LOW)\]\s*", re.IGNORECASE)
 IterationDecision = Literal["promoted", "exploration", "rejected"]
 
+_NEAR_DUP_THRESHOLD = 0.6
+
+
+def _tokenize(text: str) -> set[str]:
+    """Lowercase word tokens for Jaccard comparison."""
+    return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) > 2}
+
+
+def _find_near_duplicate(text: str, candidates: list[str]) -> int | None:
+    """Return index of the first near-duplicate in *candidates*, or None."""
+    tokens = _tokenize(text)
+    if not tokens:
+        return None
+    for idx, candidate in enumerate(candidates):
+        cand_tokens = _tokenize(candidate)
+        if not cand_tokens:
+            continue
+        intersection = len(tokens & cand_tokens)
+        union = len(tokens | cand_tokens)
+        if intersection / union >= _NEAR_DUP_THRESHOLD:
+            return idx
+    return None
+
 
 def _resolve_category(
     text: str,
@@ -124,11 +147,15 @@ def _manage_open_problems(
                         )
                     )
 
-        # Merge with existing problems — newer version wins for duplicates
-        existing_by_text = {p.text: p for p in kb.open_problems}
-        for p in new_problems:
-            existing_by_text[p.text] = p
-        kb.open_problems = list(existing_by_text.values())
+        # Merge with existing problems — newer version wins for exact or near-duplicates
+        merged: list[OpenProblem] = list(kb.open_problems)
+        for new_p in new_problems:
+            dup_idx = _find_near_duplicate(new_p.text, [p.text for p in merged])
+            if dup_idx is not None:
+                merged[dup_idx] = new_p  # newer version wins
+            else:
+                merged.append(new_p)
+        kb.open_problems = merged
 
     # Age stale problems — demote priority if they haven't been solved (always runs)
     for p in kb.open_problems:

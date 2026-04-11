@@ -96,22 +96,22 @@ _COMPILATION_PROMPT = (
     "Each section should have a short name, a description of what it controls, "
     "and detailed prompt text with embedded style rules as its value. Include a thorough negative prompt.\n\n"
     "Respond with EXACTLY one JSON object (no markdown fences, no extra text):\n"
-    "{\n"
-    '  "style_profile": {\n'
+    "{{\n"
+    '  "style_profile": {{\n'
     '    "color_palette": "...",\n'
     '    "composition": "...",\n'
     '    "technique": "...",\n'
     '    "mood_atmosphere": "...",\n'
     '    "subject_matter": "...",\n'
     '    "influences": "..."\n'
-    "  },\n"
-    '  "initial_template": {\n'
-    '    "sections": [{"name": "style_foundation", "description": "core art style identity and rules", "value": "..."}],\n'
+    "  }},\n"
+    '  "initial_template": {{\n'
+    '    "sections": [{{"name": "style_foundation", "description": "core art style identity and rules", "value": "..."}}],\n'
     '    "negative_prompt": "...",\n'
     '    "caption_sections": ["Art Style", "Color Palette", "Technique", "Composition"],\n'
     '    "caption_length_target": 500\n'
-    "  }\n"
-    "}"
+    "  }}\n"
+    "}}"
 )
 
 
