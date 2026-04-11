@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from art_style_search.prompt._parse import Lessons, RefinementResult
+from art_style_search.contracts import Lessons, RefinementResult
 from art_style_search.types import PromptSection, PromptTemplate, ReviewResult, StyleProfile
 
 

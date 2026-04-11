@@ -1,0 +1,91 @@
+"""Schema version constants and migration helpers for persisted state."""
+
+from __future__ import annotations
+
+from typing import Any
+
+_SCHEMA_VERSION = 3  # v1: dino_similarity era, v2: vision+KB+rigorous, v3: changed_section+target_category
+_ITERATION_LOG_SCHEMA_VERSION = 1
+_MANIFEST_SCHEMA_VERSION = 1
+_PROMOTION_LOG_SCHEMA_VERSION = 1
+
+
+def _migrate_metric_scores_payload(data: dict[str, Any]) -> dict[str, Any]:
+    if "dreamsim_similarity" not in data and "dino_similarity" in data:
+        data["dreamsim_similarity"] = data.pop("dino_similarity")
+    return data
+
+
+def _migrate_aggregated_metrics_payload(data: dict[str, Any]) -> dict[str, Any]:
+    if "dreamsim_similarity_mean" not in data and "dino_similarity_mean" in data:
+        data["dreamsim_similarity_mean"] = data.pop("dino_similarity_mean")
+    if "dreamsim_similarity_std" not in data and "dino_similarity_std" in data:
+        data["dreamsim_similarity_std"] = data.pop("dino_similarity_std")
+    return data
+
+
+def _migrate_iteration_result_payload(data: dict[str, Any]) -> dict[str, Any]:
+    if "aggregated" in data and isinstance(data["aggregated"], dict):
+        data["aggregated"] = _migrate_aggregated_metrics_payload(dict(data["aggregated"]))
+    if "per_image_scores" in data and isinstance(data["per_image_scores"], list):
+        data["per_image_scores"] = [
+            _migrate_metric_scores_payload(dict(score)) if isinstance(score, dict) else score
+            for score in data["per_image_scores"]
+        ]
+    data.setdefault("changed_section", "")
+    data.setdefault("target_category", "")
+    data.setdefault("vision_feedback", "")
+    data.setdefault("roundtrip_feedback", "")
+    data.setdefault("iteration_captions", [])
+    return data
+
+
+def _migrate_state_payload(raw: dict[str, Any], version: int) -> dict[str, Any]:
+    data = dict(raw)
+    if version < 2:
+        data.setdefault("knowledge_base", {})
+        data.setdefault("review_feedback", "")
+        data.setdefault("pairwise_feedback", "")
+        data.setdefault("protocol", "classic")
+        data.setdefault("feedback_refs", [])
+        data.setdefault("silent_refs", [])
+    if version < 3:
+        results = data.get("experiment_history", [])
+        data["experiment_history"] = [
+            _migrate_iteration_result_payload(dict(result)) if isinstance(result, dict) else result
+            for result in results
+        ]
+        last_results = data.get("last_iteration_results", [])
+        data["last_iteration_results"] = [
+            _migrate_iteration_result_payload(dict(result)) if isinstance(result, dict) else result
+            for result in last_results
+        ]
+    if "best_metrics" in data and isinstance(data["best_metrics"], dict):
+        data["best_metrics"] = _migrate_aggregated_metrics_payload(dict(data["best_metrics"]))
+    if "global_best_metrics" in data and isinstance(data["global_best_metrics"], dict):
+        data["global_best_metrics"] = _migrate_aggregated_metrics_payload(dict(data["global_best_metrics"]))
+    return data
+
+
+def _migrate_iteration_log_payload(raw: dict[str, Any], version: int) -> dict[str, Any]:
+    data = dict(raw)
+    if version < 1:
+        data = _migrate_iteration_result_payload(data)
+    return data
+
+
+def _migrate_manifest_payload(raw: dict[str, Any], version: int) -> dict[str, Any]:
+    data = dict(raw)
+    if version < 1:
+        data.setdefault("uv_lock_hash", None)
+    return data
+
+
+def _migrate_promotion_payload(raw: dict[str, Any], version: int) -> dict[str, Any]:
+    data = dict(raw)
+    if version < 1:
+        data.setdefault("candidate_hypothesis", "")
+        data.setdefault("replicate_scores", None)
+        data.setdefault("p_value", None)
+        data.setdefault("test_statistic", None)
+    return data

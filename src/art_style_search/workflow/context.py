@@ -189,7 +189,7 @@ class RunContext:
     registry: ModelRegistry
     gemini_semaphore: asyncio.Semaphore
     eval_semaphore: asyncio.Semaphore
-    services: RunServices | None = None
+    services: RunServices
     rng: random.Random = field(default_factory=random.Random)
 
 

@@ -328,6 +328,7 @@ async def replicate_experiment(
     *,
     services: RunServices,
     n_replicates: int = 3,
+    existing_result: IterationResult | None = None,
     existing_scores: list[MetricScores] | None = None,
     # Deprecated — accepted but ignored for backward compatibility with tests.
     gemini_client: object = None,
@@ -337,15 +338,21 @@ async def replicate_experiment(
 ) -> ReplicatedEvaluation:
     """Run replicated caption+generate+evaluate cycles for confirmatory validation.
 
-    If *existing_scores* is provided, it is used as replicate 0 and only
-    ``n_replicates - 1`` additional replicates are generated.
+    If *existing_result* is provided, its full per-image result is used as
+    replicate 0. Otherwise, *existing_scores* can seed replicate 0 with score
+    data only. In both cases, only ``n_replicates - 1`` additional replicates
+    are generated.
     """
     meta_prompt = template.render()
     all_replicate_scores: list[list[MetricScores]] = []
     all_replicate_agg: list[AggregatedMetrics] = []
 
     start_rep = 0
-    if existing_scores is not None:
+    if existing_result is not None:
+        all_replicate_scores.append(list(existing_result.per_image_scores))
+        all_replicate_agg.append(existing_result.aggregated)
+        start_rep = 1
+    elif existing_scores is not None:
         all_replicate_scores.append(existing_scores)
         all_replicate_agg.append(aggregate(existing_scores))
         start_rep = 1
@@ -375,7 +382,8 @@ async def replicate_experiment(
         )
 
         scores = [_merge_vision(ms, vs) for ms, vs in zip(metric_scores, vision_scores_list, strict=True)]
-        return scores, aggregate(scores)
+        aggregated = aggregate(scores)
+        return scores, replace(aggregated, style_consistency=compute_style_consistency(captions))
 
     # Run all replicates in parallel
     rep_results = await asyncio.gather(
@@ -396,7 +404,7 @@ async def replicate_experiment(
 
     median_scores = _median_metric_scores(all_replicate_scores)
     median_agg = aggregate(median_scores)
-    style_con = compute_style_consistency([])  # no captions to compare across replicates
+    style_con = statistics.median(agg.style_consistency for agg in all_replicate_agg)
     median_agg = replace(median_agg, style_consistency=style_con)
 
     return ReplicatedEvaluation(

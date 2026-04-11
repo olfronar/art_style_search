@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
+import pytest
+
 from art_style_search.experiment import (
     _median_metric_scores,
     best_kept_result,
     collect_experiment_results,
+    replicate_experiment,
 )
 from tests.conftest import make_iteration_result, make_metric_scores
 
@@ -105,3 +110,50 @@ class TestMedianMetricScores:
             assert median.vision_style == original.vision_style
             assert median.vision_subject == original.vision_subject
             assert median.vision_composition == original.vision_composition
+
+
+class TestReplicateExperiment:
+    @pytest.mark.asyncio
+    async def test_seeded_existing_result_preserves_style_consistency_when_no_new_replicates(self, tmp_path) -> None:
+        from art_style_search.config import Config
+
+        config = Config(
+            reference_dir=tmp_path / "refs",
+            output_dir=tmp_path / "outputs",
+            log_dir=tmp_path / "logs",
+            state_file=tmp_path / "state.json",
+            run_dir=tmp_path,
+            max_iterations=1,
+            plateau_window=5,
+            num_branches=1,
+            aspect_ratio="1:1",
+            num_fixed_refs=1,
+            caption_model="caption-model",
+            generator_model="generator-model",
+            reasoning_model="reasoning-model",
+            reasoning_provider="anthropic",
+            reasoning_base_url="",
+            gemini_concurrency=1,
+            eval_concurrency=1,
+            seed=42,
+            protocol="rigorous",
+            anthropic_api_key="test",
+            google_api_key="test",
+            zai_api_key="",
+            openai_api_key="",
+        )
+        existing_result = make_iteration_result(branch_id=7, iteration=3)
+        existing_result.aggregated = replace(existing_result.aggregated, style_consistency=0.42)
+
+        replicated = await replicate_experiment(
+            template=existing_result.template,
+            branch_id=existing_result.branch_id,
+            iteration=existing_result.iteration,
+            fixed_refs=[],
+            config=config,
+            services=object(),
+            n_replicates=1,
+            existing_result=existing_result,
+        )
+
+        assert replicated.median_aggregated.style_consistency == pytest.approx(0.42)

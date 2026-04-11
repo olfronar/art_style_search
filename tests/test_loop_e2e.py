@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -206,6 +207,19 @@ def _build_refinement_result(template: PromptTemplate, idx: int) -> RefinementRe
 def _apply_all_patches(monkeypatch, tmp_path: Path, ref_paths: list[Path]):
     """Monkeypatch all external dependencies for loop.run()."""
 
+    async def fake_caption_references(
+        reference_paths, *, model=None, client=None, cache_dir=None, semaphore=None, prompt=None, cache_key=""
+    ):
+        return [_fake_caption(p) for p in reference_paths]
+
+    async def fake_pairwise(pairs_a, pairs_b, *, client=None, model=None, semaphore=None):
+        return "A is slightly better", 0.6
+
+    fake_services = SimpleNamespace(
+        captioning=SimpleNamespace(caption_references=fake_caption_references),
+        evaluation=SimpleNamespace(pairwise_compare=fake_pairwise),
+    )
+
     # 1. Mock _setup_run_context to avoid real client construction + model loading
     from art_style_search.loop import RunContext
 
@@ -217,19 +231,12 @@ def _apply_all_patches(monkeypatch, tmp_path: Path, ref_paths: list[Path]):
             registry=MagicMock(),
             gemini_semaphore=asyncio.Semaphore(5),
             eval_semaphore=asyncio.Semaphore(2),
+            services=fake_services,
         )
 
     monkeypatch.setattr("art_style_search.loop._setup_run_context", fake_setup_run_context)
 
-    # 2. Mock caption_references (zero-step captioning)
-    async def fake_caption_references(
-        reference_paths, *, model, client, cache_dir, semaphore, prompt=None, cache_key=""
-    ):
-        return [_fake_caption(p) for p in reference_paths]
-
-    monkeypatch.setattr("art_style_search.workflow.zero_step.caption_references", fake_caption_references)
-
-    # 3. Mock analyze_style (zero-step analysis)
+    # 2. Mock analyze_style (zero-step analysis)
     async def fake_analyze_style(
         reference_paths, captions, *, gemini_client, reasoning_client, caption_model, reasoning_model, cache_path
     ):
@@ -237,14 +244,14 @@ def _apply_all_patches(monkeypatch, tmp_path: Path, ref_paths: list[Path]):
 
     monkeypatch.setattr("art_style_search.workflow.zero_step.analyze_style", fake_analyze_style)
 
-    # 4. Mock propose_initial_templates (zero-step diverse templates)
+    # 3. Mock propose_initial_templates (zero-step diverse templates)
     async def fake_propose_initial_templates(style_profile, num_branches, *, client, model):
         return [_valid_template() for _ in range(num_branches)]
 
     monkeypatch.setattr("art_style_search.prompt.initial.propose_initial_templates", fake_propose_initial_templates)
     monkeypatch.setattr("art_style_search.workflow.zero_step.propose_initial_templates", fake_propose_initial_templates)
 
-    # 5. Mock run_experiment (the core per-experiment pipeline)
+    # 4. Mock run_experiment (the core per-experiment pipeline)
     call_counter = {"n": 0}
 
     async def fake_run_experiment(
@@ -310,9 +317,9 @@ def _apply_all_patches(monkeypatch, tmp_path: Path, ref_paths: list[Path]):
         )
 
     monkeypatch.setattr("art_style_search.workflow.zero_step.run_experiment", fake_run_experiment)
-    monkeypatch.setattr("art_style_search.workflow.iteration.run_experiment", fake_run_experiment)
+    monkeypatch.setattr("art_style_search.workflow.iteration_execution.run_experiment", fake_run_experiment)
 
-    # 6. Mock propose_experiments (per-iteration reasoning)
+    # 5. Mock propose_experiments (per-iteration reasoning)
     async def fake_propose_experiments(
         style_profile,
         current_template,
@@ -329,34 +336,37 @@ def _apply_all_patches(monkeypatch, tmp_path: Path, ref_paths: list[Path]):
     ):
         return [_build_refinement_result(_valid_template(), i) for i in range(num_experiments)]
 
-    monkeypatch.setattr("art_style_search.workflow.iteration.propose_experiments", fake_propose_experiments)
+    monkeypatch.setattr(
+        "art_style_search.workflow.iteration_proposals.propose_experiments",
+        fake_propose_experiments,
+    )
 
-    # 7. Mock enforce_hypothesis_diversity (pass-through)
+    # 6. Mock enforce_hypothesis_diversity (pass-through)
     def fake_enforce_diversity(results, template):
         return results
 
-    monkeypatch.setattr("art_style_search.workflow.iteration.enforce_hypothesis_diversity", fake_enforce_diversity)
+    monkeypatch.setattr(
+        "art_style_search.workflow.iteration_proposals.enforce_hypothesis_diversity",
+        fake_enforce_diversity,
+    )
 
-    # 8. Mock validate_template (always valid)
+    # 7. Mock validate_template (always valid)
     def fake_validate_template(template, changed_section=""):
         return []
 
     monkeypatch.setattr("art_style_search.workflow.zero_step.validate_template", fake_validate_template)
-    monkeypatch.setattr("art_style_search.workflow.iteration.validate_template", fake_validate_template)
+    monkeypatch.setattr("art_style_search.workflow.iteration_proposals.validate_template", fake_validate_template)
 
-    # 9. Mock synthesize_templates (returns merged template)
+    # 8. Mock synthesize_templates (returns merged template)
     async def fake_synthesize_templates(experiments, style_profile, *, client, model):
         return _valid_template(), "Synthesis hypothesis: merge best aspects"
 
-    monkeypatch.setattr("art_style_search.workflow.iteration.synthesize_templates", fake_synthesize_templates)
+    monkeypatch.setattr(
+        "art_style_search.workflow.iteration_execution.synthesize_templates",
+        fake_synthesize_templates,
+    )
 
-    # 10. Mock pairwise_compare_experiments
-    async def fake_pairwise(pairs_a, pairs_b, *, client, model, semaphore):
-        return "A is slightly better", 0.6
-
-    monkeypatch.setattr("art_style_search.workflow.iteration.pairwise_compare_experiments", fake_pairwise)
-
-    # 11. Mock review_iteration
+    # 9. Mock review_iteration
     async def fake_review(experiments, proposals, baseline_metrics, knowledge_base, *, client, model):
         return ReviewResult(
             experiment_assessments=["SIGNAL"] * len(experiments),
@@ -365,9 +375,9 @@ def _apply_all_patches(monkeypatch, tmp_path: Path, ref_paths: list[Path]):
             recommended_categories=["color_palette"],
         )
 
-    monkeypatch.setattr("art_style_search.workflow.iteration.review_iteration", fake_review)
+    monkeypatch.setattr("art_style_search.workflow.iteration_execution.review_iteration", fake_review)
 
-    # 12. Mock build_ref_gen_pairs (used by pairwise comparison in loop)
+    # 10. Mock build_ref_gen_pairs (used by pairwise comparison in loop)
     def fake_build_pairs(result):
         pairs = []
         for i, gp in enumerate(result.image_paths):
@@ -375,7 +385,7 @@ def _apply_all_patches(monkeypatch, tmp_path: Path, ref_paths: list[Path]):
                 pairs.append((result.iteration_captions[i].image_path, gp))
         return pairs
 
-    monkeypatch.setattr("art_style_search.workflow.iteration.build_ref_gen_pairs", fake_build_pairs)
+    monkeypatch.setattr("art_style_search.workflow.iteration_execution.build_ref_gen_pairs", fake_build_pairs)
 
     return call_counter
 

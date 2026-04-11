@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+from art_style_search.contracts import Lessons, RefinementResult
 from art_style_search.prompt._format import (
     _format_metrics,
     _format_style_profile,
@@ -12,7 +13,6 @@ from art_style_search.prompt._format import (
     format_knowledge_base,
     suggest_target_categories,
 )
-from art_style_search.prompt._parse import Lessons, RefinementResult
 from art_style_search.prompt.json_contracts import schema_hint, validate_experiment_batch_payload
 from art_style_search.scoring import classify_hypothesis, composite_score
 from art_style_search.types import (

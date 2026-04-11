@@ -8,7 +8,6 @@ import shutil
 from pathlib import Path
 
 from art_style_search.analyze import analyze_style
-from art_style_search.caption import caption_references
 from art_style_search.experiment import collect_experiment_results, run_experiment
 from art_style_search.prompt import propose_initial_templates, validate_template
 from art_style_search.scoring import composite_score
@@ -65,21 +64,11 @@ async def _zero_step(ctx: RunContext, all_ref_paths: list[Path]) -> LoopState:
         logger.info("Information barrier: %d feedback + %d silent images", len(feedback_refs), len(silent_refs))
 
     logger.info("Zero-step: captioning %d reference images...", len(fixed_refs))
-    if ctx.services is None:
-        captions = await caption_references(
-            fixed_refs,
-            model=config.caption_model,
-            client=ctx.gemini_client,
-            cache_dir=config.log_dir / "captions",
-            semaphore=ctx.gemini_semaphore,
-            cache_key="initial",
-        )
-    else:
-        captions = await ctx.services.captioning.caption_references(
-            fixed_refs,
-            cache_dir=config.log_dir / "captions",
-            cache_key="initial",
-        )
+    captions = await ctx.services.captioning.caption_references(
+        fixed_refs,
+        cache_dir=config.log_dir / "captions",
+        cache_key="initial",
+    )
 
     logger.info("Zero-step: analyzing art style...")
     shared_cache_dir = config.run_dir.parent / ".cache"

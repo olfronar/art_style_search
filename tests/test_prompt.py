@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from art_style_search import contracts
 from art_style_search.prompt import (
+    Lessons,
+    RefinementResult,
     _format_metrics,
     _format_template,
     _parse_analysis,
@@ -116,6 +119,12 @@ class TestParseAnalysis:
 
     def test_analysis_empty(self) -> None:
         assert _parse_analysis("<analysis>   </analysis>") == ""
+
+
+class TestPromptContracts:
+    def test_prompt_reexports_contract_types_from_neutral_contracts_module(self) -> None:
+        assert Lessons is contracts.Lessons
+        assert RefinementResult is contracts.RefinementResult
 
 
 # ---------------------------------------------------------------------------

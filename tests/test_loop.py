@@ -433,6 +433,7 @@ async def test_confirmatory_validation_overwrites_selected_result_with_replicate
         registry=MagicMock(),
         gemini_semaphore=MagicMock(),
         eval_semaphore=MagicMock(),
+        services=MagicMock(),
     )
 
     proposal_best = _make_result(branch_id=0, agg=_make_agg(dreamsim=0.82, color=0.78))
@@ -477,9 +478,12 @@ async def test_confirmatory_validation_overwrites_selected_result_with_replicate
             median_aggregated=low_agg,
         )
 
-    monkeypatch.setattr("art_style_search.workflow.iteration.replicate_experiment", fake_replicate_experiment)
     monkeypatch.setattr(
-        "art_style_search.workflow.iteration.paired_promotion_test",
+        "art_style_search.workflow.iteration_execution.replicate_experiment",
+        fake_replicate_experiment,
+    )
+    monkeypatch.setattr(
+        "art_style_search.workflow.iteration_execution.paired_promotion_test",
         lambda candidate, incumbent: PromotionTestResult(
             statistic=3.0,
             p_value=0.01,
@@ -497,6 +501,65 @@ async def test_confirmatory_validation_overwrites_selected_result_with_replicate
     assert synth.aggregated is synth_median
     assert state.best_metrics is synth_median
     assert ranking.best_replicate_scores == [composite_score(synth_median)] * 3
+
+
+@pytest.mark.asyncio
+async def test_confirmatory_validation_seeds_candidates_with_existing_result(
+    tmp_path: Path, monkeypatch
+) -> None:
+    state = make_loop_state()
+    config = _make_config(tmp_path, protocol="rigorous")
+    ctx = RunContext(
+        config=config,
+        gemini_client=MagicMock(),
+        reasoning_client=MagicMock(),
+        registry=MagicMock(),
+        gemini_semaphore=MagicMock(),
+        eval_semaphore=MagicMock(),
+        services=MagicMock(),
+    )
+
+    proposal_best = _make_result(branch_id=0, agg=_make_agg(dreamsim=0.82, color=0.78))
+    proposal_runner_up = _make_result(branch_id=1, agg=_make_agg(dreamsim=0.80, color=0.75))
+    ranking = _score_and_rank([proposal_best, proposal_runner_up], state)
+
+    seen_existing_results: dict[int, IterationResult] = {}
+
+    async def fake_replicate_experiment(*, branch_id, **kwargs):
+        if branch_id in (0, 1):
+            seen_existing_results[branch_id] = kwargs["existing_result"]
+            assert kwargs["existing_scores"] is None
+        return ReplicatedEvaluation(
+            template=_make_valid_template(),
+            branch_id=branch_id,
+            replicate_scores=[[MetricScores(dreamsim_similarity=0.70, hps_score=0.25, aesthetics_score=5.0)] * 3] * 3,
+            replicate_aggregated=[_make_agg(dreamsim=0.70, color=0.60)] * 3,
+            median_per_image=[MetricScores(dreamsim_similarity=0.70, hps_score=0.25, aesthetics_score=5.0)] * 3,
+            median_aggregated=_make_agg(dreamsim=0.70, color=0.60),
+        )
+
+    monkeypatch.setattr(
+        "art_style_search.workflow.iteration_execution.replicate_experiment",
+        fake_replicate_experiment,
+    )
+    monkeypatch.setattr(
+        "art_style_search.workflow.iteration_execution.paired_promotion_test",
+        lambda candidate, incumbent: PromotionTestResult(
+            statistic=1.0,
+            p_value=0.5,
+            effect_size=0.0,
+            ci_lower=-0.01,
+            ci_upper=0.01,
+            passed=False,
+        ),
+    )
+
+    await _confirmatory_validation(ranking, state, ctx, iteration=3)
+
+    assert seen_existing_results == {
+        proposal_best.branch_id: proposal_best,
+        proposal_runner_up.branch_id: proposal_runner_up,
+    }
 
 
 def test_sanitize_initial_templates_replaces_invalid_with_fallback() -> None:
@@ -520,6 +583,7 @@ async def test_run_synthesis_experiment_skips_invalid_template(tmp_path: Path, m
         registry=MagicMock(),
         gemini_semaphore=MagicMock(),
         eval_semaphore=MagicMock(),
+        services=MagicMock(),
     )
     result = _make_result(branch_id=0, agg=_make_agg())
     ranking = IterationRanking(
@@ -534,7 +598,7 @@ async def test_run_synthesis_experiment_skips_invalid_template(tmp_path: Path, m
     async def should_not_run(*args, **kwargs):
         raise AssertionError("run_experiment should not be called for invalid synthesis templates")
 
-    monkeypatch.setattr("art_style_search.workflow.iteration.run_experiment", should_not_run)
+    monkeypatch.setattr("art_style_search.workflow.iteration_execution.run_experiment", should_not_run)
 
     await _run_synthesis_experiment((make_prompt_template(), "bad synthesis"), ranking, state, ctx, iteration=2)
 
@@ -602,6 +666,7 @@ class TestShouldHonorStop:
             registry=MagicMock(),
             gemini_semaphore=MagicMock(),
             eval_semaphore=MagicMock(),
+            services=MagicMock(),
         )
 
     @staticmethod
@@ -642,3 +707,16 @@ class TestShouldHonorStop:
         state.knowledge_base = KnowledgeBase()
 
         assert _should_honor_stop(state, ctx, "test") is False
+
+
+def test_run_context_requires_services(tmp_path: Path) -> None:
+    config = _make_config(tmp_path)
+    with pytest.raises(TypeError):
+        RunContext(
+            config=config,
+            gemini_client=MagicMock(),
+            reasoning_client=MagicMock(),
+            registry=MagicMock(),
+            gemini_semaphore=MagicMock(),
+            eval_semaphore=MagicMock(),
+        )

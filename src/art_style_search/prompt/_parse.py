@@ -1,4 +1,4 @@
-"""Response parsing — regexes, XML-tag extraction, and the RefinementResult dataclass.
+"""Response parsing — regexes, XML-tag extraction, and refinement parsing helpers.
 
 These helpers consume Claude / GLM / GPT response text and turn it into typed data.
 All parsing lives here so the higher-level flow modules (``experiments``, ``synthesis``,
@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
 
+from art_style_search.contracts import Lessons, RefinementResult
 from art_style_search.types import PromptSection, PromptTemplate
 from art_style_search.utils import extract_xml_tag
 
@@ -101,32 +101,6 @@ def _parse_hypothesis(text: str) -> str:
 
 def _parse_experiment(text: str) -> str:
     return extract_xml_tag(text, "experiment")
-
-
-@dataclass
-class Lessons:
-    """Structured lessons from one iteration."""
-
-    confirmed: str = ""
-    rejected: str = ""
-    new_insight: str = ""
-
-
-@dataclass
-class RefinementResult:
-    """Complete result of a template refinement by the reasoning model."""
-
-    template: PromptTemplate
-    analysis: str
-    template_changes: str
-    should_stop: bool
-    hypothesis: str
-    experiment: str
-    lessons: Lessons
-    builds_on: str | None
-    open_problems: list[str]
-    changed_section: str = ""
-    target_category: str = ""
 
 
 def _parse_lessons(text: str) -> Lessons:
