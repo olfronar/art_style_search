@@ -32,6 +32,7 @@ logs/
 state.json
 runs/
 .plans/
+.worktrees/
 
 # Vendored model repos
 models/
