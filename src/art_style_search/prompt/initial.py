@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from art_style_search.prompt._format import _format_style_profile
-from art_style_search.prompt._parse import _parse_initial_templates
+from art_style_search.prompt.json_contracts import schema_hint, validate_initial_templates_payload
 from art_style_search.types import PromptTemplate, StyleProfile
 from art_style_search.utils import ReasoningClient
 
@@ -89,18 +89,19 @@ async def propose_initial_templates(
         "- Vary instruction style: some give the captioner strict checklists, "
         "others give artistic direction, others ask for technical analysis.\n"
         "- All must be comprehensive — diversity is in approach, not coverage.\n\n"
-        f"Produce exactly {num_branches} meta-prompts, each wrapped in a <branch> tag.\n\n"
-        "Response format (repeat for each branch):\n"
-        "<branch>\n"
-        "<template>\n"
-        '  <section name="..." description="what this instructs the captioner to describe">'
-        "instruction for the captioner with embedded style rules (4-8 sentences)</section>\n"
-        "  ... (8-15 sections)\n"
-        "  <negative>instruct captioner to tell generator what to avoid</negative>\n"
-        "  <caption_sections>Art Style, Color Palette, Composition, ...</caption_sections>\n"
-        "  <caption_length>500</caption_length>\n"
-        "</template>\n"
-        "</branch>"
+        f"Produce exactly {num_branches} meta-prompts in one JSON object.\n\n"
+        "Return EXACTLY one JSON object with this shape:\n"
+        '{\n'
+        '  "templates": [\n'
+        "    {\n"
+        '      "sections": [{"name": "...", "description": "...", "value": "..."}],\n'
+        '      "negative_prompt": "...",\n'
+        '      "caption_sections": ["Art Style", "Color Palette"],\n'
+        '      "caption_length_target": 500\n'
+        "    }\n"
+        "  ]\n"
+        "}\n"
+        "Return JSON only. No markdown fences, no commentary."
     )
 
     user = (
@@ -111,9 +112,15 @@ async def propose_initial_templates(
 
     logger.info("Requesting %d initial templates (%s)", num_branches, model)
 
-    text = await client.call(model=model, system=system, user=user, max_tokens=16000)
-
-    templates = _parse_initial_templates(text, num_branches)
+    templates = await client.call_json(
+        model=model,
+        system=system,
+        user=user,
+        validator=lambda data: validate_initial_templates_payload(data, num_branches=num_branches),
+        response_name="initial_templates",
+        schema_hint=schema_hint("initial_templates"),
+        max_tokens=16000,
+    )
 
     for i, t in enumerate(templates):
         if not t.sections:

@@ -478,9 +478,9 @@ async def test_confirmatory_validation_overwrites_selected_result_with_replicate
             median_aggregated=low_agg,
         )
 
-    monkeypatch.setattr("art_style_search.experiment.replicate_experiment", fake_replicate_experiment)
+    monkeypatch.setattr("art_style_search.workflow.iteration.replicate_experiment", fake_replicate_experiment)
     monkeypatch.setattr(
-        "art_style_search.scoring.paired_promotion_test",
+        "art_style_search.workflow.iteration.paired_promotion_test",
         lambda candidate, incumbent: PromotionTestResult(
             statistic=3.0,
             p_value=0.01,

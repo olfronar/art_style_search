@@ -15,6 +15,12 @@ from art_style_search.prompt import (
     _parse_template_changes,
     validate_template,
 )
+from art_style_search.prompt.json_contracts import (
+    validate_experiment_batch_payload,
+    validate_initial_templates_payload,
+    validate_review_payload,
+    validate_synthesis_payload,
+)
 from art_style_search.types import AggregatedMetrics, PromptSection, PromptTemplate
 
 # ---------------------------------------------------------------------------
@@ -454,3 +460,93 @@ class TestValidateTemplate:
         t = _make_valid_template()
         t.caption_length_target = 0
         assert validate_template(t) == []
+
+
+# ---------------------------------------------------------------------------
+# JSON contract validation
+# ---------------------------------------------------------------------------
+
+
+class TestJsonContracts:
+    def test_initial_templates_payload_pads_to_requested_count(self) -> None:
+        payload = {
+            "templates": [
+                {
+                    "sections": [{"name": "style_foundation", "description": "rules", "value": "Shared rules"}],
+                    "negative_prompt": "avoid blur",
+                    "caption_sections": ["Art Style"],
+                    "caption_length_target": 500,
+                }
+            ]
+        }
+        templates = validate_initial_templates_payload(payload, num_branches=3)
+        assert len(templates) == 3
+        assert templates[0].sections[0].name == "style_foundation"
+        assert templates[1] is templates[0]
+        assert templates[2] is templates[0]
+
+    def test_experiment_batch_payload_reads_converged_flag(self) -> None:
+        payload = {
+            "experiments": [
+                {
+                    "analysis": "Need better palette control",
+                    "lessons": {"confirmed": "", "rejected": "", "new_insight": "Color drifts on dark images"},
+                    "hypothesis": "Strengthen palette anchoring",
+                    "builds_on": "H3",
+                    "experiment": "Tighten the color section",
+                    "changed_section": "color_palette",
+                    "target_category": "color_palette",
+                    "open_problems": ["Dark palettes drift"],
+                    "template_changes": "none",
+                    "template": {
+                        "sections": [
+                            {"name": "style_foundation", "description": "rules", "value": "Shared rules"},
+                            {"name": "color_palette", "description": "colors", "value": "Detailed palette guidance"},
+                            {"name": "composition", "description": "layout", "value": "Layout guidance"},
+                            {"name": "technique", "description": "medium", "value": "Technique guidance"},
+                        ],
+                        "negative_prompt": "avoid blur",
+                        "caption_sections": ["Art Style", "Color Palette"],
+                        "caption_length_target": 500,
+                    },
+                }
+            ],
+            "converged": True,
+        }
+        results, converged = validate_experiment_batch_payload(payload, num_experiments=2)
+        assert converged is True
+        assert len(results) == 1
+        assert results[0].builds_on == "H3"
+        assert results[0].target_category == "color_palette"
+
+    def test_synthesis_payload_accepts_negative_prompt_key(self) -> None:
+        template, rationale = validate_synthesis_payload(
+            {
+                "rationale": "Take the color section from experiment 1",
+                "template": {
+                    "sections": [
+                        {"name": "style_foundation", "description": "rules", "value": "Shared rules"},
+                        {"name": "color_palette", "description": "colors", "value": "Palette rules"},
+                        {"name": "composition", "description": "layout", "value": "Layout rules"},
+                        {"name": "technique", "description": "medium", "value": "Technique rules"},
+                    ],
+                    "negative_prompt": "avoid blur",
+                    "caption_sections": ["Art Style", "Color Palette"],
+                    "caption_length_target": 500,
+                },
+            }
+        )
+        assert rationale.startswith("Take the color")
+        assert template.negative_prompt == "avoid blur"
+
+    def test_review_payload_keeps_recommended_categories(self) -> None:
+        review = validate_review_payload(
+            {
+                "experiment_assessments": ["[EXP 0] SIGNAL - palette improved"],
+                "noise_vs_signal": "DreamSim and color moved together.",
+                "strategic_guidance": "Keep pushing palette precision.",
+                "recommended_categories": ["color_palette", "composition"],
+            }
+        )
+        assert review.experiment_assessments == ["[EXP 0] SIGNAL - palette improved"]
+        assert review.recommended_categories == ["color_palette", "composition"]

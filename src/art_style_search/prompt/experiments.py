@@ -12,12 +12,8 @@ from art_style_search.prompt._format import (
     format_knowledge_base,
     suggest_target_categories,
 )
-from art_style_search.prompt._parse import (
-    Lessons,
-    RefinementResult,
-    _parse_converged,
-    _parse_refinement_branches,
-)
+from art_style_search.prompt._parse import Lessons, RefinementResult
+from art_style_search.prompt.json_contracts import schema_hint, validate_experiment_batch_payload
 from art_style_search.scoring import classify_hypothesis, composite_score
 from art_style_search.types import (
     AggregatedMetrics,
@@ -141,7 +137,7 @@ async def propose_experiments(
         "- vision_composition: spatial layout accuracy.\n"
         "Weights are ADAPTIVE — metrics with more variance across experiments get higher weight.\n\n"
         "## Iteration strategy\n"
-        f"- Propose exactly {num_experiments} experiments, each in a <branch> tag. "
+        f"- Propose exactly {num_experiments} experiments in a single JSON response. "
         "Each MUST have a DIFFERENT hypothesis targeting a DIFFERENT weakness or category.\n"
         "- There are no fixed 'branches' — shift focus freely between categories "
         "as the weakest area changes.\n"
@@ -187,35 +183,19 @@ async def propose_experiments(
         "least once, and (3) you cannot name a concrete untried direction. The orchestration "
         "loop reserves the right to reject [CONVERGED] and request a new batch if these "
         "conditions are not met — prefer proposing a bold exploration branch over stopping.\n\n"
-        f"Response format — exactly {num_experiments} branches, each containing ALL required tags:\n"
-        "<branch>\n"
-        "<lessons>\n"
-        "  <confirmed>Which previous hypotheses are confirmed by THIS iteration's results?</confirmed>\n"
-        "  <rejected>Which previous hypotheses are rejected? What didn't work and why?</rejected>\n"
-        "  <new_insight>Any new observation from the data not covered by existing hypotheses</new_insight>\n"
-        "</lessons>\n"
-        "<hypothesis>Based on the knowledge base and current results, what is the "
-        "PRIMARY remaining gap? Be specific — name the metric, the images, the visual element.</hypothesis>\n"
-        "<builds_on>H-ids this builds on, or 'none' for fresh direction</builds_on>\n"
-        "<experiment>The specific change you're making to test this hypothesis</experiment>\n"
-        "<changed_section>name of the SINGLE section you modified</changed_section>\n"
-        "<target_category>the primary category this experiment targets (must be unique across branches)</target_category>\n"
-        "<open_problems>\n"
-        "  1. Most critical remaining problem\n"
-        "  2. Second most critical\n"
-        "  3. Third (if any)\n"
-        "</open_problems>\n"
-        "<template_changes>structural changes or 'none'</template_changes>\n"
-        "<template>\n"
-        '  <section name="..." description="...">value with embedded style rules (4-8 sentences)</section>\n'
-        "  ... (8-15 sections)\n"
-        "  <negative>things to avoid</negative>\n"
-        "  <caption_sections>ordered comma-separated list of labeled output sections</caption_sections>\n"
-        "  <caption_length>target word count for captions</caption_length>\n"
-        "</template>\n"
-        "</branch>\n"
-        "(repeat for each experiment)\n"
-        "[CONVERGED]  (only if converged, after the last branch)"
+        f"Response format — return EXACTLY one JSON object with an 'experiments' array of length {num_experiments} "
+        "and a top-level boolean 'converged'. Each experiment object must contain:\n"
+        "- analysis\n"
+        "- lessons: {confirmed, rejected, new_insight}\n"
+        "- hypothesis\n"
+        "- builds_on (string or null)\n"
+        "- experiment\n"
+        "- changed_section\n"
+        "- target_category\n"
+        "- open_problems (array of strings)\n"
+        "- template_changes\n"
+        "- template: {sections, negative_prompt, caption_sections, caption_length_target}\n"
+        "Return JSON only. No markdown fences, no commentary."
     )
 
     # Build the user message with all context
@@ -306,7 +286,7 @@ async def propose_experiments(
 
     has_feedback = vision_feedback or roundtrip_feedback
     instruction = (
-        f"\n\nPropose {num_experiments} improved templates, each in a <branch> tag. "
+        f"\n\nPropose {num_experiments} improved templates in one JSON object. "
         "Each experiment must target a DIFFERENT weakness — review the Knowledge Base, "
         "then formulate hypotheses that build on previous insights (reference H-ids). "
         "Update open problems in each branch."
@@ -323,16 +303,20 @@ async def propose_experiments(
         "Requesting %d experiment proposals (%s) — context: ~%d words", num_experiments, model, len(user.split())
     )
 
-    text = await client.call(model=model, system=system, user=user, max_tokens=30000)
+    results, converged = await client.call_json(
+        model=model,
+        system=system,
+        user=user,
+        validator=lambda data: validate_experiment_batch_payload(data, num_experiments=num_experiments),
+        response_name="experiment_batch",
+        schema_hint=schema_hint("experiment_batch"),
+        max_tokens=30000,
+    )
 
-    results = _parse_refinement_branches(text, num_experiments)
-
-    # Check for convergence signal after all branches (top-level [CONVERGED])
-    if _parse_converged(text):
+    if converged:
         if results:
             results[-1].should_stop = True
         else:
-            # No valid branches but converged — return a dummy result
             results.append(
                 RefinementResult(
                     template=current_template,

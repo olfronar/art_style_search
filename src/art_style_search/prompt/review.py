@@ -5,11 +5,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from art_style_search.prompt._format import _format_metrics, format_knowledge_base
+from art_style_search.prompt.json_contracts import schema_hint, validate_review_payload
 from art_style_search.types import AggregatedMetrics, IterationResult, KnowledgeBase, ReviewResult
-from art_style_search.utils import ReasoningClient, extract_xml_tag
+from art_style_search.utils import ReasoningClient
 
 if TYPE_CHECKING:
-    from art_style_search.experiment import ExperimentProposal
+    from art_style_search.contracts import ExperimentProposal
 
 
 _REVIEW_SYSTEM = (
@@ -27,10 +28,13 @@ _REVIEW_SYSTEM = (
     "Be brutally honest. A confirmed improvement of +0.005 on one metric while others stayed flat "
     "is likely noise, not a real improvement. Look for consistent patterns across multiple metrics.\n\n"
     "Respond with:\n"
-    "<assessments>\nOne paragraph per experiment: [EXP_ID] SIGNAL|NOISE|MIXED — explanation\n</assessments>\n"
-    "<noise_vs_signal>Overall analysis of which metric movements are real</noise_vs_signal>\n"
-    "<strategic_guidance>What next iteration should focus on</strategic_guidance>\n"
-    "<recommended_categories>comma-separated list of categories to target</recommended_categories>"
+    '{\n'
+    '  "experiment_assessments": ["[EXP_ID] SIGNAL|NOISE|MIXED - explanation"],\n'
+    '  "noise_vs_signal": "...",\n'
+    '  "strategic_guidance": "...",\n'
+    '  "recommended_categories": ["color_palette", "composition"]\n'
+    "}\n"
+    "Return JSON only. No markdown fences, no commentary."
 )
 
 
@@ -71,15 +75,12 @@ async def review_iteration(
         user_parts.append(f"\n{kb_text}\n")
 
     user = "\n".join(user_parts)
-    text = await client.call(model=model, system=_REVIEW_SYSTEM, user=user, max_tokens=6000)
-
-    assessments_raw = extract_xml_tag(text, "assessments")
-    experiment_assessments = [line.strip() for line in assessments_raw.split("\n") if line.strip()]
-    cats_raw = extract_xml_tag(text, "recommended_categories")
-
-    return ReviewResult(
-        experiment_assessments=experiment_assessments,
-        noise_vs_signal=extract_xml_tag(text, "noise_vs_signal"),
-        strategic_guidance=extract_xml_tag(text, "strategic_guidance"),
-        recommended_categories=[c.strip() for c in cats_raw.split(",") if c.strip()],
+    return await client.call_json(
+        model=model,
+        system=_REVIEW_SYSTEM,
+        user=user,
+        validator=validate_review_payload,
+        response_name="review",
+        schema_hint=schema_hint("review"),
+        max_tokens=6000,
     )

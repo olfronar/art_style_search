@@ -9,6 +9,7 @@ from pathlib import Path
 
 from google import genai
 
+from art_style_search.prompt.json_contracts import schema_hint, validate_style_compilation_payload
 from art_style_search.state import prompt_template_from_dict, style_profile_from_dict, to_dict
 from art_style_search.types import Caption, PromptSection, PromptTemplate, StyleProfile
 from art_style_search.utils import (
@@ -95,39 +96,23 @@ _COMPILATION_PROMPT = (
     "and optionally: art style overview, subject rendering, emotional tone. "
     "Each section should have a short name, a description of what it controls, "
     "and detailed prompt text with embedded style rules as its value. Include a thorough negative prompt.\n\n"
-    "Respond in EXACTLY this XML format (no markdown fences, no extra text outside the XML):\n"
-    "<style_profile>\n"
-    "  <color_palette>detailed description of the color palette</color_palette>\n"
-    "  <composition>detailed description of composition patterns</composition>\n"
-    "  <technique>detailed description of technique</technique>\n"
-    "  <mood_atmosphere>detailed description of mood and atmosphere</mood_atmosphere>\n"
-    "  <subject_matter>detailed description of subject matter</subject_matter>\n"
-    "  <influences>detailed description of influences</influences>\n"
-    "</style_profile>\n"
-    "<initial_template>\n"
-    '  <section name="style_foundation" description="core art style identity and rules">'
-    "detailed style identity with embedded rules (4-8 sentences)</section>\n"
-    '  <section name="medium_and_technique" description="art medium, rendering style, brushwork">'
-    "detailed technique description with style rules (4-8 sentences)</section>\n"
-    '  <section name="color_palette" description="dominant colors and color relationships">'
-    "detailed color description with palette rules (4-8 sentences)</section>\n"
-    '  <section name="composition" description="layout, framing, spatial arrangement">'
-    "detailed composition description with style patterns (4-8 sentences)</section>\n"
-    '  <section name="characters" description="how figures and characters are rendered">'
-    "detailed character treatment with style rules (4-8 sentences)</section>\n"
-    '  <section name="background" description="environment and setting treatment">'
-    "detailed background description with style rules (4-8 sentences)</section>\n"
-    '  <section name="details" description="textures, patterns, fine elements">'
-    "detailed texture and detail description (4-8 sentences)</section>\n"
-    '  <section name="lighting" description="light source, quality, shadows">'
-    "detailed lighting description with style rules (4-8 sentences)</section>\n"
-    '  <section name="mood" description="emotional tone, atmosphere">'
-    "detailed mood description with style rules (4-8 sentences)</section>\n"
-    "  <negative>thorough list of things to avoid in generation</negative>\n"
-    "  <caption_sections>Art Style, Color Palette, Technique, Composition, Characters, "
-    "Background, Details, Lighting, Mood</caption_sections>\n"
-    "  <caption_length>500</caption_length>\n"
-    "</initial_template>"
+    "Respond with EXACTLY one JSON object (no markdown fences, no extra text):\n"
+    "{\n"
+    '  "style_profile": {\n'
+    '    "color_palette": "...",\n'
+    '    "composition": "...",\n'
+    '    "technique": "...",\n'
+    '    "mood_atmosphere": "...",\n'
+    '    "subject_matter": "...",\n'
+    '    "influences": "..."\n'
+    "  },\n"
+    '  "initial_template": {\n'
+    '    "sections": [{"name": "style_foundation", "description": "core art style identity and rules", "value": "..."}],\n'
+    '    "negative_prompt": "...",\n'
+    '    "caption_sections": ["Art Style", "Color Palette", "Technique", "Composition"],\n'
+    '    "caption_length_target": 500\n'
+    "  }\n"
+    "}"
 )
 
 
@@ -252,8 +237,19 @@ async def _reasoning_compile(
     )
 
     logger.info("Compiling style profile via %s", model)
-    raw_text = await client.call(model=model, system=_ANALYSIS_SYSTEM, user=user, max_tokens=12000)
-    return _parse_compilation(raw_text, gemini_raw=gemini_analysis, reasoning_raw=reasoning_analysis)
+    return await client.call_json(
+        model=model,
+        system=_ANALYSIS_SYSTEM,
+        user=user,
+        validator=lambda data: validate_style_compilation_payload(
+            data,
+            gemini_raw=gemini_analysis,
+            reasoning_raw=reasoning_analysis,
+        ),
+        response_name="style_compilation",
+        schema_hint=schema_hint("style_compilation"),
+        max_tokens=12000,
+    )
 
 
 # ---------------------------------------------------------------------------

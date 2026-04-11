@@ -6,7 +6,7 @@ import logging
 import re
 from typing import Literal
 
-from art_style_search.experiment import ExperimentProposal
+from art_style_search.contracts import ExperimentProposal
 from art_style_search.scoring import classify_hypothesis
 from art_style_search.types import (
     AggregatedMetrics,

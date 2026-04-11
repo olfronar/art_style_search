@@ -5,9 +5,9 @@ from __future__ import annotations
 import logging
 
 from art_style_search.prompt._format import _format_metrics, _format_style_profile, _format_template
-from art_style_search.prompt._parse import _parse_template
+from art_style_search.prompt.json_contracts import schema_hint, validate_synthesis_payload
 from art_style_search.types import IterationResult, PromptTemplate, StyleProfile
-from art_style_search.utils import ReasoningClient, extract_xml_tag
+from art_style_search.utils import ReasoningClient
 
 logger = logging.getLogger(__name__)
 
@@ -42,14 +42,16 @@ async def synthesize_templates(
         "- Merge caption output structure: pick the best caption_sections ordering and caption_length "
         "from the experiments, or combine them.\n\n"
         "Response format:\n"
-        "<rationale>Which sections you took from which experiment and why</rationale>\n"
-        "<template>\n"
-        '  <section name="..." description="...">value</section>\n'
-        "  ...\n"
-        "  <negative>things to avoid</negative>\n"
-        "  <caption_sections>ordered comma-separated list of labeled output sections</caption_sections>\n"
-        "  <caption_length>target word count for captions</caption_length>\n"
-        "</template>"
+        '{\n'
+        '  "rationale": "...",\n'
+        '  "template": {\n'
+        '    "sections": [{"name": "...", "description": "...", "value": "..."}],\n'
+        '    "negative_prompt": "...",\n'
+        '    "caption_sections": ["Art Style", "Color Palette"],\n'
+        '    "caption_length_target": 500\n'
+        "  }\n"
+        "}\n"
+        "Return JSON only. No markdown fences, no commentary."
     )
 
     user_parts: list[str] = [
@@ -74,10 +76,15 @@ async def synthesize_templates(
 
     logger.info("Requesting template synthesis (%s)", model)
 
-    text = await client.call(model=model, system=system, user=user, max_tokens=12000)
-
-    merged = _parse_template(text)
-    rationale = extract_xml_tag(text, "rationale")
+    merged, rationale = await client.call_json(
+        model=model,
+        system=system,
+        user=user,
+        validator=validate_synthesis_payload,
+        response_name="synthesis",
+        schema_hint=schema_hint("synthesis"),
+        max_tokens=12000,
+    )
 
     if not merged.sections:
         logger.warning("Synthesis produced no sections — falling back to best experiment's template")

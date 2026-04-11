@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import random as _rng
 import re
+from collections.abc import Callable
+from typing import TypeVar
 
 import anthropic
 import httpcore
@@ -18,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 _STREAM_MAX_RETRIES = 3
 _STREAM_BASE_DELAY = 5.0
+T = TypeVar("T")
 
 
 def extract_xml_tag(text: str, tag: str) -> str:
@@ -32,6 +36,35 @@ def extract_text(response: Message) -> str:
         if block.type == "text":
             return block.text
     return ""
+
+
+def _strip_json_fences(text: str) -> str:
+    stripped = text.strip()
+    if stripped.startswith("```") and stripped.endswith("```"):
+        lines = stripped.splitlines()
+        if len(lines) >= 2:
+            return "\n".join(lines[1:-1]).strip()
+    return stripped
+
+
+def _extract_json_payload(text: str) -> str:
+    """Best-effort extraction of a top-level JSON payload from model text."""
+    stripped = _strip_json_fences(text)
+    if not stripped:
+        return stripped
+
+    for opener, closer in (("{", "}"), ("[", "]")):
+        start = stripped.find(opener)
+        end = stripped.rfind(closer)
+        if start != -1 and end != -1 and end > start:
+            return stripped[start : end + 1]
+    return stripped
+
+
+def parse_json_response(text: str) -> object:
+    """Parse JSON from a model response, tolerating markdown fences or preamble."""
+    payload = _extract_json_payload(text)
+    return json.loads(payload)
 
 
 async def stream_message(client: anthropic.AsyncAnthropic, **kwargs: object) -> Message:
@@ -146,6 +179,52 @@ class ReasoningClient:
         if self.provider == "local":
             return await self._call_local(model=model, system=system, user=user, max_tokens=max_tokens)
         return await self._call_zai(model=model, system=system, user=user, max_tokens=max_tokens)
+
+    async def call_json(
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        validator: Callable[[object], T],
+        response_name: str,
+        schema_hint: str = "",
+        max_tokens: int = 16000,
+        repair_retries: int = 1,
+    ) -> T:
+        """Send a reasoning request, parse JSON, validate it, and optionally repair once."""
+
+        raw_text = await self.call(model=model, system=system, user=user, max_tokens=max_tokens)
+        try:
+            return validator(parse_json_response(raw_text))
+        except Exception as exc:
+            if repair_retries <= 0:
+                msg = f"{response_name} validation failed"
+                raise RuntimeError(msg) from exc
+
+            logger.warning("%s validation failed: %s — attempting JSON repair", response_name, exc)
+            repair_system = (
+                "You repair malformed model outputs into valid JSON.\n"
+                "Return a single JSON object only. No markdown fences, no commentary."
+            )
+            hint_block = f"\nExpected schema:\n{schema_hint}\n" if schema_hint else ""
+            repair_user = (
+                f"The previous response for '{response_name}' was invalid.\n"
+                f"Validation error: {exc}\n"
+                f"{hint_block}"
+                "Original system prompt:\n"
+                f"{system}\n\n"
+                "Original user prompt:\n"
+                f"{user}\n\n"
+                "Invalid response:\n"
+                f"{raw_text}\n"
+            )
+            repaired = await self.call(model=model, system=repair_system, user=repair_user, max_tokens=max_tokens)
+            try:
+                return validator(parse_json_response(repaired))
+            except Exception as repair_exc:
+                msg = f"{response_name} validation failed after repair"
+                raise RuntimeError(msg) from repair_exc
 
     async def _call_anthropic(self, *, model: str, system: str, user: str, max_tokens: int) -> str:
         response = await stream_message(

@@ -517,6 +517,26 @@ class TestManifestRoundTrip:
         assert loaded.num_fixed_refs == manifest.num_fixed_refs
         assert loaded.uv_lock_hash == manifest.uv_lock_hash
 
+    def test_manifest_writes_schema_marker(self, tmp_path: Path) -> None:
+        manifest = RunManifest(
+            protocol_version="classic",
+            seed=1,
+            cli_args={},
+            model_names={},
+            reasoning_provider="anthropic",
+            git_sha=None,
+            python_version="3.11.0",
+            platform="darwin",
+            timestamp_utc="2026-04-10T12:00:00Z",
+            reference_image_hashes={},
+            num_fixed_refs=0,
+            uv_lock_hash=None,
+        )
+        manifest_path = tmp_path / "manifest.json"
+        save_manifest(manifest, manifest_path)
+        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert raw["_schema_version"] == 1
+
 
 # ---------------------------------------------------------------------------
 # Tests for PromotionDecision append/load log
@@ -575,6 +595,25 @@ class TestPromotionLog:
         assert loaded[1].replicate_scores == [0.61, 0.63, 0.62]
         assert loaded[1].p_value == 0.35
         assert loaded[1].test_statistic == 1.2
+
+    def test_log_lines_include_schema_marker(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "promotions.jsonl"
+        append_promotion_log(
+            PromotionDecision(
+                iteration=1,
+                candidate_score=0.6,
+                baseline_score=0.5,
+                epsilon=0.01,
+                delta=0.1,
+                decision="promoted",
+                reason="good",
+                candidate_branch_id=0,
+                candidate_hypothesis="Test",
+            ),
+            log_path,
+        )
+        raw = json.loads(log_path.read_text(encoding="utf-8").strip())
+        assert raw["_schema_version"] == 1
 
 
 # ---------------------------------------------------------------------------

@@ -256,6 +256,90 @@ def _loop_state_from_dict(d: dict[str, Any]) -> LoopState:
 
 
 _SCHEMA_VERSION = 3  # v1: dino_similarity era, v2: vision+KB+rigorous, v3: changed_section+target_category
+_ITERATION_LOG_SCHEMA_VERSION = 1
+_MANIFEST_SCHEMA_VERSION = 1
+_PROMOTION_LOG_SCHEMA_VERSION = 1
+
+
+def _migrate_metric_scores_payload(data: dict[str, Any]) -> dict[str, Any]:
+    if "dreamsim_similarity" not in data and "dino_similarity" in data:
+        data["dreamsim_similarity"] = data.pop("dino_similarity")
+    return data
+
+
+def _migrate_aggregated_metrics_payload(data: dict[str, Any]) -> dict[str, Any]:
+    if "dreamsim_similarity_mean" not in data and "dino_similarity_mean" in data:
+        data["dreamsim_similarity_mean"] = data.pop("dino_similarity_mean")
+    if "dreamsim_similarity_std" not in data and "dino_similarity_std" in data:
+        data["dreamsim_similarity_std"] = data.pop("dino_similarity_std")
+    return data
+
+
+def _migrate_iteration_result_payload(data: dict[str, Any]) -> dict[str, Any]:
+    if "aggregated" in data and isinstance(data["aggregated"], dict):
+        data["aggregated"] = _migrate_aggregated_metrics_payload(dict(data["aggregated"]))
+    if "per_image_scores" in data and isinstance(data["per_image_scores"], list):
+        data["per_image_scores"] = [
+            _migrate_metric_scores_payload(dict(score)) if isinstance(score, dict) else score
+            for score in data["per_image_scores"]
+        ]
+    data.setdefault("changed_section", "")
+    data.setdefault("target_category", "")
+    data.setdefault("vision_feedback", "")
+    data.setdefault("roundtrip_feedback", "")
+    data.setdefault("iteration_captions", [])
+    return data
+
+
+def _migrate_state_payload(raw: dict[str, Any], version: int) -> dict[str, Any]:
+    data = dict(raw)
+    if version < 2:
+        data.setdefault("knowledge_base", {})
+        data.setdefault("review_feedback", "")
+        data.setdefault("pairwise_feedback", "")
+        data.setdefault("protocol", "classic")
+        data.setdefault("feedback_refs", [])
+        data.setdefault("silent_refs", [])
+    if version < 3:
+        results = data.get("experiment_history", [])
+        data["experiment_history"] = [
+            _migrate_iteration_result_payload(dict(result)) if isinstance(result, dict) else result
+            for result in results
+        ]
+        last_results = data.get("last_iteration_results", [])
+        data["last_iteration_results"] = [
+            _migrate_iteration_result_payload(dict(result)) if isinstance(result, dict) else result
+            for result in last_results
+        ]
+    if "best_metrics" in data and isinstance(data["best_metrics"], dict):
+        data["best_metrics"] = _migrate_aggregated_metrics_payload(dict(data["best_metrics"]))
+    if "global_best_metrics" in data and isinstance(data["global_best_metrics"], dict):
+        data["global_best_metrics"] = _migrate_aggregated_metrics_payload(dict(data["global_best_metrics"]))
+    return data
+
+
+def _migrate_iteration_log_payload(raw: dict[str, Any], version: int) -> dict[str, Any]:
+    data = dict(raw)
+    if version < 1:
+        data = _migrate_iteration_result_payload(data)
+    return data
+
+
+def _migrate_manifest_payload(raw: dict[str, Any], version: int) -> dict[str, Any]:
+    data = dict(raw)
+    if version < 1:
+        data.setdefault("uv_lock_hash", None)
+    return data
+
+
+def _migrate_promotion_payload(raw: dict[str, Any], version: int) -> dict[str, Any]:
+    data = dict(raw)
+    if version < 1:
+        data.setdefault("candidate_hypothesis", "")
+        data.setdefault("replicate_scores", None)
+        data.setdefault("p_value", None)
+        data.setdefault("test_statistic", None)
+    return data
 
 
 def save_state(state: LoopState, path: Path) -> None:
@@ -287,9 +371,7 @@ def load_state(path: Path) -> LoopState | None:
     raw = json.loads(path.read_text(encoding="utf-8"))
     version = raw.pop("_schema_version", 1)
     logger.info("State schema version: %d (current: %d)", version, _SCHEMA_VERSION)
-    # All backward compat is handled by .get() defaults in _*_from_dict functions.
-    # Future migrations can be routed here by version number.
-    return _loop_state_from_dict(raw)
+    return _loop_state_from_dict(_migrate_state_payload(raw, version))
 
 
 def save_iteration_log(result: IterationResult, log_dir: Path) -> None:
@@ -299,6 +381,7 @@ def save_iteration_log(result: IterationResult, log_dir: Path) -> None:
     log_path = log_dir / filename
 
     data = to_dict(result)
+    data["_schema_version"] = _ITERATION_LOG_SCHEMA_VERSION
     log_path.write_text(json.dumps(data, cls=_Encoder, ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info("Iteration log written to %s", log_path)
 
@@ -310,7 +393,8 @@ def load_iteration_log(path: Path) -> IterationResult:
     (``art_style_search.report``) to read all per-experiment logs for a run.
     """
     raw = json.loads(path.read_text(encoding="utf-8"))
-    return _iteration_result_from_dict(raw)
+    version = raw.pop("_schema_version", 0)
+    return _iteration_result_from_dict(_migrate_iteration_log_payload(raw, version))
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +406,7 @@ def save_manifest(manifest: RunManifest, path: Path) -> None:
     """Write the run manifest to *path* (JSON, write-once)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     data = to_dict(manifest)
+    data["_schema_version"] = _MANIFEST_SCHEMA_VERSION
     path.write_text(json.dumps(data, cls=_Encoder, ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info("Run manifest written to %s", path)
 
@@ -331,6 +416,8 @@ def load_manifest(path: Path) -> RunManifest | None:
     if not path.exists():
         return None
     raw = json.loads(path.read_text(encoding="utf-8"))
+    version = raw.pop("_schema_version", 0)
+    raw = _migrate_manifest_payload(raw, version)
     return RunManifest(
         protocol_version=raw.get("protocol_version", "classic"),
         seed=raw.get("seed", 0),
@@ -355,7 +442,9 @@ def load_manifest(path: Path) -> RunManifest | None:
 def append_promotion_log(decision: PromotionDecision, path: Path) -> None:
     """Append one promotion decision as a JSON line to *path*."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(to_dict(decision), cls=_Encoder, ensure_ascii=False)
+    payload = to_dict(decision)
+    payload["_schema_version"] = _PROMOTION_LOG_SCHEMA_VERSION
+    line = json.dumps(payload, cls=_Encoder, ensure_ascii=False)
     with open(path, "a", encoding="utf-8") as f:
         f.write(line + "\n")
 
@@ -369,6 +458,8 @@ def load_promotion_log(path: Path) -> list[PromotionDecision]:
         if not line.strip():
             continue
         d = json.loads(line)
+        version = d.pop("_schema_version", 0)
+        d = _migrate_promotion_payload(d, version)
         decisions.append(
             PromotionDecision(
                 iteration=d["iteration"],
