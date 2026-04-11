@@ -25,11 +25,8 @@ from art_style_search.types import ConvergenceReason, LoopState
 from art_style_search.workflow.context import (
     RunContext,
     _discover_images,
-    _extract_silent_scores,
     _finalize_run,
-    _sample,
     _setup_run_context,
-    _split_information_barrier,
     ensure_manifest,
 )
 from art_style_search.workflow.iteration import (
@@ -47,43 +44,16 @@ from art_style_search.workflow.iteration import (
     _update_knowledge_base_for_iteration,
 )
 from art_style_search.workflow.policy import (
-    _apply_best_result,
-    _apply_exploration_result,
     _apply_iteration_result,
-    _candidate_results_for_validation,
     _check_plateau_convergence,
-    _should_honor_stop,
 )
-from art_style_search.workflow.zero_step import _sanitize_initial_templates, _zero_step
+from art_style_search.workflow.zero_step import _zero_step
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "IterationRanking",
     "RunContext",
-    "_apply_best_result",
-    "_apply_exploration_result",
-    "_apply_iteration_result",
-    "_candidate_results_for_validation",
-    "_check_plateau_convergence",
-    "_confirmatory_validation",
-    "_discover_images",
-    "_extract_silent_scores",
-    "_propose_iteration_experiments",
-    "_record_iteration_state",
-    "_run_experiments_parallel",
-    "_run_independent_review",
-    "_run_pairwise_comparison",
-    "_run_synthesis_experiment",
-    "_sample",
-    "_sanitize_initial_templates",
-    "_score_and_rank",
-    "_setup_run_context",
-    "_should_honor_stop",
-    "_split_information_barrier",
-    "_synthesize_reasoning",
-    "_update_knowledge_base_for_iteration",
-    "_zero_step",
     "enforce_hypothesis_diversity",
     "propose_experiments",
     "propose_initial_templates",
@@ -93,16 +63,6 @@ __all__ = [
     "synthesize_templates",
     "validate_template",
 ]
-
-_LEGACY_PATCH_POINTS = (
-    run_experiment,
-    enforce_hypothesis_diversity,
-    propose_experiments,
-    propose_initial_templates,
-    review_iteration,
-    synthesize_templates,
-    validate_template,
-)
 
 
 async def run(config: Config) -> LoopState:

@@ -4,16 +4,33 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import tempfile
 from pathlib import Path
 
 from google import genai
 from google.genai import types as genai_types
 
-from art_style_search.utils import async_retry, gemini_circuit_breaker
+from art_style_search.utils import async_retry, generation_circuit_breaker
 
 logger = logging.getLogger(__name__)
 
 _REQUEST_TIMEOUT = 180  # seconds — per-request timeout to release semaphore on hang
+
+
+def _atomic_write(data: bytes, target: Path) -> None:
+    """Write *data* to *target* via temp-file + rename to prevent partial files on crash."""
+    fd, tmp = tempfile.mkstemp(dir=target.parent, suffix=".tmp")
+    try:
+        os.write(fd, data)
+        os.close(fd)
+        fd = -1  # mark as closed
+        Path(tmp).rename(target)
+    except BaseException:
+        if fd >= 0:
+            os.close(fd)
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 async def generate_single(
@@ -59,10 +76,10 @@ async def generate_single(
 
         for part in response.candidates[0].content.parts:
             if part.inline_data is not None:
-                output_path.write_bytes(part.inline_data.data)
+                _atomic_write(part.inline_data.data, output_path)
                 return output_path
             if hasattr(part, "image") and part.image is not None:
-                output_path.write_bytes(part.image.image_bytes)
+                _atomic_write(part.image.image_bytes, output_path)
                 return output_path
 
         part_types = [type(p).__name__ for p in response.candidates[0].content.parts]
@@ -77,4 +94,4 @@ async def generate_single(
         msg = f"Image {index}: no image data found in response parts"
         raise RuntimeError(msg)
 
-    return await async_retry(_call, label=f"Image {index}", base_delay=4.0, circuit_breaker=gemini_circuit_breaker)
+    return await async_retry(_call, label=f"Image {index}", base_delay=4.0, circuit_breaker=generation_circuit_breaker)

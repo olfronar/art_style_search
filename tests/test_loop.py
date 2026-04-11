@@ -8,21 +8,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from art_style_search.loop import (
-    IterationRanking,
-    RunContext,
-    _apply_best_result,
-    _apply_exploration_result,
-    _apply_iteration_result,
-    _confirmatory_validation,
-    _discover_images,
-    _run_synthesis_experiment,
-    _sample,
-    _sanitize_initial_templates,
-    _score_and_rank,
-    _should_honor_stop,
-    _split_information_barrier,
-)
 from art_style_search.scoring import composite_score, improvement_epsilon
 from art_style_search.types import (
     AggregatedMetrics,
@@ -35,6 +20,20 @@ from art_style_search.types import (
     PromptTemplate,
     ReplicatedEvaluation,
 )
+from art_style_search.workflow.context import RunContext, _discover_images, _sample, _split_information_barrier
+from art_style_search.workflow.iteration import (
+    IterationRanking,
+    _confirmatory_validation,
+    _run_synthesis_experiment,
+    _score_and_rank,
+)
+from art_style_search.workflow.policy import (
+    _apply_best_result,
+    _apply_exploration_result,
+    _apply_iteration_result,
+    _should_honor_stop,
+)
+from art_style_search.workflow.zero_step import _sanitize_initial_templates
 from tests.conftest import make_loop_state, make_prompt_template
 
 # ---------------------------------------------------------------------------

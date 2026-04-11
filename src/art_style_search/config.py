@@ -137,7 +137,11 @@ def parse_args(argv: list[str] | None = None) -> Config:
     keys.add_argument("--openai-api-key", default=None, help="OpenAI API key (env: OPENAI_API_KEY)")
 
     args = parser.parse_args(argv)
+    return _validate_and_build_config(args, parser)
 
+
+def _validate_and_build_config(args: argparse.Namespace, parser: argparse.ArgumentParser) -> Config:
+    """Validate parsed args, resolve API keys, create directories, and build Config."""
     anthropic_key = args.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY", "")
     google_key = args.google_api_key or os.environ.get("GOOGLE_API_KEY", "")
     zai_key = args.zai_api_key or os.environ.get("ZAI_API_KEY", "")

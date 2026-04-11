@@ -9,20 +9,13 @@ import statistics
 from dataclasses import replace
 from pathlib import Path
 
-from google import genai
-
-from art_style_search.caption import caption_single
 from art_style_search.config import Config
 from art_style_search.contracts import ExperimentProposal as ExperimentProposal
 from art_style_search.evaluate import (
     aggregate,
     check_caption_compliance,
-    compare_vision_per_image,
     compute_style_consistency,
-    evaluate_images,
 )
-from art_style_search.generate import generate_single
-from art_style_search.models import ModelRegistry
 from art_style_search.types import (
     AggregatedMetrics,
     Caption,
@@ -71,6 +64,59 @@ def best_kept_result(results: list[IterationResult]) -> IterationResult | None:
     return next((r for r in results if r.kept), results[0])
 
 
+def _format_experiment_feedback(
+    original_scores: list[MetricScores],
+    vision_feedbacks: list[str],
+    captions: list[Caption],
+    pairs: list[tuple[Path, Path]],
+    last_results: list[IterationResult],
+    compliance: str,
+) -> tuple[str, str]:
+    """Build vision and roundtrip feedback strings sorted by DreamSim worst-first."""
+    order = sorted(range(len(original_scores)), key=lambda i: original_scores[i].dreamsim_similarity)
+
+    # Vision feedback
+    vision_parts: list[str] = []
+    for i in order:
+        sc, fb = original_scores[i], vision_feedbacks[i]
+        ref_path = pairs[i][0]
+        vl = f"S={verdict_label(sc.vision_style)} Su={verdict_label(sc.vision_subject)} Co={verdict_label(sc.vision_composition)}"
+        vision_parts.append(f"**{ref_path.name}** [{vl}]: {fb[:300]}")
+    vision_feedback = "\n".join(vision_parts)
+
+    # Roundtrip feedback — full caption for worst images, truncated for rest
+    sorted_pairs = [pairs[i] for i in order]
+    sorted_captions_list = [captions[i] for i in order]
+    sorted_scores = [original_scores[i] for i in order]
+
+    prev = best_kept_result(last_results)
+    prev_scores: dict[Path, float] = {}
+    if prev:
+        for cap, sc in zip(prev.iteration_captions, prev.per_image_scores, strict=False):
+            prev_scores[cap.image_path] = sc.dreamsim_similarity
+
+    roundtrip_details: list[str] = []
+    for idx, ((ref_p, _), sc, cap) in enumerate(zip(sorted_pairs, sorted_scores, sorted_captions_list, strict=True)):
+        prev_ds = prev_scores.get(cap.image_path)
+        trend = ""
+        if prev_ds is not None:
+            arrow = "↑" if sc.dreamsim_similarity > prev_ds else "↓" if sc.dreamsim_similarity < prev_ds else "="
+            trend = f" [prev DS={prev_ds:.3f} → {sc.dreamsim_similarity:.3f} {arrow}]"
+        vl = f"V[S={verdict_label(sc.vision_style)} Su={verdict_label(sc.vision_subject)} Co={verdict_label(sc.vision_composition)}]"
+        caption_text = cap.text if idx < 3 else f"{cap.text[:300]}..."
+        roundtrip_details.append(
+            f"Image ({ref_p.name}): DS={sc.dreamsim_similarity:.3f} "
+            f"Color={sc.color_histogram:.3f} SSIM={sc.ssim:.3f} "
+            f"HPS={sc.hps_score:.3f} Aes={sc.aesthetics_score:.1f} {vl}{trend}\n"
+            f"  Caption: {caption_text}"
+        )
+    roundtrip_feedback = "\n".join(roundtrip_details)
+    if compliance:
+        roundtrip_feedback = compliance + "\n\n" + roundtrip_feedback
+
+    return vision_feedback, roundtrip_feedback
+
+
 # ---------------------------------------------------------------------------
 # Captioning + generation + evaluation
 # ---------------------------------------------------------------------------
@@ -81,11 +127,9 @@ async def _caption_and_generate(
     meta_prompt: str,
     *,
     config: Config,
-    gemini_client: genai.Client,
-    gemini_semaphore: asyncio.Semaphore,
+    services: RunServices,
     iteration: int,
     experiment_id: int,
-    services: RunServices | None = None,
 ) -> tuple[list[Caption], list[Path], list[tuple[Path, Path]]]:
     """Caption and generate per-image in a pipeline (no serial boundary).
 
@@ -103,37 +147,17 @@ async def _caption_and_generate(
         cache_key = f"{cache_key}_p{prompt_hash}"
 
     async def _caption_then_generate(ref_path: Path, i: int) -> tuple[Caption, Path]:
-        if services is None:
-            caption = await caption_single(
-                ref_path,
-                prompt=meta_prompt,
-                model=config.caption_model,
-                client=gemini_client,
-                cache_dir=cache_dir,
-                semaphore=gemini_semaphore,
-                cache_key=cache_key,
-            )
-            gen_path = await generate_single(
-                caption.text,
-                index=i,
-                aspect_ratio=config.aspect_ratio,
-                output_path=gen_dir / f"{i:02d}.png",
-                client=gemini_client,
-                model=config.generator_model,
-                semaphore=gemini_semaphore,
-            )
-        else:
-            caption = await services.captioning.caption_single(
-                ref_path,
-                prompt=meta_prompt,
-                cache_dir=cache_dir,
-                cache_key=cache_key,
-            )
-            gen_path = await services.generation.generate_single(
-                caption.text,
-                index=i,
-                output_path=gen_dir / f"{i:02d}.png",
-            )
+        caption = await services.captioning.caption_single(
+            ref_path,
+            prompt=meta_prompt,
+            cache_dir=cache_dir,
+            cache_key=cache_key,
+        )
+        gen_path = await services.generation.generate_single(
+            caption.text,
+            index=i,
+            output_path=gen_dir / f"{i:02d}.png",
+        )
         return caption, gen_path
 
     results = await asyncio.gather(
@@ -163,10 +187,7 @@ async def run_experiment(
     fixed_refs: list[Path],
     config: Config,
     *,
-    gemini_client: genai.Client,
-    registry: ModelRegistry,
-    gemini_semaphore: asyncio.Semaphore,
-    eval_semaphore: asyncio.Semaphore,
+    services: RunServices,
     last_results: list[IterationResult],
     hypothesis: str = "",
     experiment_desc: str = "",
@@ -174,7 +195,11 @@ async def run_experiment(
     template_changes: str = "",
     changed_section: str = "",
     target_category: str = "",
-    services: RunServices | None = None,
+    # Deprecated — accepted but ignored for backward compatibility with tests.
+    gemini_client: object = None,
+    registry: object = None,
+    gemini_semaphore: object = None,
+    eval_semaphore: object = None,
 ) -> IterationResult:
     """Execute one experiment: caption -> generate -> evaluate (no reasoning-model call here)."""
     meta_prompt = template.render()
@@ -184,11 +209,9 @@ async def run_experiment(
         fixed_refs,
         meta_prompt,
         config=config,
-        gemini_client=gemini_client,
-        gemini_semaphore=gemini_semaphore,
+        services=services,
         iteration=iteration,
         experiment_id=experiment_id,
-        services=services,
     )
 
     n_attempted = len(fixed_refs)
@@ -214,20 +237,10 @@ async def run_experiment(
     eval_captions = [caption_by_path[orig] for orig, _ in pairs]
 
     # Run metric evaluation and vision comparison in parallel
-    if services is None:
-        (metric_scores, n_eval_failed), (vision_feedbacks, vision_scores_list) = await asyncio.gather(
-            evaluate_images(
-                gen_paths_for_eval, ref_paths_for_eval, eval_captions, registry=registry, semaphore=eval_semaphore
-            ),
-            compare_vision_per_image(
-                pairs, eval_captions, client=gemini_client, model=config.caption_model, semaphore=gemini_semaphore
-            ),
-        )
-    else:
-        (metric_scores, n_eval_failed), (vision_feedbacks, vision_scores_list) = await asyncio.gather(
-            services.evaluation.evaluate_images(gen_paths_for_eval, ref_paths_for_eval, eval_captions),
-            services.evaluation.compare_vision_per_image(pairs, eval_captions),
-        )
+    (metric_scores, n_eval_failed), (vision_feedbacks, vision_scores_list) = await asyncio.gather(
+        services.evaluation.evaluate_images(gen_paths_for_eval, ref_paths_for_eval, eval_captions),
+        services.evaluation.compare_vision_per_image(pairs, eval_captions),
+    )
 
     section_names = [s.name for s in template.sections]
     compliance = check_caption_compliance(section_names, captions, caption_sections=template.caption_sections)
@@ -243,45 +256,14 @@ async def run_experiment(
     style_con = compute_style_consistency(captions)
     aggregated = replace(aggregated, style_consistency=style_con)
 
-    # Sort by DreamSim worst-first FOR FEEDBACK STRINGS ONLY
-    order = sorted(range(len(original_scores)), key=lambda i: original_scores[i].dreamsim_similarity)
-    vision_parts: list[str] = []
-    for i in order:
-        sc, fb = original_scores[i], vision_feedbacks[i]
-        ref_path = pairs[i][0]
-        vl = f"S={verdict_label(sc.vision_style)} Su={verdict_label(sc.vision_subject)} Co={verdict_label(sc.vision_composition)}"
-        vision_parts.append(f"**{ref_path.name}** [{vl}]: {fb[:300]}")
-    vision_feedback = "\n".join(vision_parts)
-
-    sorted_pairs = [pairs[i] for i in order]
-    sorted_captions_list = [captions[i] for i in order]
-    sorted_scores = [original_scores[i] for i in order]
-
-    # Build roundtrip feedback — full caption for worst images, truncated for rest
-    prev = best_kept_result(last_results)
-    prev_scores: dict[Path, float] = {}
-    if prev:
-        for cap, sc in zip(prev.iteration_captions, prev.per_image_scores, strict=False):
-            prev_scores[cap.image_path] = sc.dreamsim_similarity
-
-    roundtrip_details: list[str] = []
-    for idx, ((ref_p, _), sc, cap) in enumerate(zip(sorted_pairs, sorted_scores, sorted_captions_list, strict=True)):
-        prev_ds = prev_scores.get(cap.image_path)
-        trend = ""
-        if prev_ds is not None:
-            arrow = "↑" if sc.dreamsim_similarity > prev_ds else "↓" if sc.dreamsim_similarity < prev_ds else "="
-            trend = f" [prev DS={prev_ds:.3f} → {sc.dreamsim_similarity:.3f} {arrow}]"
-        vl = f"V[S={verdict_label(sc.vision_style)} Su={verdict_label(sc.vision_subject)} Co={verdict_label(sc.vision_composition)}]"
-        caption_text = cap.text if idx < 3 else f"{cap.text[:300]}..."
-        roundtrip_details.append(
-            f"Image ({ref_p.name}): DS={sc.dreamsim_similarity:.3f} "
-            f"Color={sc.color_histogram:.3f} SSIM={sc.ssim:.3f} "
-            f"HPS={sc.hps_score:.3f} Aes={sc.aesthetics_score:.1f} {vl}{trend}\n"
-            f"  Caption: {caption_text}"
-        )
-    roundtrip_feedback = "\n".join(roundtrip_details)
-    if compliance:
-        roundtrip_feedback = compliance + "\n\n" + roundtrip_feedback
+    vision_feedback, roundtrip_feedback = _format_experiment_feedback(
+        original_scores,
+        vision_feedbacks,
+        captions,
+        pairs,
+        last_results,
+        compliance,
+    )
 
     return IterationResult(
         branch_id=experiment_id,
@@ -344,13 +326,14 @@ async def replicate_experiment(
     fixed_refs: list[Path],
     config: Config,
     *,
-    gemini_client: genai.Client,
-    registry: ModelRegistry,
-    gemini_semaphore: asyncio.Semaphore,
-    eval_semaphore: asyncio.Semaphore,
+    services: RunServices,
     n_replicates: int = 3,
     existing_scores: list[MetricScores] | None = None,
-    services: RunServices | None = None,
+    # Deprecated — accepted but ignored for backward compatibility with tests.
+    gemini_client: object = None,
+    registry: object = None,
+    gemini_semaphore: object = None,
+    eval_semaphore: object = None,
 ) -> ReplicatedEvaluation:
     """Run replicated caption+generate+evaluate cycles for confirmatory validation.
 
@@ -373,11 +356,9 @@ async def replicate_experiment(
             fixed_refs,
             meta_prompt,
             config=config,
-            gemini_client=gemini_client,
-            gemini_semaphore=gemini_semaphore,
+            services=services,
             iteration=iteration,
             experiment_id=rep_id,
-            services=services,
         )
         if not generated_paths:
             logger.warning("Replicate %d/%d for branch %d: no images generated", rep, n_replicates, branch_id)
@@ -388,18 +369,10 @@ async def replicate_experiment(
         caption_by_path = {c.image_path: c.text for c in captions}
         eval_captions = [caption_by_path[orig] for orig, _ in pairs]
 
-        if services is None:
-            (metric_scores, _n_eval_failed), (_, vision_scores_list) = await asyncio.gather(
-                evaluate_images(gen_paths, ref_paths_eval, eval_captions, registry=registry, semaphore=eval_semaphore),
-                compare_vision_per_image(
-                    pairs, eval_captions, client=gemini_client, model=config.caption_model, semaphore=gemini_semaphore
-                ),
-            )
-        else:
-            (metric_scores, _n_eval_failed), (_, vision_scores_list) = await asyncio.gather(
-                services.evaluation.evaluate_images(gen_paths, ref_paths_eval, eval_captions),
-                services.evaluation.compare_vision_per_image(pairs, eval_captions),
-            )
+        (metric_scores, _n_eval_failed), (_, vision_scores_list) = await asyncio.gather(
+            services.evaluation.evaluate_images(gen_paths, ref_paths_eval, eval_captions),
+            services.evaluation.compare_vision_per_image(pairs, eval_captions),
+        )
 
         scores = [_merge_vision(ms, vs) for ms, vs in zip(metric_scores, vision_scores_list, strict=True)]
         return scores, aggregate(scores)

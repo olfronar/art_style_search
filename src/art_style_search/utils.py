@@ -6,7 +6,14 @@ The concrete implementations now live in focused modules:
 
 from art_style_search.media import IMAGE_EXTENSIONS, MIME_MAP, build_ref_gen_pairs, image_to_gemini_part
 from art_style_search.reasoning_client import ReasoningClient, extract_text, extract_xml_tag, stream_message
-from art_style_search.retry import CircuitBreaker, async_retry, gemini_circuit_breaker
+from art_style_search.retry import (
+    CircuitBreaker,
+    async_retry,
+    caption_circuit_breaker,
+    gemini_circuit_breaker,
+    generation_circuit_breaker,
+    vision_circuit_breaker,
+)
 from art_style_search.taxonomy import CATEGORY_SYNONYMS
 
 __all__ = [
@@ -17,9 +24,12 @@ __all__ = [
     "ReasoningClient",
     "async_retry",
     "build_ref_gen_pairs",
+    "caption_circuit_breaker",
     "extract_text",
     "extract_xml_tag",
     "gemini_circuit_breaker",
+    "generation_circuit_breaker",
     "image_to_gemini_part",
     "stream_message",
+    "vision_circuit_breaker",
 ]

@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from art_style_search.retry import caption_circuit_breaker, generation_circuit_breaker, vision_circuit_breaker
 from art_style_search.types import (
     AggregatedMetrics,
     Caption,
@@ -116,3 +119,17 @@ def make_loop_state(
         converged=converged,
         convergence_reason=convergence_reason,
     )
+
+
+# ---------------------------------------------------------------------------
+# Auto-use fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _reset_circuit_breakers():
+    """Reset all per-surface circuit breakers between tests to prevent state leakage."""
+    yield
+    for cb in (caption_circuit_breaker, generation_circuit_breaker, vision_circuit_breaker):
+        cb._consecutive_failures = 0
+        cb._open_until = 0.0

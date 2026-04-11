@@ -1,8 +1,13 @@
-"""Unit tests for parsing helpers used by art_style_search.analyze."""
+"""Unit tests for art_style_search.analyze — parsing helpers and cache round-trip."""
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
+from art_style_search.analyze import _load_cache, _save_cache
 from art_style_search.utils import extract_xml_tag
+from tests.conftest import make_prompt_template, make_style_profile
 
 # ---------------------------------------------------------------------------
 # extract_xml_tag
@@ -41,3 +46,49 @@ class TestExtractTag:
     def test_tag_with_surrounding_text(self) -> None:
         xml = "before <result>found it</result> after"
         assert extract_xml_tag(xml, "result") == "found it"
+
+
+# ---------------------------------------------------------------------------
+# _save_cache / _load_cache round-trip
+# ---------------------------------------------------------------------------
+
+
+class TestStyleCache:
+    def test_save_load_round_trip(self, tmp_path: Path) -> None:
+        profile = make_style_profile()
+        template = make_prompt_template()
+        cache_file = tmp_path / "style_cache.json"
+
+        _save_cache(profile, template, cache_file)
+        assert cache_file.exists()
+
+        result = _load_cache(cache_file)
+        assert result is not None
+        loaded_profile, loaded_template = result
+        assert loaded_profile.color_palette == profile.color_palette
+        assert loaded_profile.technique == profile.technique
+        assert len(loaded_template.sections) == len(template.sections)
+        for orig, loaded in zip(template.sections, loaded_template.sections, strict=True):
+            assert orig.name == loaded.name
+            assert orig.value == loaded.value
+
+    def test_load_missing_file(self, tmp_path: Path) -> None:
+        result = _load_cache(tmp_path / "nonexistent.json")
+        assert result is None
+
+    def test_load_corrupt_json(self, tmp_path: Path) -> None:
+        cache_file = tmp_path / "corrupt.json"
+        cache_file.write_text("not valid json {{{", encoding="utf-8")
+        result = _load_cache(cache_file)
+        assert result is None
+
+    def test_load_missing_keys(self, tmp_path: Path) -> None:
+        cache_file = tmp_path / "incomplete.json"
+        cache_file.write_text(json.dumps({"style_profile": {}}), encoding="utf-8")
+        result = _load_cache(cache_file)
+        assert result is None
+
+    def test_cache_creates_parent_dirs(self, tmp_path: Path) -> None:
+        nested = tmp_path / "a" / "b" / "c" / "cache.json"
+        _save_cache(make_style_profile(), make_prompt_template(), nested)
+        assert nested.exists()

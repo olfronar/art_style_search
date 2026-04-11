@@ -49,6 +49,86 @@ def _decision_to_outcome(decision: IterationDecision) -> tuple[str, bool]:
     return "rejected", True
 
 
+def _manage_open_problems(
+    kb: KnowledgeBase,
+    result: IterationResult,
+    proposal: ExperimentProposal,
+    category: str,
+    category_names: list[str],
+    iteration: int,
+) -> None:
+    """Process, auto-generate, merge, age, and cap open problems on the KB."""
+    if proposal.open_problems:
+        scores = result.per_image_scores
+        best_cat_ds = sum(sc.dreamsim_similarity for sc in scores) / len(scores) if scores else 0.0
+
+        prev_problem_texts = {p.text: p.since_iteration for p in kb.open_problems}
+
+        new_problems: list[OpenProblem] = []
+        for prob_text in proposal.open_problems:
+            prob_cat = _resolve_category(
+                prob_text,
+                category_names,
+                explicit_category=proposal.target_category,
+                fallback_category=category,
+            )
+            cat_progress = kb.categories.get(prob_cat)
+
+            if cat_progress is None or not cat_progress.confirmed_insights:
+                priority = "HIGH"
+            elif cat_progress.rejected_approaches and len(cat_progress.rejected_approaches) >= len(
+                cat_progress.confirmed_insights
+            ):
+                priority = "MED"
+            else:
+                priority = "LOW"
+
+            gap = 1.0 - best_cat_ds
+            since = prev_problem_texts.get(prob_text, iteration)
+
+            new_problems.append(
+                OpenProblem(text=prob_text, category=prob_cat, priority=priority, metric_gap=gap, since_iteration=since)
+            )
+
+        # Auto-add open problems from low Gemini vision dimension scores
+        agg = result.aggregated
+        vision_dims = [
+            ("style", agg.vision_style, "technique"),
+            ("subject", agg.vision_subject, "subject_matter"),
+            ("composition", agg.vision_composition, "composition"),
+        ]
+        for dim_name, score, cat_name in vision_dims:
+            if score < 0.5:
+                label = "MISS" if score == 0.0 else "PARTIAL"
+                prob_text = f"{dim_name.title()} fidelity: Vision {dim_name} verdict {label}"
+                if not any(dim_name in p.text.lower() for p in new_problems):
+                    new_problems.append(
+                        OpenProblem(
+                            text=prob_text,
+                            category=cat_name,
+                            priority="HIGH" if score == 0.0 else "MED",
+                            metric_gap=float(1.0 - score),
+                            since_iteration=iteration,
+                        )
+                    )
+
+        # Merge with existing problems — newer version wins for duplicates
+        existing_by_text = {p.text: p for p in kb.open_problems}
+        for p in new_problems:
+            existing_by_text[p.text] = p
+        kb.open_problems = list(existing_by_text.values())
+
+    # Age stale problems — demote priority if they haven't been solved (always runs)
+    for p in kb.open_problems:
+        age = iteration - p.since_iteration
+        if age > 10:
+            p.priority = "LOW"
+        elif age > 5 and p.priority == "HIGH":
+            p.priority = "MED"
+
+    kb.open_problems = sorted(kb.open_problems, key=lambda p: _PRIORITY_ORDER.get(p.priority, 3))[:10]
+
+
 def update_knowledge_base(
     kb: KnowledgeBase,
     result: IterationResult,
@@ -105,76 +185,7 @@ def update_knowledge_base(
             update_progress=update_progress,
         )
 
-    if proposal.open_problems:
-        scores = result.per_image_scores
-        best_cat_ds = sum(sc.dreamsim_similarity for sc in scores) / len(scores) if scores else 0.0
-
-        prev_problem_texts = {p.text: p.since_iteration for p in kb.open_problems}
-
-        new_problems: list[OpenProblem] = []
-        for prob_text in proposal.open_problems:
-            prob_cat = _resolve_category(
-                prob_text,
-                category_names,
-                explicit_category=proposal.target_category,
-                fallback_category=category,
-            )
-            cat_progress = kb.categories.get(prob_cat)
-
-            if cat_progress is None or not cat_progress.confirmed_insights:
-                priority = "HIGH"
-            elif cat_progress.rejected_approaches and len(cat_progress.rejected_approaches) >= len(
-                cat_progress.confirmed_insights
-            ):
-                priority = "MED"
-            else:
-                priority = "LOW"
-
-            # Gap = distance from perfect DreamSim (1.0) for this experiment
-            gap = 1.0 - best_cat_ds
-            since = prev_problem_texts.get(prob_text, iteration)
-
-            new_problems.append(
-                OpenProblem(text=prob_text, category=prob_cat, priority=priority, metric_gap=gap, since_iteration=since)
-            )
-        # Auto-add open problems from low Gemini vision dimension scores
-        agg = result.aggregated
-        vision_dims = [
-            ("style", agg.vision_style, "technique"),
-            ("subject", agg.vision_subject, "subject_matter"),
-            ("composition", agg.vision_composition, "composition"),
-        ]
-        for dim_name, score, cat_name in vision_dims:
-            # Ternary scores: MISS=0.0, PARTIAL=0.5, MATCH=1.0 — flag MISS verdicts
-            if score < 0.5:
-                label = "MISS" if score == 0.0 else "PARTIAL"
-                prob_text = f"{dim_name.title()} fidelity: Vision {dim_name} verdict {label}"
-                if not any(dim_name in p.text.lower() for p in new_problems):
-                    new_problems.append(
-                        OpenProblem(
-                            text=prob_text,
-                            category=cat_name,
-                            priority="HIGH" if score == 0.0 else "MED",
-                            metric_gap=float(1.0 - score),
-                            since_iteration=iteration,
-                        )
-                    )
-
-        # Merge with existing problems instead of replacing — keeps context across experiments
-        existing_by_text = {p.text: p for p in kb.open_problems}
-        for p in new_problems:
-            existing_by_text[p.text] = p  # newer version wins for duplicates
-        kb.open_problems = list(existing_by_text.values())
-
-    # Age stale problems — demote priority if they haven't been solved (always runs)
-    for p in kb.open_problems:
-        age = iteration - p.since_iteration
-        if age > 10:
-            p.priority = "LOW"
-        elif age > 5 and p.priority == "HIGH":
-            p.priority = "MED"
-
-    kb.open_problems = sorted(kb.open_problems, key=lambda p: _PRIORITY_ORDER.get(p.priority, 3))[:10]
+    _manage_open_problems(kb, result, proposal, category, category_names, iteration)
 
 
 def build_caption_diffs(prev_captions: list[Caption], worst_captions: list[Caption]) -> str:

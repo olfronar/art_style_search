@@ -85,7 +85,14 @@ async def stream_message(client: anthropic.AsyncAnthropic, **kwargs: object) -> 
                 delay,
             )
             await asyncio.sleep(delay)
-        except (httpx.RemoteProtocolError, httpx.ReadError, httpcore.RemoteProtocolError, httpcore.ReadError) as exc:
+        except (
+            httpx.RemoteProtocolError,
+            httpx.ReadError,
+            httpcore.RemoteProtocolError,
+            httpcore.ReadError,
+            ConnectionResetError,
+            BrokenPipeError,
+        ) as exc:
             last_exc = exc
             delay = _STREAM_BASE_DELAY * (2**attempt) * (0.5 + _rng.random())
             logger.warning(
@@ -104,7 +111,7 @@ async def stream_message(client: anthropic.AsyncAnthropic, **kwargs: object) -> 
                 last_exc = exc
                 delay = _STREAM_BASE_DELAY * (2**attempt) * (0.5 + _rng.random())
                 logger.warning(
-                    "Anthropic stream attempt %d/%d failed: %s: %s — retrying in %.0fs",
+                    "Anthropic stream attempt %d/%d (string-match fallback): %s: %s — retrying in %.0fs",
                     attempt + 1,
                     _STREAM_MAX_RETRIES,
                     type(exc).__name__,

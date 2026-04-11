@@ -56,6 +56,7 @@ def _handle_report(argv: list[str]) -> None:
     parser.add_argument("--run", type=str, default=None, help="Generate report for a specific run")
     parser.add_argument("--all", action="store_true", dest="report_all", help="Regenerate reports for all runs")
     parser.add_argument("--open", action="store_true", dest="open_browser", help="Open the report in a browser")
+    parser.add_argument("--offline", action="store_true", help="Embed Plotly JS inline for offline viewing")
     args = parser.parse_args(argv)
 
     if not args.run and not args.report_all:
@@ -81,7 +82,7 @@ def _handle_report(argv: list[str]) -> None:
         print(f"Error: run {args.run!r} not found at {run_dir}.", file=sys.stderr)
         sys.exit(1)
     try:
-        path = build_report(run_dir, open_browser=args.open_browser)
+        path = build_report(run_dir, open_browser=args.open_browser, offline=args.offline)
     except FileNotFoundError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)

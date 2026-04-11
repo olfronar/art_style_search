@@ -1,10 +1,4 @@
-"""Extracted CSS stylesheet for the HTML report.
 
-Kept in its own module so ``report.py`` stays focused on data loading and
-HTML rendering logic.
-"""
-
-REPORT_CSS = """
 :root {
   --bg: #0e0e0c;
   --bg-sunk: #0a0a09;
@@ -805,4 +799,3 @@ details.hyp > summary::-webkit-details-marker { display: none; }
 .holdout-up { color: var(--accent); }
 .holdout-down { color: var(--ink-muted); }
 .holdout-images { font-family: var(--mono); font-size: 12px; color: var(--ink-muted); word-break: break-all; }
-"""

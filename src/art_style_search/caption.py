@@ -10,7 +10,7 @@ from pathlib import Path
 from google import genai
 
 from art_style_search.types import Caption
-from art_style_search.utils import async_retry, gemini_circuit_breaker, image_to_gemini_part
+from art_style_search.utils import async_retry, caption_circuit_breaker, image_to_gemini_part
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,7 @@ async def caption_single(
         return resp.text
 
     caption_text: str = await async_retry(
-        _call, label=f"Caption {image_path.name}", circuit_breaker=gemini_circuit_breaker
+        _call, label=f"Caption {image_path.name}", circuit_breaker=caption_circuit_breaker
     )
 
     # Validate caption quality — empty or very short captions waste downstream cycles

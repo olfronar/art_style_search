@@ -18,7 +18,18 @@ _RATE_LIMIT_DELAY = 30.0
 
 def _is_rate_limit(exc: Exception) -> bool:
     """Detect Gemini 429 / ResourceExhausted errors."""
-    return "resourceexhausted" in type(exc).__name__.lower() or "429" in str(exc)
+    # Check by class name (works without importing google.api_core)
+    if "resourceexhausted" in type(exc).__name__.lower():
+        return True
+    # Check explicit class if google.api_core is available
+    try:
+        from google.api_core.exceptions import ResourceExhausted
+
+        if isinstance(exc, ResourceExhausted):
+            return True
+    except ImportError:
+        pass
+    return "429" in str(exc)
 
 
 class CircuitBreaker:
@@ -51,7 +62,14 @@ class CircuitBreaker:
             self._consecutive_failures = 0
 
 
-gemini_circuit_breaker = CircuitBreaker(failure_threshold=15, cooldown=60.0)
+# Per-surface circuit breakers so a failure storm in one Gemini surface
+# (e.g. generation) doesn't block unrelated surfaces (e.g. captioning).
+caption_circuit_breaker = CircuitBreaker(failure_threshold=15, cooldown=60.0)
+generation_circuit_breaker = CircuitBreaker(failure_threshold=15, cooldown=60.0)
+vision_circuit_breaker = CircuitBreaker(failure_threshold=15, cooldown=60.0)
+
+# Deprecated alias — use the per-surface breakers above.
+gemini_circuit_breaker = caption_circuit_breaker
 
 
 async def async_retry(

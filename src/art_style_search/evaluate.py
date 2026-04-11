@@ -21,7 +21,7 @@ from art_style_search.types import (
     VisionDimensionScore,
     VisionScores,
 )
-from art_style_search.utils import async_retry, gemini_circuit_breaker, image_to_gemini_part
+from art_style_search.utils import async_retry, image_to_gemini_part, vision_circuit_breaker
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ async def _compare_vision_single(
         return text, _parse_vision_verdicts(text)
 
     try:
-        return await async_retry(_call, label=f"Vision {ref_path.name}", circuit_breaker=gemini_circuit_breaker)
+        return await async_retry(_call, label=f"Vision {ref_path.name}", circuit_breaker=vision_circuit_breaker)
     except RuntimeError:
         logger.error("Vision %s failed after retries — using neutral defaults", ref_path.name)
         return "", VisionScores.default()
@@ -217,7 +217,7 @@ async def pairwise_compare_experiments(
         return (rationale, score)
 
     try:
-        rationale, score = await async_retry(_call, label="Pairwise comparison", circuit_breaker=gemini_circuit_breaker)
+        rationale, score = await async_retry(_call, label="Pairwise comparison", circuit_breaker=vision_circuit_breaker)
     except RuntimeError:
         logger.error("Pairwise comparison failed after retries")
         return ("Comparison failed", 0.5)

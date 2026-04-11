@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from art_style_search._report_css import REPORT_CSS
+from importlib import resources
+
 from art_style_search.report_data import ReportData
 from art_style_search.reporting.charts import _build_composite_trajectory, _build_per_metric_trajectories
 from art_style_search.reporting.render import (
@@ -16,6 +17,8 @@ from art_style_search.reporting.render import (
     _render_trajectories_section,
 )
 
+REPORT_CSS = resources.files("art_style_search.reporting").joinpath("report.css").read_text(encoding="utf-8")
+
 _PLOTLY_CDN = "https://cdn.plot.ly/plotly-2.35.2.min.js"
 _FONTS_CDN = (
     "https://fonts.googleapis.com/css2"
@@ -26,7 +29,17 @@ _FONTS_CDN = (
 )
 
 
-def _assemble_html(data: ReportData, report_dir) -> str:
+def _plotly_script_tag(*, offline: bool = False) -> str:
+    """Return a <script> tag that loads Plotly — CDN by default, inline if offline."""
+    if not offline:
+        return f'<script src="{_PLOTLY_CDN}"></script>'
+
+    js_path = resources.files("plotly.package_data").joinpath("plotly.min.js")
+    plotly_js = js_path.read_text(encoding="utf-8")
+    return f"<script>{plotly_js}</script>"
+
+
+def _assemble_html(data: ReportData, report_dir, *, offline: bool = False) -> str:
     composite_json = ""
     multi_json = ""
     if data.iteration_logs:
@@ -71,7 +84,7 @@ def _assemble_html(data: ReportData, report_dir) -> str:
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="{_FONTS_CDN}">
-  <script src="{_PLOTLY_CDN}"></script>
+  {_plotly_script_tag(offline=offline)}
   <style>{REPORT_CSS}</style>
 </head>
 <body>

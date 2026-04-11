@@ -42,11 +42,11 @@ def _load_iteration_logs(log_dir: Path):
     return _load_iteration_logs_impl(log_dir)
 
 
-def build_report(run_dir: Path, *, open_browser: bool = False) -> Path:
+def build_report(run_dir: Path, *, open_browser: bool = False, offline: bool = False) -> Path:
     """Generate ``runs/<run_dir>/report.html`` and return its path."""
     data = load_report_data(run_dir)
     report_path = run_dir / "report.html"
-    html_doc = _assemble_html(data, report_path.parent)
+    html_doc = _assemble_html(data, report_path.parent, offline=offline)
     report_path.write_text(html_doc, encoding="utf-8")
     logger.info("Report written to %s", report_path)
     if open_browser:

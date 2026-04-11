@@ -16,7 +16,9 @@ from art_style_search.utils import CATEGORY_SYNONYMS as _CATEGORY_SYNONYMS
 
 _HPS_CEILING = 0.35  # default empirical max for HPS v2 scores; used to normalize to [0, 1]
 
-# Fixed metric weights for composite scoring (sum = 0.94; style_consistency has no per-image equivalent)
+# Fixed metric weights for composite scoring.
+# Base weights sum to 1.00 for composite_score (experiment-level).
+# per_image_composite omits _W_STYLE_CON → its weights sum to 0.94 (max output 0.94).
 _W_DREAMSIM = 0.40
 _W_HPS = 0.05
 _W_AESTHETICS = 0.06
@@ -169,6 +171,7 @@ def per_image_composite(s: MetricScores) -> float:
 
     Unlike ``composite_score`` (which operates on aggregated means), this computes
     the score for a single image — no variance penalty since there's only one observation.
+    Omits ``_W_STYLE_CON`` (style consistency is experiment-level), so max output is 0.94.
     """
     return (
         _W_DREAMSIM * s.dreamsim_similarity
@@ -199,6 +202,9 @@ def paired_promotion_test(
     Returns a ``PromotionTestResult`` with one-sided p-value (H1: candidate > incumbent),
     effect size (mean paired difference), and bootstrap 95% CI on the mean difference.
     Falls back to a sign test when Wilcoxon assumptions are violated (too many ties).
+
+    Note: uses ``per_image_composite`` which has max 0.94 (no style_consistency term),
+    so paired differences are on a [0, 0.94] scale rather than [0, 1.0].
     """
     import numpy as np
     from scipy import stats as sp_stats

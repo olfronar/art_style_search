@@ -294,7 +294,8 @@ class KnowledgeBase:
             elif not kept:
                 outcome = "rejected"
             else:
-                outcome = "confirmed" if kept else "rejected"
+                # kept=True, confirmed=False, rejected=False
+                outcome = "confirmed"
 
         hyp = Hypothesis(
             id=hid,

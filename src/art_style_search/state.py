@@ -345,6 +345,9 @@ def _migrate_promotion_payload(raw: dict[str, Any], version: int) -> dict[str, A
 def save_state(state: LoopState, path: Path) -> None:
     """Serialize *state* to JSON, writing atomically via temp-file + rename."""
     data = to_dict(state)
+    # Transient fields — always empty on resume, no need to persist.
+    data.pop("review_feedback", None)
+    data.pop("pairwise_feedback", None)
     data["_schema_version"] = _SCHEMA_VERSION
     path.parent.mkdir(parents=True, exist_ok=True)
 

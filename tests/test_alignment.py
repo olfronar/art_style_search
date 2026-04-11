@@ -85,7 +85,7 @@ class TestExtractSilentScoresAlignment:
     def test_correct_score_for_silent_image(self) -> None:
         """Silent image scores must come from the right index, not a misaligned one."""
         # Lazy import to avoid circular import issues
-        from art_style_search.loop import _extract_silent_scores
+        from art_style_search.workflow.context import _extract_silent_scores
 
         result = _make_result(4, dreamsim_values=[0.1, 0.9, 0.2, 0.8])
         # Mark image 1 (DreamSim=0.9) as silent
@@ -97,7 +97,7 @@ class TestExtractSilentScoresAlignment:
         assert scores[0] == pytest.approx(expected)
 
     def test_multiple_silent_images(self) -> None:
-        from art_style_search.loop import _extract_silent_scores
+        from art_style_search.workflow.context import _extract_silent_scores
 
         result = _make_result(4, dreamsim_values=[0.1, 0.5, 0.3, 0.7])
         silent_set = frozenset({Path("/ref/img_001.png"), Path("/ref/img_003.png")})
