@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import random
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -11,6 +12,7 @@ import pytest
 from art_style_search.scoring import composite_score, improvement_epsilon
 from art_style_search.types import (
     AggregatedMetrics,
+    Caption,
     CategoryProgress,
     IterationResult,
     KnowledgeBase,
@@ -20,7 +22,14 @@ from art_style_search.types import (
     PromptTemplate,
     ReplicatedEvaluation,
 )
-from art_style_search.workflow.context import RunContext, _discover_images, _sample, _split_information_barrier
+from art_style_search.workflow.context import (
+    RunContext,
+    _build_manifest,
+    _discover_images,
+    _finalize_run,
+    _sample,
+    _split_information_barrier,
+)
 from art_style_search.workflow.iteration import (
     IterationRanking,
     _confirmatory_validation,
@@ -34,7 +43,7 @@ from art_style_search.workflow.policy import (
     _should_honor_stop,
 )
 from art_style_search.workflow.zero_step import _sanitize_initial_templates
-from tests.conftest import make_loop_state, make_prompt_template
+from tests.conftest import make_aggregated_metrics, make_iteration_result, make_loop_state, make_prompt_template
 
 # ---------------------------------------------------------------------------
 # _discover_images
@@ -79,6 +88,87 @@ class TestDiscoverImages:
 
         result = _discover_images(tmp_path)
         assert len(result) == 2
+
+
+class TestRunAccounting:
+    def test_build_manifest_records_discovered_reference_count(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path)
+        config.reference_dir.mkdir(parents=True)
+        for name in ("a.png", "b.png", "c.png"):
+            (config.reference_dir / name).touch()
+
+        manifest = _build_manifest(config)
+
+        assert manifest.num_fixed_refs == 20
+        assert manifest.discovered_reference_count == 3
+
+    def test_finalize_run_writes_holdout_summary_for_rigorous_runs(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path, protocol="rigorous")
+        config.run_dir.mkdir(parents=True, exist_ok=True)
+        config.log_dir.mkdir(parents=True, exist_ok=True)
+        silent_ref = tmp_path / "silent.png"
+        silent_ref.touch()
+
+        iter0 = make_iteration_result(branch_id=0, iteration=0)
+        iter0.iteration_captions = [Caption(image_path=silent_ref, text="caption")]
+        iter0.per_image_scores = [MetricScores(dreamsim_similarity=0.7, hps_score=0.25, aesthetics_score=6.0)]
+        iter0.kept = True
+
+        final = make_iteration_result(branch_id=0, iteration=1)
+        final.iteration_captions = [Caption(image_path=silent_ref, text="caption")]
+        final.per_image_scores = [MetricScores(dreamsim_similarity=0.8, hps_score=0.25, aesthetics_score=6.0)]
+        final.kept = True
+
+        state = make_loop_state(global_best_metrics=make_aggregated_metrics())
+        state.protocol = "rigorous"
+        state.silent_refs = [silent_ref]
+        state.experiment_history = [iter0]
+        state.last_iteration_results = [final]
+
+        ctx = RunContext(
+            config=config,
+            gemini_client=MagicMock(),
+            reasoning_client=MagicMock(),
+            registry=MagicMock(),
+            gemini_semaphore=MagicMock(),
+            eval_semaphore=MagicMock(),
+            services=MagicMock(),
+            rng=random.Random(42),
+        )
+
+        _finalize_run(state, ctx)
+
+        holdout_path = config.run_dir / "holdout_summary.json"
+        assert holdout_path.exists()
+        payload = json.loads(holdout_path.read_text(encoding="utf-8"))
+        assert payload["silent_image_count"] == 1
+        assert payload["iteration_0_mean"] is not None
+        assert payload["final_mean"] is not None
+
+    def test_finalize_run_fails_if_rigorous_holdout_summary_missing(self, tmp_path: Path, monkeypatch) -> None:
+        config = _make_config(tmp_path, protocol="rigorous")
+        config.run_dir.mkdir(parents=True, exist_ok=True)
+        config.log_dir.mkdir(parents=True, exist_ok=True)
+
+        state = make_loop_state(global_best_metrics=make_aggregated_metrics())
+        state.protocol = "rigorous"
+        state.silent_refs = [tmp_path / "silent.png"]
+
+        ctx = RunContext(
+            config=config,
+            gemini_client=MagicMock(),
+            reasoning_client=MagicMock(),
+            registry=MagicMock(),
+            gemini_semaphore=MagicMock(),
+            eval_semaphore=MagicMock(),
+            services=MagicMock(),
+            rng=random.Random(42),
+        )
+
+        monkeypatch.setattr("art_style_search.workflow.context._write_holdout_summary", lambda state, ctx: None)
+
+        with pytest.raises(RuntimeError, match=r"holdout_summary\.json"):
+            _finalize_run(state, ctx)
 
 
 # ---------------------------------------------------------------------------

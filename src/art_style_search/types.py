@@ -77,6 +77,25 @@ class VisionScores:
 
 
 @dataclass(frozen=True)
+class CaptionComplianceStats:
+    """Structured caption-compliance rates used by scoring and reporting."""
+
+    section_topic_coverage: float = 1.0
+    section_marker_coverage: float = 1.0
+    section_ordering_rate: float = 1.0
+    section_balance_rate: float = 1.0
+
+    @property
+    def overall(self) -> float:
+        return (
+            self.section_topic_coverage
+            + self.section_marker_coverage
+            + self.section_ordering_rate
+            + self.section_balance_rate
+        ) / 4.0
+
+
+@dataclass(frozen=True)
 class AggregatedMetrics:
     """Mean + std of per-image MetricScores, plus experiment-level vision scores."""
 
@@ -106,6 +125,16 @@ class AggregatedMetrics:
     vision_composition: float = 0.5
     vision_composition_std: float = 0.0
 
+    # Structured caption-compliance signals [0, 1]
+    compliance_topic_coverage: float = 1.0
+    compliance_marker_coverage: float = 1.0
+    section_ordering_rate: float = 1.0
+    section_balance_rate: float = 1.0
+
+    # Requested-vs-actual accounting for scoring/reporting
+    requested_ref_count: int = 0
+    actual_ref_count: int = 0
+
     def summary_dict(self) -> dict[str, float]:
         """Flat dict for JSON serialization and reasoning model consumption."""
         return {
@@ -127,6 +156,12 @@ class AggregatedMetrics:
             "vision_subject_std": self.vision_subject_std,
             "vision_composition": self.vision_composition,
             "vision_composition_std": self.vision_composition_std,
+            "compliance_topic_coverage": self.compliance_topic_coverage,
+            "compliance_marker_coverage": self.compliance_marker_coverage,
+            "section_ordering_rate": self.section_ordering_rate,
+            "section_balance_rate": self.section_balance_rate,
+            "requested_ref_count": float(self.requested_ref_count),
+            "actual_ref_count": float(self.actual_ref_count),
         }
 
 
@@ -433,7 +468,8 @@ class RunManifest:
     timestamp_utc: str  # ISO 8601
     reference_image_hashes: dict[str, str]  # filename -> SHA256
     num_fixed_refs: int
-    uv_lock_hash: str | None
+    discovered_reference_count: int = 0
+    uv_lock_hash: str | None = None
 
 
 @dataclass(frozen=True)

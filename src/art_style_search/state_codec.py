@@ -94,6 +94,12 @@ def _aggregated_metrics_from_dict(d: dict[str, Any]) -> AggregatedMetrics:
         vision_subject_std=d.get("vision_subject_std", 0.0),
         vision_composition_std=d.get("vision_composition_std", 0.0),
         completion_rate=d.get("completion_rate", 1.0),
+        compliance_topic_coverage=d.get("compliance_topic_coverage", 1.0),
+        compliance_marker_coverage=d.get("compliance_marker_coverage", 1.0),
+        section_ordering_rate=d.get("section_ordering_rate", 1.0),
+        section_balance_rate=d.get("section_balance_rate", 1.0),
+        requested_ref_count=d.get("requested_ref_count", 0),
+        actual_ref_count=d.get("actual_ref_count", 0),
     )
 
 

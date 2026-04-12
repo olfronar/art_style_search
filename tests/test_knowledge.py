@@ -277,3 +277,42 @@ class TestKnowledgeBaseDecisionHandling:
 
         assert kb.hypotheses[0].category == "texture"
         assert kb.open_problems[0].category == "texture"
+
+    def test_near_duplicate_problems_keep_oldest_since_and_strongest_priority(self) -> None:
+        kb = KnowledgeBase()
+        kb.open_problems = [
+            OpenProblem(
+                text="Palette defaults still drift toward warm terracotta daylight when the reference is cool, dark, or enclosed.",
+                category="color_palette",
+                priority="HIGH",
+                since_iteration=3,
+            )
+        ]
+        template = PromptTemplate()
+        proposal = ExperimentProposal(
+            template=template,
+            hypothesis="Palette wording tweak",
+            experiment_desc="Test experiment",
+            builds_on=None,
+            open_problems=[
+                "[MED] Cool enclosed palettes still drift toward warm terracotta daylight when the reference is dark, cool, or ceiling-dominated."
+            ],
+            lessons=Lessons(rejected="did not resolve palette drift"),
+            target_category="color_palette",
+        )
+
+        update_knowledge_base(
+            kb,
+            self._make_result(target_category="color_palette"),
+            template,
+            None,
+            proposal,
+            iteration=8,
+            decision="rejected",
+        )
+
+        assert len(kb.open_problems) == 1
+        problem = kb.open_problems[0]
+        assert problem.category == "color_palette"
+        assert problem.priority == "HIGH"
+        assert problem.since_iteration == 3

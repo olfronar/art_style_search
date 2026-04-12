@@ -147,6 +147,7 @@ def load_manifest(path: Path) -> RunManifest | None:
         timestamp_utc=raw.get("timestamp_utc", ""),
         reference_image_hashes=raw.get("reference_image_hashes", {}),
         num_fixed_refs=raw.get("num_fixed_refs", 0),
+        discovered_reference_count=raw.get("discovered_reference_count", 0),
         uv_lock_hash=raw.get("uv_lock_hash"),
     )
 

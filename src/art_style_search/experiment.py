@@ -13,6 +13,7 @@ from art_style_search.config import Config
 from art_style_search.evaluate import (
     aggregate,
     check_caption_compliance,
+    compute_caption_compliance_stats,
     compute_style_consistency,
 )
 from art_style_search.types import (
@@ -238,6 +239,11 @@ async def run_experiment(
 
     section_names = [s.name for s in template.sections]
     compliance = check_caption_compliance(section_names, captions, caption_sections=template.caption_sections)
+    compliance_stats = compute_caption_compliance_stats(
+        section_names,
+        captions,
+        caption_sections=template.caption_sections,
+    )
 
     # Merge vision scores in original order (aligned with pairs/captions/paths)
     original_scores = [_merge_vision(ms, vs) for ms, vs in zip(metric_scores, vision_scores_list, strict=True)]
@@ -248,7 +254,16 @@ async def run_experiment(
 
     aggregated = aggregate(original_scores, completion_rate=completion_rate)
     style_con = compute_style_consistency(captions)
-    aggregated = replace(aggregated, style_consistency=style_con)
+    aggregated = replace(
+        aggregated,
+        style_consistency=style_con,
+        compliance_topic_coverage=compliance_stats.section_topic_coverage,
+        compliance_marker_coverage=compliance_stats.section_marker_coverage,
+        section_ordering_rate=compliance_stats.section_ordering_rate,
+        section_balance_rate=compliance_stats.section_balance_rate,
+        requested_ref_count=config.num_fixed_refs,
+        actual_ref_count=n_attempted,
+    )
 
     vision_feedback, roundtrip_feedback = _format_experiment_feedback(
         original_scores,
@@ -343,7 +358,13 @@ async def replicate_experiment(
         start_rep = 1
     elif existing_scores is not None:
         all_replicate_scores.append(existing_scores)
-        all_replicate_agg.append(aggregate(existing_scores))
+        all_replicate_agg.append(
+            replace(
+                aggregate(existing_scores),
+                requested_ref_count=config.num_fixed_refs,
+                actual_ref_count=len(fixed_refs),
+            )
+        )
         start_rep = 1
 
     async def _run_one_replicate(rep: int) -> tuple[list[MetricScores], AggregatedMetrics] | None:
@@ -372,7 +393,21 @@ async def replicate_experiment(
 
         scores = [_merge_vision(ms, vs) for ms, vs in zip(metric_scores, vision_scores_list, strict=True)]
         aggregated = aggregate(scores)
-        return scores, replace(aggregated, style_consistency=compute_style_consistency(captions))
+        compliance_stats = compute_caption_compliance_stats(
+            [s.name for s in template.sections],
+            captions,
+            caption_sections=template.caption_sections,
+        )
+        return scores, replace(
+            aggregated,
+            style_consistency=compute_style_consistency(captions),
+            compliance_topic_coverage=compliance_stats.section_topic_coverage,
+            compliance_marker_coverage=compliance_stats.section_marker_coverage,
+            section_ordering_rate=compliance_stats.section_ordering_rate,
+            section_balance_rate=compliance_stats.section_balance_rate,
+            requested_ref_count=config.num_fixed_refs,
+            actual_ref_count=len(fixed_refs),
+        )
 
     # Run all replicates in parallel
     rep_results = await asyncio.gather(
@@ -394,7 +429,16 @@ async def replicate_experiment(
     median_scores = _median_metric_scores(all_replicate_scores)
     median_agg = aggregate(median_scores)
     style_con = statistics.median(agg.style_consistency for agg in all_replicate_agg)
-    median_agg = replace(median_agg, style_consistency=style_con)
+    median_agg = replace(
+        median_agg,
+        style_consistency=style_con,
+        compliance_topic_coverage=statistics.median(agg.compliance_topic_coverage for agg in all_replicate_agg),
+        compliance_marker_coverage=statistics.median(agg.compliance_marker_coverage for agg in all_replicate_agg),
+        section_ordering_rate=statistics.median(agg.section_ordering_rate for agg in all_replicate_agg),
+        section_balance_rate=statistics.median(agg.section_balance_rate for agg in all_replicate_agg),
+        requested_ref_count=config.num_fixed_refs,
+        actual_ref_count=len(fixed_refs),
+    )
 
     return ReplicatedEvaluation(
         template=template,

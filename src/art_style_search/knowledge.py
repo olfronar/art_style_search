@@ -24,12 +24,13 @@ _PRIORITY_ORDER = {"HIGH": 0, "MED": 1, "LOW": 2}
 _PRIORITY_PREFIX_RE = re.compile(r"^\[(HIGH|MED|LOW)\]\s*", re.IGNORECASE)
 IterationDecision = Literal["promoted", "exploration", "rejected"]
 
-_NEAR_DUP_THRESHOLD = 0.6
+_NEAR_DUP_THRESHOLD = 0.5
 
 
 def _tokenize(text: str) -> set[str]:
     """Lowercase word tokens for Jaccard comparison."""
-    return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) > 2}
+    normalized = _PRIORITY_PREFIX_RE.sub("", text).lower()
+    return {w for w in re.findall(r"[a-z0-9]+", normalized) if len(w) > 2}
 
 
 def _find_near_duplicate(text: str, candidates: list[str]) -> int | None:
@@ -46,6 +47,26 @@ def _find_near_duplicate(text: str, candidates: list[str]) -> int | None:
         if intersection / union >= _NEAR_DUP_THRESHOLD:
             return idx
     return None
+
+
+def _merge_problem(existing: OpenProblem, incoming: OpenProblem) -> OpenProblem:
+    """Merge two near-duplicate problems without losing the strongest history."""
+    existing_rank = _PRIORITY_ORDER.get(existing.priority, 99)
+    incoming_rank = _PRIORITY_ORDER.get(incoming.priority, 99)
+    chosen = existing if existing_rank <= incoming_rank else incoming
+
+    text = incoming.text if len(incoming.text) > len(existing.text) else existing.text
+
+    metric_gap_candidates = [gap for gap in (existing.metric_gap, incoming.metric_gap) if gap is not None]
+    metric_gap = max(metric_gap_candidates) if metric_gap_candidates else None
+
+    return OpenProblem(
+        text=text,
+        category=existing.category if existing_rank <= incoming_rank else incoming.category,
+        priority=chosen.priority,
+        metric_gap=metric_gap,
+        since_iteration=min(existing.since_iteration, incoming.since_iteration),
+    )
 
 
 def _resolve_category(
@@ -152,7 +173,7 @@ def _manage_open_problems(
         for new_p in new_problems:
             dup_idx = _find_near_duplicate(new_p.text, [p.text for p in merged])
             if dup_idx is not None:
-                merged[dup_idx] = new_p  # newer version wins
+                merged[dup_idx] = _merge_problem(merged[dup_idx], new_p)
             else:
                 merged.append(new_p)
         kb.open_problems = merged

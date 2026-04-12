@@ -6,7 +6,7 @@ from typing import Any
 
 _SCHEMA_VERSION = 3  # v1: dino_similarity era, v2: vision+KB+rigorous, v3: changed_section+target_category
 _ITERATION_LOG_SCHEMA_VERSION = 1
-_MANIFEST_SCHEMA_VERSION = 1
+_MANIFEST_SCHEMA_VERSION = 2
 _PROMOTION_LOG_SCHEMA_VERSION = 1
 
 
@@ -95,6 +95,8 @@ def _migrate_manifest_payload(raw: dict[str, Any], version: int) -> dict[str, An
     data = dict(raw)
     if version < 1:
         data.setdefault("uv_lock_hash", None)
+    if version < 2:
+        data.setdefault("discovered_reference_count", 0)
     return data
 
 

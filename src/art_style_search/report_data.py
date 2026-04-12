@@ -35,7 +35,25 @@ class ReportData:
         """Sorted list of iteration indices that have at least one log."""
         return sorted(self.iteration_logs.keys())
 
-    def winner_of(self, iteration: int) -> IterationResult | None:
+    @property
+    def requested_ref_count(self) -> int:
+        if self.manifest is not None:
+            return self.manifest.num_fixed_refs
+        return len(self.state.fixed_references)
+
+    @property
+    def discovered_ref_count(self) -> int:
+        if self.manifest is not None:
+            if self.manifest.discovered_reference_count:
+                return self.manifest.discovered_reference_count
+            return len(self.manifest.reference_image_hashes)
+        return len(self.state.fixed_references)
+
+    @property
+    def actual_ref_count(self) -> int:
+        return len(self.state.fixed_references)
+
+    def kept_of(self, iteration: int) -> IterationResult | None:
         """Return the kept experiment, falling back to highest ``composite_score``."""
         results = self.iteration_logs.get(iteration, [])
         if not results:
@@ -44,6 +62,17 @@ class ReportData:
         if kept:
             return max(kept, key=lambda r: composite_score(r.aggregated))
         return max(results, key=lambda r: composite_score(r.aggregated))
+
+    def top_scoring_of(self, iteration: int) -> IterationResult | None:
+        """Return the highest raw-composite experiment for an iteration."""
+        results = self.iteration_logs.get(iteration, [])
+        if not results:
+            return None
+        return max(results, key=lambda r: composite_score(r.aggregated))
+
+    def winner_of(self, iteration: int) -> IterationResult | None:
+        """Backward-compatible alias for the kept experiment."""
+        return self.kept_of(iteration)
 
 
 def _load_iteration_logs(log_dir: Path) -> dict[int, list[IterationResult]]:

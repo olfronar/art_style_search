@@ -130,6 +130,7 @@ def _build_manifest(config: Config) -> RunManifest:
         timestamp_utc=datetime.now(UTC).isoformat(),
         reference_image_hashes=_hash_reference_images(config.reference_dir),
         num_fixed_refs=config.num_fixed_refs,
+        discovered_reference_count=len(_discover_images(config.reference_dir)),
         uv_lock_hash=uv_lock_hash,
     )
 
@@ -293,6 +294,11 @@ def _finalize_run(state: LoopState, ctx: RunContext) -> LoopState:
     save_state(state, ctx.config.state_file)
     _save_best_prompt(state, ctx.config.log_dir)
     _write_holdout_summary(state, ctx)
+    if ctx.config.protocol == "rigorous" and state.silent_refs:
+        holdout_path = ctx.config.run_dir / "holdout_summary.json"
+        if not holdout_path.exists():
+            msg = f"Rigorous run expected holdout_summary.json at {holdout_path}"
+            raise RuntimeError(msg)
 
     logger.info("=" * 60)
     if state.global_best_metrics:

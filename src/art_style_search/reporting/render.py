@@ -36,6 +36,7 @@ _VERDICT_TAG_RE = __import__("re").compile(
     __import__("re").DOTALL,
 )
 _IMAGE_HEADER_RE = __import__("re").compile(r"^\*\*(.+?)\*\*\s*\[([^\]]+)\]:\s*", __import__("re").MULTILINE)
+_RAW_TAG_CLEAN_RE = __import__("re").compile(r"</?(style|subject|composition|key_gap)\b[^>]*>", __import__("re").IGNORECASE)
 
 _VERDICT_CSS = {"MATCH": "verdict-match", "PARTIAL": "verdict-partial", "MISS": "verdict-miss"}
 _VERDICT_LABEL = {"MATCH": "Match", "PARTIAL": "Partial", "MISS": "Miss"}
@@ -82,7 +83,8 @@ def _format_vision_feedback(raw: str) -> str:
 
         if not verdicts:
             # No tags parsed — show body as plain text
-            verdicts.append(f"<p>{html.escape(body.strip())}</p>")
+            cleaned_body = _RAW_TAG_CLEAN_RE.sub("", body).strip()
+            verdicts.append(f"<p>{html.escape(cleaned_body)}</p>")
 
         # Truncate long filenames for display
         short_name = filename[:32] + ("…" if len(filename) > 32 else "")
@@ -192,6 +194,14 @@ def _render_header(data: ReportData) -> str:
     profile_html = "".join(
         f"<div class='kv-row'><dt>{_h(label)}</dt><dd>{_h(text)}</dd></div>" for label, text in profile_rows
     )
+    accounting_html = "".join(
+        [
+            f"<div class='kv-row'><dt>Requested refs</dt><dd>{data.requested_ref_count}</dd></div>",
+            f"<div class='kv-row'><dt>Discovered refs</dt><dd>{data.discovered_ref_count}</dd></div>",
+            f"<div class='kv-row'><dt>Actual refs</dt><dd>{data.actual_ref_count}</dd></div>",
+            f"<div class='kv-row'><dt>Feedback / silent</dt><dd>{len(state.feedback_refs)} / {len(state.silent_refs)}</dd></div>",
+        ]
+    )
 
     return f"""
 <header class="masthead">
@@ -229,6 +239,10 @@ def _render_header(data: ReportData) -> str:
       <summary><span class="fold-cue">§</span> Best meta-prompt</summary>
       <pre class="prompt-block">{_h(state.global_best_prompt)}</pre>
     </details>
+    <details class="fold">
+      <summary><span class="fold-cue">§</span> Run accounting</summary>
+      <dl class="kv">{accounting_html}</dl>
+    </details>
   </div>
 </header>
 """
@@ -242,7 +256,7 @@ def _render_summary_section(data: ReportData) -> str:
         return ""
 
     # Score trajectory
-    first_winner = data.winner_of(iterations[0])
+    first_winner = data.kept_of(iterations[0])
     first_score = composite_score(first_winner.aggregated) if first_winner else 0.0
     best_score = composite_score(data.state.global_best_metrics) if data.state.global_best_metrics else 0.0
     delta = best_score - first_score
@@ -331,25 +345,34 @@ def _render_trajectories_section(composite_json: str, multi_json: str) -> str:
 """
 
 
-def _render_experiment_table(results: list[IterationResult]) -> str:
+def _render_experiment_table(
+    results: list[IterationResult],
+    *,
+    kept_branch_id: int | None,
+    top_raw_branch_id: int | None,
+) -> str:
     if not results:
         return "<p class='empty'>No experiments logged.</p>"
 
     batch = [result.aggregated for result in results]
-    # Highlight the kept experiment; fall back to highest composite if none was kept
-    kept_ids = {r.branch_id for r in results if r.kept}
-    if not kept_ids:
-        kept_ids = {max(results, key=lambda r: composite_score(r.aggregated)).branch_id}
     rows: list[str] = []
     for result in results:
         score = composite_score(result.aggregated)
         adaptive = adaptive_composite_score(result.aggregated, batch) if len(batch) >= 2 else None
         adaptive_cell = _fmt_score(adaptive) if adaptive is not None else "—"
-        is_highlighted = result.branch_id in kept_ids
-        winner_mark = "<span class='winner-star'>✦</span>" if is_highlighted else ""
-        kept_cell = "kept" if result.kept else "cut"
+        is_kept = kept_branch_id is not None and result.branch_id == kept_branch_id
+        is_top_raw = top_raw_branch_id is not None and result.branch_id == top_raw_branch_id
+        winner_mark = "<span class='winner-star'>✦</span>" if is_kept else ""
+        if is_kept and is_top_raw:
+            kept_cell = "kept / top raw"
+        elif is_kept:
+            kept_cell = "kept"
+        elif is_top_raw:
+            kept_cell = "top raw"
+        else:
+            kept_cell = "cut"
         kept_class = "kept-yes" if result.kept else "kept-no"
-        row_class = " class='winner-row'" if is_highlighted else ""
+        row_class = " class='winner-row'" if is_kept else ""
         hyp = _h(result.hypothesis)
         truncated = hyp[:160] + ("…" if len(result.hypothesis) > 160 else "")
         rows.append(
@@ -439,9 +462,14 @@ def _render_iteration_drilldown(data: ReportData, report_dir: Path) -> str:
     blocks: list[str] = []
     for iteration in iterations:
         results = data.iteration_logs[iteration]
-        winner = data.winner_of(iteration)
+        winner = data.kept_of(iteration)
+        top_raw = data.top_scoring_of(iteration)
         winner_score = _fmt_score(composite_score(winner.aggregated)) if winner else "—"
-        experiment_table = _render_experiment_table(results)
+        experiment_table = _render_experiment_table(
+            results,
+            kept_branch_id=winner.branch_id if winner else None,
+            top_raw_branch_id=top_raw.branch_id if top_raw else None,
+        )
         grid = _render_image_grid(winner, report_dir) if winner else ""
         narrative_blocks: list[str] = []
         if winner:
@@ -693,7 +721,7 @@ def _render_protocol_section(data: ReportData) -> str:
     <span class="protocol-badge {badge_class}">{badge_label}</span>
     <span class="manifest-item">Seed: <code>{manifest.seed}</code></span>
     {git_line}
-    <span class="manifest-item">Refs: <code>{manifest.num_fixed_refs}</code></span>
+    <span class="manifest-item">Refs: <code>{data.requested_ref_count} requested / {data.actual_ref_count} actual</code></span>
   </div>
   <details class="fold">
     <summary>Models &amp; config</summary>
@@ -725,7 +753,7 @@ def _render_promotion_section(data: ReportData) -> str:
         effect_cell = f"{decision.delta:+.5f}"
         rows.append(
             f'<tr class="{css_class}">'
-            f"<td>{decision.iteration + 1}</td>"
+            f"<td>{decision.iteration}</td>"
             f"<td>{decision.candidate_branch_id}</td>"
             f"<td>{_fmt_score(decision.baseline_score)}</td>"
             f"<td>{_fmt_score(decision.candidate_score)}</td>"
@@ -768,6 +796,15 @@ def _render_promotion_section(data: ReportData) -> str:
 def _render_holdout_section(data: ReportData) -> str:
     summary = data.holdout_summary
     if summary is None:
+        if data.state.protocol == "rigorous" and data.state.silent_refs:
+            return (
+                '<section class="holdout-section">'
+                '<div class="section-head"><span class="section-numeral">VI</span>'
+                "<h2>Silent-Image Holdout</h2></div>"
+                '<p class="empty">Holdout data was expected for this rigorous run, '
+                "but holdout_summary.json is missing or empty.</p>"
+                "</section>"
+            )
         return (
             '<section class="holdout-section">'
             '<div class="section-head"><span class="section-numeral">VI</span>'

@@ -495,6 +495,7 @@ class TestManifestRoundTrip:
             timestamp_utc="2026-04-10T12:00:00Z",
             reference_image_hashes={"img_001.png": "deadbeef", "img_002.png": "cafebabe"},
             num_fixed_refs=20,
+            discovered_reference_count=16,
             uv_lock_hash="lockhash123",
         )
         manifest_path = tmp_path / "manifest.json"
@@ -515,6 +516,7 @@ class TestManifestRoundTrip:
         assert loaded.timestamp_utc == manifest.timestamp_utc
         assert loaded.reference_image_hashes == manifest.reference_image_hashes
         assert loaded.num_fixed_refs == manifest.num_fixed_refs
+        assert loaded.discovered_reference_count == manifest.discovered_reference_count
         assert loaded.uv_lock_hash == manifest.uv_lock_hash
 
     def test_manifest_writes_schema_marker(self, tmp_path: Path) -> None:
@@ -535,7 +537,7 @@ class TestManifestRoundTrip:
         manifest_path = tmp_path / "manifest.json"
         save_manifest(manifest, manifest_path)
         raw = json.loads(manifest_path.read_text(encoding="utf-8"))
-        assert raw["_schema_version"] == 1
+        assert raw["_schema_version"] == 2
 
 
 # ---------------------------------------------------------------------------

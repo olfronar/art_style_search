@@ -3,20 +3,29 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from art_style_search.report import build_report
-from art_style_search.report_data import _load_iteration_logs, _rel, load_report_data
-from art_style_search.reporting.render import _count_descendants, _render_hypothesis_tree, _render_open_problems
-from art_style_search.state import save_iteration_log, save_state
+from art_style_search.report_data import ReportData, _load_iteration_logs, _rel, load_report_data
+from art_style_search.reporting.render import (
+    _count_descendants,
+    _format_vision_feedback,
+    _render_hypothesis_tree,
+    _render_open_problems,
+)
+from art_style_search.state import append_promotion_log, save_iteration_log, save_manifest, save_state
 from art_style_search.types import (
     Hypothesis,
     KnowledgeBase,
     OpenProblem,
+    PromotionDecision,
+    RunManifest,
 )
 from tests.conftest import (
+    make_aggregated_metrics,
     make_iteration_result,
     make_loop_state,
 )
@@ -105,6 +114,34 @@ class TestLoadIterationLogs:
         assert 1 in loaded
         assert len(loaded[1]) == 1
         assert 2 not in loaded
+
+
+class TestReportDataSelection:
+    def test_kept_and_top_scoring_results_can_differ(self) -> None:
+        kept = make_iteration_result(branch_id=1, iteration=1)
+        kept.hypothesis = "kept branch"
+        kept.kept = True
+        kept.aggregated = replace(kept.aggregated, dreamsim_similarity_mean=0.55, color_histogram_mean=0.45, ssim_mean=0.45)
+
+        top_raw = make_iteration_result(branch_id=0, iteration=1)
+        top_raw.hypothesis = "top raw branch"
+        top_raw.kept = False
+        top_raw.aggregated = replace(
+            top_raw.aggregated,
+            dreamsim_similarity_mean=0.75,
+            color_histogram_mean=0.70,
+            ssim_mean=0.70,
+        )
+
+        data = ReportData(
+            run_name="demo",
+            run_dir=Path("/tmp/demo"),
+            state=make_loop_state(global_best_metrics=make_aggregated_metrics()),
+            iteration_logs={1: [top_raw, kept]},
+        )
+
+        assert data.kept_of(1).branch_id == 1
+        assert data.top_scoring_of(1).branch_id == 0
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +284,14 @@ class TestRenderOpenProblems:
         assert "-0.123" in html
 
 
+class TestFormatVisionFeedback:
+    def test_malformed_verdict_tags_do_not_leak_raw_xml(self) -> None:
+        raw = '**img.png** [S=P Su=P Co=P]: <style verdict="PARTIAL">The linework is too heavy.'
+        rendered = _format_vision_feedback(raw)
+        assert "The linework is too heavy." in rendered
+        assert "&lt;style verdict=" not in rendered
+
+
 # ---------------------------------------------------------------------------
 # load_report_data + build_report end-to-end
 # ---------------------------------------------------------------------------
@@ -334,3 +379,70 @@ class TestBuildReport:
         # Plotly figure JSON is embedded as <script type=application/json>
         composite_block = text.split('id="composite-data">', 1)[1].split("</script>", 1)[0]
         assert json.loads(composite_block)  # parses cleanly
+
+    def test_rigorous_run_without_holdout_summary_reports_missing_artifact(self, tmp_path: Path) -> None:
+        run_dir = tmp_path / "rigorous-missing-holdout"
+        run_dir.mkdir()
+        state = make_loop_state(iteration=1)
+        state.protocol = "rigorous"
+        state.silent_refs = [Path("/tmp/silent.png")]
+        save_state(state, run_dir / "state.json")
+
+        path = build_report(run_dir)
+        text = path.read_text(encoding="utf-8")
+
+        assert "expected for this rigorous run" in text
+        assert "Enable the rigorous protocol" not in text
+
+    def test_report_shows_requested_actual_and_feedback_silent_counts(self, tmp_path: Path) -> None:
+        run_dir = tmp_path / "counts"
+        run_dir.mkdir()
+        state = make_loop_state(iteration=1)
+        state.fixed_references = [Path("/tmp/ref0.png"), Path("/tmp/ref1.png"), Path("/tmp/ref2.png")]
+        state.feedback_refs = state.fixed_references[:2]
+        state.silent_refs = state.fixed_references[2:]
+        save_state(state, run_dir / "state.json")
+
+        manifest = RunManifest(
+            protocol_version="rigorous_v1",
+            seed=42,
+            cli_args={},
+            model_names={},
+            reasoning_provider="openai",
+            git_sha=None,
+            python_version="3.11.8",
+            platform="test",
+            timestamp_utc="2026-04-12T00:00:00+00:00",
+            reference_image_hashes={},
+            num_fixed_refs=20,
+            discovered_reference_count=5,
+            uv_lock_hash=None,
+        )
+        save_manifest(manifest, run_dir / "run_manifest.json")
+
+        text = build_report(run_dir).read_text(encoding="utf-8")
+        assert "Requested refs" in text
+        assert "Actual refs" in text
+        assert "Feedback / silent" in text
+
+    def test_promotion_table_uses_zero_based_iteration_numbers_consistently(self, tmp_path: Path) -> None:
+        run_dir = tmp_path / "promotion-iterations"
+        run_dir.mkdir()
+        save_state(make_loop_state(iteration=1), run_dir / "state.json")
+        append_promotion_log(
+            PromotionDecision(
+                iteration=1,
+                candidate_score=0.6,
+                baseline_score=0.5,
+                epsilon=0.01,
+                delta=0.1,
+                decision="promoted",
+                reason="test",
+                candidate_branch_id=0,
+                candidate_hypothesis="hyp",
+            ),
+            run_dir / "promotion_log.jsonl",
+        )
+
+        text = build_report(run_dir).read_text(encoding="utf-8")
+        assert '<tr class="promo-yes"><td>1</td><td>0</td>' in text

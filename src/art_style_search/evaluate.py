@@ -17,6 +17,7 @@ from art_style_search.types import (
     VISION_VERDICT_MAP,
     AggregatedMetrics,
     Caption,
+    CaptionComplianceStats,
     MetricScores,
     VisionDimensionScore,
     VisionScores,
@@ -282,6 +283,60 @@ def _check_section_lengths(caption_text: str, expected_sections: list[str]) -> s
             issues.append(f"{section} too short ({ratio:.0%})")
 
     return "OK" if not issues else f"IMBALANCED: {'; '.join(issues)}"
+
+
+def compute_caption_compliance_stats(
+    section_names: list[str],
+    captions: list[Caption],
+    caption_sections: list[str] | None = None,
+) -> CaptionComplianceStats:
+    """Compute structured caption-compliance rates for scoring/reporting."""
+    if not captions or not section_names:
+        return CaptionComplianceStats(
+            section_topic_coverage=0.0,
+            section_marker_coverage=0.0 if caption_sections else 1.0,
+            section_ordering_rate=0.0 if caption_sections else 1.0,
+            section_balance_rate=0.0 if caption_sections else 1.0,
+        )
+
+    total = len(captions)
+    lowered = [c.text.lower() for c in captions]
+
+    section_hits: list[float] = []
+    for name in section_names:
+        keywords = name.replace("_", " ").split()
+        hits = sum(1 for text_lower in lowered if any(kw in text_lower for kw in keywords))
+        section_hits.append(hits / total)
+    topic_coverage = sum(section_hits) / len(section_hits) if section_hits else 1.0
+
+    marker_coverage = 1.0
+    ordering_rate = 1.0
+    balance_rate = 1.0
+    if caption_sections:
+        marker_hits: list[float] = []
+        for sec_name in caption_sections:
+            marker = f"[{sec_name}]".lower()
+            hits = sum(1 for tl in lowered if marker in tl)
+            marker_hits.append(hits / total)
+        marker_coverage = sum(marker_hits) / len(marker_hits) if marker_hits else 1.0
+
+        ordering_results = [_check_section_ordering(c.text, caption_sections) for c in captions]
+        checked_ordering = [r for r in ordering_results if r != "SKIP"]
+        if checked_ordering:
+            ordering_rate = sum(1 for r in checked_ordering if r == "OK") / len(checked_ordering)
+        else:
+            ordering_rate = 0.0
+
+        length_results = [_check_section_lengths(c.text, caption_sections) for c in captions]
+        checked_lengths = [r for r in length_results if r not in {"SKIP", "EMPTY"}]
+        balance_rate = sum(1 for r in checked_lengths if r == "OK") / len(checked_lengths) if checked_lengths else 0.0
+
+    return CaptionComplianceStats(
+        section_topic_coverage=topic_coverage,
+        section_marker_coverage=marker_coverage,
+        section_ordering_rate=ordering_rate,
+        section_balance_rate=balance_rate,
+    )
 
 
 def check_caption_compliance(

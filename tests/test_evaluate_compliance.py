@@ -8,6 +8,7 @@ from art_style_search.evaluate import (
     _check_section_lengths,
     _check_section_ordering,
     check_caption_compliance,
+    compute_caption_compliance_stats,
     compute_style_consistency,
 )
 from art_style_search.types import Caption
@@ -128,3 +129,39 @@ class TestCheckCaptionCompliance:
         result = check_caption_compliance(["art_style"], captions, caption_sections=["Art Style", "Color"])
         assert "[Art Style]: OK" in result
         assert "[Color]" in result
+
+
+class TestComputeCaptionComplianceStats:
+    def test_returns_structured_rates_for_perfect_compliance(self) -> None:
+        captions = [
+            Caption(
+                image_path=Path("a.png"),
+                text=(
+                    "[Art Style] style foundation is described with calm precise detail. "
+                    "[Frame Map] frame map places the main masses in stable positions. "
+                    "[Depth Layers] depth layers are mapped from foreground to background with equal care. "
+                    "[Atmosphere] atmosphere remains serene and plainly stated."
+                ),
+            ),
+            Caption(
+                image_path=Path("b.png"),
+                text=(
+                    "[Art Style] style foundation remains explicit with stable descriptive coverage. "
+                    "[Frame Map] frame map keeps the composition readable and concrete. "
+                    "[Depth Layers] depth layers stay ordered and balanced across the full scene. "
+                    "[Atmosphere] atmosphere stays calm and observational."
+                ),
+            ),
+        ]
+
+        stats = compute_caption_compliance_stats(
+            ["style_foundation", "frame_map", "depth_layers", "atmosphere"],
+            captions,
+            caption_sections=["Art Style", "Frame Map", "Depth Layers", "Atmosphere"],
+        )
+
+        assert stats.section_topic_coverage == 1.0
+        assert stats.section_marker_coverage == 1.0
+        assert stats.section_ordering_rate == 1.0
+        assert stats.section_balance_rate == 1.0
+        assert stats.overall == 1.0
