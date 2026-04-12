@@ -84,6 +84,7 @@ class CaptionComplianceStats:
     section_marker_coverage: float = 1.0
     section_ordering_rate: float = 1.0
     section_balance_rate: float = 1.0
+    subject_specificity_rate: float = 1.0
 
     @property
     def overall(self) -> float:
@@ -92,7 +93,8 @@ class CaptionComplianceStats:
             + self.section_marker_coverage
             + self.section_ordering_rate
             + self.section_balance_rate
-        ) / 4.0
+            + self.subject_specificity_rate
+        ) / 5.0
 
 
 @dataclass(frozen=True)
@@ -130,6 +132,7 @@ class AggregatedMetrics:
     compliance_marker_coverage: float = 1.0
     section_ordering_rate: float = 1.0
     section_balance_rate: float = 1.0
+    subject_specificity_rate: float = 1.0
 
     # Requested-vs-actual accounting for scoring/reporting
     requested_ref_count: int = 0
@@ -160,6 +163,7 @@ class AggregatedMetrics:
             "compliance_marker_coverage": self.compliance_marker_coverage,
             "section_ordering_rate": self.section_ordering_rate,
             "section_balance_rate": self.section_balance_rate,
+            "subject_specificity_rate": self.subject_specificity_rate,
             "requested_ref_count": float(self.requested_ref_count),
             "actual_ref_count": float(self.actual_ref_count),
         }

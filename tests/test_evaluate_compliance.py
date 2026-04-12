@@ -165,3 +165,51 @@ class TestComputeCaptionComplianceStats:
         assert stats.section_ordering_rate == 1.0
         assert stats.section_balance_rate == 1.0
         assert stats.overall == 1.0
+
+    def test_subject_specificity_rate_is_full_for_rich_subject_blocks(self) -> None:
+        subject_text = (
+            "A young red fox with white socks and a narrow muzzle stands as the main animal subject. "
+            "Its amber eyes, nicked left ear, and dark foreleg markings make it immediately identifiable. "
+            "It wears a weathered canvas satchel with brass clasps, a thin leather harness, and a wrapped field lantern. "
+            "The fox is caught mid-step, turning its shoulders while lifting one paw and twisting toward the viewer. "
+            "Its expression is alert but wary, with raised ears, a tight mouth, and a focused sideways glance. "
+            "Nearby props include the lantern, a folded map, and broken reeds that frame the animal in context."
+        )
+        captions = [
+            Caption(
+                image_path=Path("a.png"),
+                text=f"[Art Style] shared style rules [Subject] {subject_text} [Composition] low horizon",
+            ),
+            Caption(
+                image_path=Path("b.png"),
+                text=f"[Art Style] shared style rules [Subject] {subject_text} [Composition] low horizon",
+            ),
+        ]
+
+        stats = compute_caption_compliance_stats(
+            ["style_foundation", "subject_anchor", "composition"],
+            captions,
+            caption_sections=["Art Style", "Subject", "Composition"],
+        )
+
+        assert stats.subject_specificity_rate == 1.0
+
+    def test_subject_specificity_rate_rejects_short_generic_subject_blocks(self) -> None:
+        captions = [
+            Caption(
+                image_path=Path("a.png"),
+                text="[Art Style] shared style rules [Subject] person figure creature object thing [Composition] centered",
+            ),
+            Caption(
+                image_path=Path("b.png"),
+                text="[Art Style] shared style rules [Subject] person figure creature [Composition] centered",
+            ),
+        ]
+
+        stats = compute_caption_compliance_stats(
+            ["style_foundation", "subject_anchor", "composition"],
+            captions,
+            caption_sections=["Art Style", "Subject", "Composition"],
+        )
+
+        assert stats.subject_specificity_rate == 0.0

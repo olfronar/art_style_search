@@ -60,12 +60,13 @@ class TestStyleCache:
         return PromptTemplate(
             sections=[
                 PromptSection(name="style_foundation", description="rules", value="Shared rules"),
+                PromptSection(name="subject_anchor", description="subject rules", value="Subject guidance"),
                 PromptSection(name="color_palette", description="colors", value="Palette guidance"),
                 PromptSection(name="composition", description="layout", value="Composition guidance"),
                 PromptSection(name="technique", description="medium", value="Technique guidance"),
             ],
             negative_prompt="avoid blur",
-            caption_sections=["Art Style", "Color Palette", "Composition"],
+            caption_sections=["Art Style", "Subject", "Color Palette", "Composition"],
             caption_length_target=500,
         )
 

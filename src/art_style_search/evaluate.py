@@ -12,6 +12,7 @@ from typing import Any
 from google import genai  # type: ignore[attr-defined]
 from PIL import Image
 
+from art_style_search.caption_sections import parse_labeled_sections
 from art_style_search.media import image_to_xai_data_url
 from art_style_search.models import ModelRegistry
 from art_style_search.types import (
@@ -56,6 +57,152 @@ _ART_STYLE_BLOCK_RE = re.compile(
     re.escape("[Art Style]") + r"\s*(.*?)(?=\n\[|\Z)",
     re.DOTALL | re.IGNORECASE,
 )
+_SUBJECT_GENERIC_WORDS = {
+    "figure",
+    "person",
+    "people",
+    "character",
+    "subject",
+    "creature",
+    "animal",
+    "object",
+    "thing",
+}
+_SUBJECT_FILLER_WORDS = {
+    "the",
+    "and",
+    "with",
+    "from",
+    "that",
+    "this",
+    "into",
+    "near",
+    "over",
+    "under",
+    "while",
+    "main",
+    "scene",
+}
+_SUBJECT_FACET_KEYWORDS = {
+    "identity_species": {
+        "man",
+        "woman",
+        "girl",
+        "boy",
+        "child",
+        "fox",
+        "wolf",
+        "cat",
+        "dog",
+        "bird",
+        "horse",
+        "deer",
+        "rabbit",
+        "robot",
+        "knight",
+        "soldier",
+        "merchant",
+        "traveler",
+        "animal",
+        "character",
+    },
+    "distinguishing_features": {
+        "eyes",
+        "eye",
+        "ear",
+        "ears",
+        "scar",
+        "stripes",
+        "spots",
+        "tail",
+        "fur",
+        "hair",
+        "muzzle",
+        "markings",
+        "beak",
+        "horn",
+        "horns",
+        "face",
+        "jaw",
+        "paws",
+        "hands",
+    },
+    "clothing_equipment": {
+        "wears",
+        "wearing",
+        "coat",
+        "cloak",
+        "jacket",
+        "armor",
+        "dress",
+        "shirt",
+        "hat",
+        "boots",
+        "satchel",
+        "bag",
+        "sword",
+        "lantern",
+        "helmet",
+        "harness",
+        "scarf",
+        "gloves",
+        "belt",
+    },
+    "pose_action": {
+        "standing",
+        "sitting",
+        "running",
+        "walking",
+        "mid-step",
+        "leaning",
+        "turning",
+        "reaching",
+        "holding",
+        "lifting",
+        "crouching",
+        "jumping",
+        "trotting",
+        "twisting",
+        "posed",
+        "stride",
+        "step",
+    },
+    "expression": {
+        "expression",
+        "smile",
+        "frown",
+        "grim",
+        "alert",
+        "wary",
+        "calm",
+        "angry",
+        "joyful",
+        "focused",
+        "glance",
+        "stare",
+        "mouth",
+        "brow",
+        "gaze",
+    },
+    "props_context": {
+        "nearby",
+        "beside",
+        "surrounded",
+        "props",
+        "map",
+        "lantern",
+        "reeds",
+        "chair",
+        "table",
+        "basket",
+        "rope",
+        "field",
+        "background",
+        "context",
+        "marsh",
+        "grass",
+    },
+}
 
 
 def _parse_vision_verdicts(text: str) -> VisionScores:
@@ -394,6 +541,30 @@ def _check_section_lengths(caption_text: str, expected_sections: list[str]) -> s
     return "OK" if not issues else f"IMBALANCED: {'; '.join(issues)}"
 
 
+def _check_subject_specificity(caption_text: str) -> str:
+    """Check whether the ``[Subject]`` block is detailed and specific."""
+    subject_text = parse_labeled_sections(caption_text).get("Subject", "").strip()
+    if not subject_text:
+        return "MISSING"
+
+    lowered = subject_text.lower()
+    words = re.findall(r"[a-z0-9'-]+", lowered)
+    if len(words) < 80:
+        return f"WEAK (too short: {len(words)} words)"
+
+    facet_count = sum(1 for keywords in _SUBJECT_FACET_KEYWORDS.values() if any(kw in lowered for kw in keywords))
+    if facet_count < 4:
+        return f"WEAK (facet coverage {facet_count}/6)"
+
+    meaningful = [w for w in words if len(w) > 2 and w not in _SUBJECT_FILLER_WORDS]
+    generic_count = sum(1 for w in meaningful if w in _SUBJECT_GENERIC_WORDS)
+    specific_count = sum(1 for w in meaningful if w not in _SUBJECT_GENERIC_WORDS)
+    if generic_count > 0 and specific_count < max(8, generic_count * 2):
+        return "WEAK (generic subject terms without enough modifiers)"
+
+    return "OK"
+
+
 def compute_caption_compliance_stats(
     section_names: list[str],
     captions: list[Caption],
@@ -406,6 +577,7 @@ def compute_caption_compliance_stats(
             section_marker_coverage=0.0 if caption_sections else 1.0,
             section_ordering_rate=0.0 if caption_sections else 1.0,
             section_balance_rate=0.0 if caption_sections else 1.0,
+            subject_specificity_rate=0.0 if caption_sections and "Subject" in caption_sections else 1.0,
         )
 
     total = len(captions)
@@ -440,11 +612,17 @@ def compute_caption_compliance_stats(
         checked_lengths = [r for r in length_results if r not in {"SKIP", "EMPTY"}]
         balance_rate = sum(1 for r in checked_lengths if r == "OK") / len(checked_lengths) if checked_lengths else 0.0
 
+    subject_specificity_rate = 1.0
+    if caption_sections and "Subject" in caption_sections:
+        subject_results = [_check_subject_specificity(c.text) for c in captions]
+        subject_specificity_rate = sum(1 for r in subject_results if r == "OK") / len(subject_results)
+
     return CaptionComplianceStats(
         section_topic_coverage=topic_coverage,
         section_marker_coverage=marker_coverage,
         section_ordering_rate=ordering_rate,
         section_balance_rate=balance_rate,
+        subject_specificity_rate=subject_specificity_rate,
     )
 
 
@@ -512,6 +690,16 @@ def check_caption_compliance(
             lines.append(f"Section balance: IMBALANCED ({len(issue_results)}/{total} captions) — {issue_results[0]}")
         elif ok_count > 0:
             lines.append(f"Section balance: OK ({ok_count}/{total} captions well-balanced)")
+
+    if caption_sections and "Subject" in caption_sections:
+        subject_results = [_check_subject_specificity(c.text) for c in captions]
+        ok_count = sum(1 for r in subject_results if r == "OK")
+        if ok_count == total:
+            lines.append(f"Subject specificity: OK ({ok_count}/{total} captions)")
+        else:
+            first_issue = next((r for r in subject_results if r != "OK"), "MISSING")
+            status = "WEAK" if ok_count > 0 else "MISSING"
+            lines.append(f"Subject specificity: {status} ({ok_count}/{total} captions) — {first_issue}")
 
     return "Caption compliance with meta-prompt sections:\n" + "\n".join(lines)
 

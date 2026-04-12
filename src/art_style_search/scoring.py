@@ -18,20 +18,22 @@ _HPS_CEILING = 0.35  # default empirical max for HPS v2 scores; used to normaliz
 
 # Fixed metric weights for composite scoring.
 # Base weights sum to 1.00 for composite_score (experiment-level).
-# per_image_composite omits _W_STYLE_CON → its weights sum to 0.95 (max output 0.95).
+# per_image_composite omits _W_STYLE_CON → its weights sum to 0.96 (max output 0.96).
 _W_DREAMSIM = 0.34
-_W_HPS = 0.05
+_W_HPS = 0.07
 _W_AESTHETICS = 0.06
-_W_COLOR = 0.19
+_W_COLOR = 0.17
 _W_SSIM = 0.10
-_W_STYLE_CON = 0.05
-_W_VISION_STYLE = 0.09
-_W_VISION_SUBJECT = 0.06
-_W_VISION_COMP = 0.06
+_W_STYLE_CON = 0.04
+_W_VISION_STYLE = 0.08
+_W_VISION_SUBJECT = 0.10
+_W_VISION_COMP = 0.04
 _W_VARIANCE_PENALTY = 0.30
 _W_COMPLETION_PENALTY = 0.15
 _W_COMPLIANCE_PENALTY = 0.08
 _W_REF_SHORTFALL_PENALTY = 0.04
+_VISION_SUBJECT_FLOOR = 0.35
+_W_VISION_SUBJECT_FLOOR_PENALTY = 0.05
 
 # Improvement must exceed this threshold to be accepted (filters generation noise)
 IMPROVEMENT_EPSILON = 0.005
@@ -57,9 +59,9 @@ def composite_score(m: AggregatedMetrics) -> float:
     """Fixed-weight composite score used for absolute quality comparison.
 
     All metrics normalized to ~[0, 1] before weighting.
-    Weights: DreamSim 40%, Color 22%, SSIM 11%, HPS 5%,
-    Aesthetics 6%, StyleConsistency 6%, Vision(style) 5% + Vision(subject) 1%
-    + Vision(composition) 4% = 10%.  Total = 1.00.
+    Weights: DreamSim 34%, HPS 7%, Aesthetics 6%, Color 17%, SSIM 10%,
+    StyleConsistency 4%, Vision(style) 8%, Vision(subject) 10%,
+    Vision(composition) 4%. Total = 1.00.
     Includes a consistency penalty based on per-image score variance.
     """
     base = (
@@ -82,14 +84,22 @@ def composite_score(m: AggregatedMetrics) -> float:
         + m.compliance_marker_coverage
         + m.section_ordering_rate
         + m.section_balance_rate
-    ) / 4.0
+        + m.subject_specificity_rate
+    ) / 5.0
     compliance_penalty = (1.0 - compliance_score) * _W_COMPLIANCE_PENALTY
 
     ref_shortfall = 0.0
     if m.requested_ref_count > 0:
         ref_shortfall = max(m.requested_ref_count - m.actual_ref_count, 0) / m.requested_ref_count
     ref_shortfall_penalty = ref_shortfall * _W_REF_SHORTFALL_PENALTY
-    return max(0.0, base - variance_penalty - completion_penalty - compliance_penalty - ref_shortfall_penalty)
+    subject_floor_penalty = 0.0
+    if m.vision_subject < _VISION_SUBJECT_FLOOR:
+        shortfall = (_VISION_SUBJECT_FLOOR - m.vision_subject) / _VISION_SUBJECT_FLOOR
+        subject_floor_penalty = shortfall * _W_VISION_SUBJECT_FLOOR_PENALTY
+    return max(
+        0.0,
+        base - variance_penalty - completion_penalty - compliance_penalty - ref_shortfall_penalty - subject_floor_penalty,
+    )
 
 
 def adaptive_composite_score(
@@ -120,8 +130,9 @@ def adaptive_composite_score(
             + r.compliance_marker_coverage
             + r.section_ordering_rate
             + r.section_balance_rate
+            + r.subject_specificity_rate
         )
-        / 4.0,
+        / 5.0,
     ]
 
     weighted_sum = 0.0
@@ -192,7 +203,7 @@ def per_image_composite(s: MetricScores) -> float:
 
     Unlike ``composite_score`` (which operates on aggregated means), this computes
     the score for a single image — no variance penalty since there's only one observation.
-    Omits ``_W_STYLE_CON`` (style consistency is experiment-level), so max output is 0.95.
+    Omits ``_W_STYLE_CON`` (style consistency is experiment-level), so max output is 0.96.
     """
     return (
         _W_DREAMSIM * s.dreamsim_similarity

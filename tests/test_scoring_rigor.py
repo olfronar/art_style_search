@@ -38,8 +38,8 @@ class TestPerImageComposite:
         """Perfect scores (all 1.0, aesthetics 10.0) should give close to 1.0.
 
         The weights are:
-          0.40 (dreamsim) + 0.05 (hps) + 0.06 (aes/10) + 0.22 (color) +
-          0.11 (ssim) + 0.04 (vs) + 0.04 (vsu) + 0.04 (vc) = 0.96
+          0.34 (dreamsim) + 0.07 (hps) + 0.06 (aes/10) + 0.17 (color) +
+          0.10 (ssim) + 0.08 (vs) + 0.10 (vsu) + 0.04 (vc) = 0.96
         HPS normalizes as min(raw / 0.35, 1.0), so hps=0.35 -> 1.0.
         Aesthetics normalizes as aes/10, so aes=10 -> 1.0.
         Total with perfect inputs = 0.96.

@@ -417,13 +417,14 @@ def _make_valid_template() -> PromptTemplate:
     """Build a minimal valid template for validation tests."""
     sections = [
         PromptSection(name="style_foundation", description="Style rules", value="Foundation rules."),
+        PromptSection(name="subject_anchor", description="Subject rules", value="Subject rules."),
         PromptSection(name="color_palette", description="Colors", value="Color rules."),
         PromptSection(name="composition", description="Layout", value="Comp rules."),
         PromptSection(name="technique", description="Technique", value="Tech rules."),
     ]
     return PromptTemplate(
         sections=sections,
-        caption_sections=["Art Style", "Color Palette", "Composition"],
+        caption_sections=["Art Style", "Subject", "Color Palette", "Composition"],
         caption_length_target=500,
     )
 
@@ -436,15 +437,27 @@ class TestValidateTemplate:
         t = _make_valid_template()
         t.sections[0], t.sections[1] = t.sections[1], t.sections[0]
         errors = validate_template(t)
+        assert any("style_foundation" in error for error in errors)
+
+    def test_missing_subject_anchor_second(self) -> None:
+        t = _make_valid_template()
+        t.sections[1], t.sections[2] = t.sections[2], t.sections[1]
+        errors = validate_template(t)
         assert len(errors) == 1
-        assert "style_foundation" in errors[0]
+        assert "subject_anchor" in errors[0]
 
     def test_missing_art_style_first_caption(self) -> None:
         t = _make_valid_template()
-        t.caption_sections = ["Color Palette", "Art Style"]
+        t.caption_sections = ["Color Palette", "Art Style", "Subject"]
+        errors = validate_template(t)
+        assert any("Art Style" in error for error in errors)
+
+    def test_missing_subject_second_caption(self) -> None:
+        t = _make_valid_template()
+        t.caption_sections = ["Art Style", "Color Palette", "Subject", "Composition"]
         errors = validate_template(t)
         assert len(errors) == 1
-        assert "Art Style" in errors[0]
+        assert "Subject" in errors[0]
 
     def test_too_few_sections(self) -> None:
         t = _make_valid_template()

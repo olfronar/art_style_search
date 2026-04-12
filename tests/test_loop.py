@@ -337,6 +337,7 @@ def _make_config(tmp_path: Path, *, max_iterations: int = 20, plateau_window: in
 def _make_valid_template() -> PromptTemplate:
     sections = [
         PromptSection("style_foundation", "Core style", "Shared style rules. " * 4),
+        PromptSection("subject_anchor", "Subject fidelity", "Subject guidance. " * 4),
         PromptSection("color_palette", "Colors", "Color guidance. " * 4),
         PromptSection("composition", "Composition", "Composition guidance. " * 4),
         PromptSection("technique", "Technique", "Technique guidance. " * 4),
@@ -344,7 +345,7 @@ def _make_valid_template() -> PromptTemplate:
     return PromptTemplate(
         sections=sections,
         negative_prompt="avoid blur",
-        caption_sections=["Art Style", "Color Palette", "Composition", "Technique"],
+        caption_sections=["Art Style", "Subject", "Color Palette", "Composition", "Technique"],
         caption_length_target=500,
     )
 

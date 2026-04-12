@@ -41,10 +41,12 @@ from art_style_search.types import (
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-# A template that passes validate_template(): first section is style_foundation,
-# first caption section is Art Style, >= 4 sections, caption_length_target in range.
+# A template that passes validate_template(): first two sections are
+# style_foundation, subject_anchor; first two caption sections are
+# Art Style, Subject; >= 4 sections; caption_length_target in range.
 _SECTION_NAMES = [
     ("style_foundation", "Core style identity"),
+    ("subject_anchor", "Subject fidelity"),
     ("color_palette", "Dominant colors"),
     ("composition", "Layout and framing"),
     ("technique", "Art medium and rendering"),
@@ -65,7 +67,7 @@ def _valid_template() -> PromptTemplate:
     return PromptTemplate(
         sections=sections,
         negative_prompt="photorealistic, 3D render",
-        caption_sections=["Art Style", "Color Palette", "Composition", "Technique"],
+        caption_sections=["Art Style", "Subject", "Color Palette", "Composition", "Technique"],
         caption_length_target=500,
     )
 
@@ -173,6 +175,7 @@ def _fake_caption(ref_path: Path) -> Caption:
         image_path=ref_path,
         text=(
             "[Art Style] Watercolor painting with muted earth tones. "
+            "[Subject] A rural cottage and sparse field grasses with simple, weathered forms. "
             "[Color Palette] Ochre, burnt sienna, slate blue. "
             "[Composition] Low horizon, asymmetric balance. "
             "[Technique] Wet-on-wet watercolor rendering. " * 3

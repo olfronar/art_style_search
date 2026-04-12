@@ -7,11 +7,13 @@ from dataclasses import replace
 import pytest
 
 from art_style_search.experiment import (
+    _caption_and_generate,
     _median_metric_scores,
     best_kept_result,
     collect_experiment_results,
     replicate_experiment,
 )
+from art_style_search.types import Caption
 from tests.conftest import make_iteration_result, make_metric_scores
 
 # ---------------------------------------------------------------------------
@@ -157,3 +159,78 @@ class TestReplicateExperiment:
         )
 
         assert replicated.median_aggregated.style_consistency == pytest.approx(0.42)
+
+
+class TestCaptionAndGenerate:
+    @pytest.mark.asyncio
+    async def test_generation_uses_subject_first_prompt(self, tmp_path) -> None:
+        from art_style_search.config import Config
+
+        ref_path = tmp_path / "ref.png"
+        ref_path.touch()
+        captured: dict[str, str] = {}
+
+        class FakeCaptioning:
+            async def caption_single(self, image_path, *, prompt, cache_dir, cache_key=""):
+                return Caption(
+                    image_path=image_path,
+                    text=(
+                        "[Art Style] Shared watercolor rules with soft edges.\n"
+                        "[Subject] A red fox with white socks, a patched satchel, raised ears, "
+                        "and a mid-step pose in marsh grass.\n"
+                        "[Color Palette] Ochre, moss green, slate blue."
+                    ),
+                )
+
+        class FakeGeneration:
+            async def generate_single(self, prompt, *, index, output_path):
+                captured["prompt"] = prompt
+                output_path.touch()
+                return output_path
+
+        config = Config(
+            reference_dir=tmp_path / "refs",
+            output_dir=tmp_path / "outputs",
+            log_dir=tmp_path / "logs",
+            state_file=tmp_path / "state.json",
+            run_dir=tmp_path,
+            max_iterations=1,
+            plateau_window=5,
+            num_branches=1,
+            aspect_ratio="1:1",
+            num_fixed_refs=1,
+            caption_model="caption-model",
+            generator_model="generator-model",
+            reasoning_model="reasoning-model",
+            reasoning_provider="anthropic",
+            reasoning_base_url="",
+            gemini_concurrency=1,
+            eval_concurrency=1,
+            seed=42,
+            protocol="classic",
+            anthropic_api_key="test",
+            google_api_key="test",
+            zai_api_key="",
+            openai_api_key="",
+        )
+
+        services = type(
+            "FakeServices",
+            (),
+            {"captioning": FakeCaptioning(), "generation": FakeGeneration()},
+        )()
+
+        captions, generated, pairs = await _caption_and_generate(
+            [ref_path],
+            "meta prompt",
+            config=config,
+            services=services,
+            iteration=1,
+            experiment_id=0,
+        )
+
+        assert captions[0].text.startswith("[Art Style]")
+        assert generated[0].name == "00.png"
+        assert pairs[0] == (ref_path, generated[0])
+        assert captured["prompt"].startswith("[Subject]\nA red fox")
+        assert "Render in this style:\n[Art Style]\nShared watercolor rules with soft edges." in captured["prompt"]

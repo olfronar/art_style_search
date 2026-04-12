@@ -219,9 +219,17 @@ def validate_template(template: PromptTemplate, changed_section: str = "") -> li
 
     if template.sections and template.sections[0].name != "style_foundation":
         errors.append(f"First section must be 'style_foundation', got '{template.sections[0].name}'")
+    if len(template.sections) >= 2 and template.sections[1].name != "subject_anchor":
+        errors.append(f"Second section must be 'subject_anchor', got '{template.sections[1].name}'")
+    elif len(template.sections) == 1:
+        errors.append("Second section must be 'subject_anchor', got missing section")
 
     if template.caption_sections and template.caption_sections[0] != "Art Style":
         errors.append(f"First caption section must be 'Art Style', got '{template.caption_sections[0]}'")
+    if len(template.caption_sections) >= 2 and template.caption_sections[1] != "Subject":
+        errors.append(f"Second caption section must be 'Subject', got '{template.caption_sections[1]}'")
+    elif len(template.caption_sections) == 1:
+        errors.append("Second caption section must be 'Subject', got missing section")
 
     n = len(template.sections)
     if n < _MIN_SECTIONS or n > _MAX_SECTIONS:

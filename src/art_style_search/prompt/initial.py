@@ -48,23 +48,28 @@ async def propose_initial_templates(
         "- Include a negative section: what the captioner should tell the generator to AVOID.\n"
         "- The meta-prompt must produce captions specific enough that someone who has never "
         "seen the image could recreate it from the caption alone.\n\n"
-        "## MANDATORY: Style Foundation section\n"
+        "## MANDATORY: Anchor sections\n"
         "Every template MUST include a section named 'style_foundation' as the FIRST section. "
         "This section instructs the captioner to open every caption with an [Art Style] block "
         "containing FIXED, REUSABLE style rules copied verbatim from the Style Profile. "
         "The [Art Style] block must be nearly IDENTICAL across all captions — it is the shared "
         "style DNA that enables generating new art in the same style with different subjects. "
-        "DO NOT remove, rename, merge, or weaken this section even if recreation metrics dip — "
-        "it is a hard constraint, not subject to optimization.\n\n"
+        "Keep this section first and reusable, but you MAY refine its wording and specificity.\n"
+        "Every template MUST also include a section named 'subject_anchor' as the SECOND section. "
+        "It instructs the captioner to produce a [Subject] block immediately after [Art Style], covering "
+        "identity/species, distinguishing features, clothing/equipment, pose/action, expression, "
+        "and props/context with concrete detail. Keep this section second, but you MAY refine its wording.\n\n"
         "## Caption output structure\n"
         "The meta-prompt must instruct the captioner to produce captions with LABELED SECTIONS. "
         "The FIRST section must always be [Art Style] (the shared style block). "
+        "The SECOND section must always be [Subject]. "
         "You decide the remaining sections and their order — that is part of experimentation.\n"
         "- Specify the caption output sections as a <caption_sections> tag (comma-separated list). "
-        "The first entry MUST be 'Art Style'.\n"
+        "The first two entries MUST be 'Art Style' and 'Subject'.\n"
         "- Specify the target caption length as a <caption_length> tag (word count).\n"
         "- The [Art Style] section should be IDENTICAL across captions (shared style rules). "
-        "All other sections contain per-image specific observations.\n"
+        "The [Subject] section should be image-specific and rich enough for faithful subject reconstruction. "
+        "Target roughly 80-140 words for [Subject]. All remaining sections contain per-image specific observations.\n"
         "- A style_consistency metric measures how similar the [Art Style] blocks are across "
         "captions — higher consistency is rewarded in the composite score.\n\n"
         "## Example of a good meta-prompt section\n"
@@ -94,9 +99,9 @@ async def propose_initial_templates(
         '{\n'
         '  "templates": [\n'
         "    {\n"
-        '      "sections": [{"name": "...", "description": "...", "value": "..."}],\n'
+        '      "sections": [{"name": "style_foundation", "description": "...", "value": "..."}, {"name": "subject_anchor", "description": "...", "value": "..."}],\n'
         '      "negative_prompt": "...",\n'
-        '      "caption_sections": ["Art Style", "Color Palette"],\n'
+        '      "caption_sections": ["Art Style", "Subject", "Color Palette"],\n'
         '      "caption_length_target": 500\n'
         "    }\n"
         "  ]\n"

@@ -9,6 +9,7 @@ import statistics
 from dataclasses import replace
 from pathlib import Path
 
+from art_style_search.caption_sections import build_generation_prompt
 from art_style_search.config import Config
 from art_style_search.evaluate import (
     aggregate,
@@ -154,7 +155,7 @@ async def _caption_and_generate(
             cache_key=cache_key,
         )
         gen_path = await services.generation.generate_single(
-            caption.text,
+            build_generation_prompt(caption.text),
             index=i,
             output_path=gen_dir / f"{i:02d}.png",
         )
@@ -261,6 +262,7 @@ async def run_experiment(
         compliance_marker_coverage=compliance_stats.section_marker_coverage,
         section_ordering_rate=compliance_stats.section_ordering_rate,
         section_balance_rate=compliance_stats.section_balance_rate,
+        subject_specificity_rate=compliance_stats.subject_specificity_rate,
         requested_ref_count=config.num_fixed_refs,
         actual_ref_count=n_attempted,
     )
@@ -405,6 +407,7 @@ async def replicate_experiment(
             compliance_marker_coverage=compliance_stats.section_marker_coverage,
             section_ordering_rate=compliance_stats.section_ordering_rate,
             section_balance_rate=compliance_stats.section_balance_rate,
+            subject_specificity_rate=compliance_stats.subject_specificity_rate,
             requested_ref_count=config.num_fixed_refs,
             actual_ref_count=len(fixed_refs),
         )
@@ -436,6 +439,7 @@ async def replicate_experiment(
         compliance_marker_coverage=statistics.median(agg.compliance_marker_coverage for agg in all_replicate_agg),
         section_ordering_rate=statistics.median(agg.section_ordering_rate for agg in all_replicate_agg),
         section_balance_rate=statistics.median(agg.section_balance_rate for agg in all_replicate_agg),
+        subject_specificity_rate=statistics.median(agg.subject_specificity_rate for agg in all_replicate_agg),
         requested_ref_count=config.num_fixed_refs,
         actual_ref_count=len(fixed_refs),
     )

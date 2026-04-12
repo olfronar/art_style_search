@@ -226,9 +226,12 @@ _SCHEMA_HINTS = {
     "initial_templates": {
         "templates": [
             {
-                "sections": [{"name": "style_foundation", "description": "core style rules", "value": "..."}],
+                "sections": [
+                    {"name": "style_foundation", "description": "core style rules", "value": "..."},
+                    {"name": "subject_anchor", "description": "subject fidelity instructions", "value": "..."},
+                ],
                 "negative_prompt": "...",
-                "caption_sections": ["Art Style", "Color Palette"],
+                "caption_sections": ["Art Style", "Subject", "Color Palette"],
                 "caption_length_target": 500,
             }
         ]
@@ -246,9 +249,12 @@ _SCHEMA_HINTS = {
                 "open_problems": ["..."],
                 "template_changes": "...",
                 "template": {
-                    "sections": [{"name": "style_foundation", "description": "core style rules", "value": "..."}],
+                    "sections": [
+                        {"name": "style_foundation", "description": "core style rules", "value": "..."},
+                        {"name": "subject_anchor", "description": "subject fidelity instructions", "value": "..."},
+                    ],
                     "negative_prompt": "...",
-                    "caption_sections": ["Art Style"],
+                    "caption_sections": ["Art Style", "Subject"],
                     "caption_length_target": 500,
                 },
             }
@@ -258,9 +264,12 @@ _SCHEMA_HINTS = {
     "synthesis": {
         "rationale": "...",
         "template": {
-            "sections": [{"name": "style_foundation", "description": "core style rules", "value": "..."}],
+            "sections": [
+                {"name": "style_foundation", "description": "core style rules", "value": "..."},
+                {"name": "subject_anchor", "description": "subject fidelity instructions", "value": "..."},
+            ],
             "negative_prompt": "...",
-            "caption_sections": ["Art Style"],
+            "caption_sections": ["Art Style", "Subject"],
             "caption_length_target": 500,
         },
     },
@@ -280,9 +289,12 @@ _SCHEMA_HINTS = {
             "influences": "...",
         },
         "initial_template": {
-            "sections": [{"name": "style_foundation", "description": "core style rules", "value": "..."}],
+            "sections": [
+                {"name": "style_foundation", "description": "core style rules", "value": "..."},
+                {"name": "subject_anchor", "description": "subject fidelity instructions", "value": "..."},
+            ],
             "negative_prompt": "...",
-            "caption_sections": ["Art Style"],
+            "caption_sections": ["Art Style", "Subject"],
             "caption_length_target": 500,
         },
     },

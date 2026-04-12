@@ -93,7 +93,10 @@ _COMPILATION_PROMPT = (
     "- Include <caption_length>: target word count for produced captions (e.g. 500).\n\n"
     "The prompt template should have 8-15 sections covering: technique/medium, color palette, composition, "
     "character/figure treatment, background/environment, details/textures, lighting, mood/atmosphere, "
-    "and optionally: art style overview, subject rendering, emotional tone. "
+    "and subject rendering. The FIRST section must be 'style_foundation' and the SECOND section must be "
+    "'subject_anchor'. The first two caption output labels must be 'Art Style' and 'Subject'. "
+    "The [Subject] block must require identity/species, distinguishing features, clothing or equipment, "
+    "pose or action, expression, and props or context, targeting roughly 80-140 words. "
     "Each section should have a short name, a description of what it controls, "
     "and detailed prompt text with embedded style rules as its value. Include a thorough negative prompt.\n\n"
     "Respond with EXACTLY one JSON object (no markdown fences, no extra text):\n"
@@ -107,9 +110,9 @@ _COMPILATION_PROMPT = (
     '    "influences": "..."\n'
     "  }},\n"
     '  "initial_template": {{\n'
-    '    "sections": [{{"name": "style_foundation", "description": "core art style identity and rules", "value": "..."}}],\n'
+    '    "sections": [{{"name": "style_foundation", "description": "core art style identity and rules", "value": "..."}}, {{"name": "subject_anchor", "description": "subject fidelity instructions", "value": "..."}}],\n'
     '    "negative_prompt": "...",\n'
-    '    "caption_sections": ["Art Style", "Color Palette", "Technique", "Composition"],\n'
+    '    "caption_sections": ["Art Style", "Subject", "Color Palette", "Technique", "Composition"],\n'
     '    "caption_length_target": 500\n'
     "  }}\n"
     "}}"

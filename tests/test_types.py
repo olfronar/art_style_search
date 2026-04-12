@@ -32,21 +32,21 @@ class TestCompositeScore:
             aesthetics_score_mean=7.0,
             aesthetics_score_std=0.5,
         )
-        # Current formula: DreamSim 34%, Color 19%, SSIM 10%, HPS 5%,
-        # Aesthetics 6%, StyleConsistency 5%, Vision(style) 9% + Vision(subject) 6%
-        # + Vision(composition) 6% = 21%.
+        # Current formula: DreamSim 34%, HPS 7%, Aesthetics 6%, Color 17%,
+        # SSIM 10%, StyleConsistency 4%, Vision(style) 8% + Vision(subject) 10%
+        # + Vision(composition) 4% = 22%.
         # color_histogram/ssim default to 0.0, vision_* default to 0.5
         # HPS normalized: min(0.28/0.35, 1.0) = 0.8
         base = (
             0.34 * 0.8
-            + 0.05 * min(0.28 / 0.35, 1.0)
+            + 0.07 * min(0.28 / 0.35, 1.0)
             + 0.06 * (7.0 / 10.0)
-            + 0.19 * 0.0  # color_histogram
+            + 0.17 * 0.0  # color_histogram
             + 0.10 * 0.0  # ssim
-            + 0.05 * 0.0  # style_consistency
-            + 0.09 * 0.5  # vision_style
-            + 0.06 * 0.5  # vision_subject
-            + 0.06 * 0.5  # vision_composition
+            + 0.04 * 0.0  # style_consistency
+            + 0.08 * 0.5  # vision_style
+            + 0.10 * 0.5  # vision_subject
+            + 0.04 * 0.5  # vision_composition
         )
         # Consistency penalty: 0.30 * (dreamsim_std + color_histogram_std) / 2.0
         penalty = 0.30 * (0.01 + 0.0) / 2.0
@@ -63,7 +63,7 @@ class TestCompositeScore:
             aesthetics_score_std=0.0,
         )
         # vision_style/subject/composition default to 0.5; all other metrics zero
-        expected = 0.09 * 0.5 + 0.06 * 0.5 + 0.06 * 0.5
+        expected = 0.08 * 0.5 + 0.10 * 0.5 + 0.04 * 0.5
         assert abs(composite_score(m) - expected) < 1e-9
 
     def test_higher_dreamsim_yields_higher_score(self) -> None:
@@ -93,7 +93,7 @@ class TestCompositeScore:
 
     def test_weights_sum_to_one(self) -> None:
         """Verify the coefficient magnitudes sum to 1.0 (9 metrics)."""
-        assert abs((0.34 + 0.05 + 0.06 + 0.19 + 0.10 + 0.05 + 0.09 + 0.06 + 0.06) - 1.0) < 1e-9
+        assert abs((0.34 + 0.07 + 0.06 + 0.17 + 0.10 + 0.04 + 0.08 + 0.10 + 0.04) - 1.0) < 1e-9
 
     def test_hps_normalized(self) -> None:
         """HPS v2 scores (~0.25-0.35) should be normalized to [0,1] via /0.35 ceiling."""
@@ -105,8 +105,8 @@ class TestCompositeScore:
             aesthetics_score_mean=0.0,
             aesthetics_score_std=0.0,
         )
-        # HPS: 0.05 * min(0.35/0.35, 1.0) = 0.05, plus vision defaults at 0.5
-        expected = 0.05 * 1.0 + 0.09 * 0.5 + 0.06 * 0.5 + 0.06 * 0.5
+        # HPS: 0.07 * min(0.35/0.35, 1.0) = 0.07, plus vision defaults at 0.5
+        expected = 0.07 * 1.0 + 0.08 * 0.5 + 0.10 * 0.5 + 0.04 * 0.5
         assert abs(composite_score(m) - expected) < 1e-9
 
     def test_hps_clamped_above_ceiling(self) -> None:
@@ -120,7 +120,7 @@ class TestCompositeScore:
             aesthetics_score_std=0.0,
         )
         # Clamped: min(0.50/0.35, 1.0) = 1.0
-        expected = 0.05 * 1.0 + 0.09 * 0.5 + 0.06 * 0.5 + 0.06 * 0.5
+        expected = 0.07 * 1.0 + 0.08 * 0.5 + 0.10 * 0.5 + 0.04 * 0.5
         assert abs(composite_score(m) - expected) < 1e-9
 
     def test_aesthetics_divided_by_ten(self) -> None:
@@ -134,7 +134,7 @@ class TestCompositeScore:
             aesthetics_score_std=0.0,
         )
         # Aesthetics: 0.06 * (10.0 / 10.0) = 0.06, plus vision defaults at 0.5
-        expected = 0.06 * (10.0 / 10.0) + 0.09 * 0.5 + 0.06 * 0.5 + 0.06 * 0.5
+        expected = 0.06 * (10.0 / 10.0) + 0.08 * 0.5 + 0.10 * 0.5 + 0.04 * 0.5
         assert abs(composite_score(m) - expected) < 1e-9
 
     def test_composite_score_floor_clamp(self) -> None:
@@ -150,6 +150,19 @@ class TestCompositeScore:
         )
         score = composite_score(m)
         assert score >= 0.0, f"composite_score should be >= 0.0, got {score}"
+
+    def test_subject_floor_penalty_applied_below_threshold(self) -> None:
+        m = AggregatedMetrics(
+            dreamsim_similarity_mean=0.0,
+            dreamsim_similarity_std=0.0,
+            hps_score_mean=0.0,
+            hps_score_std=0.0,
+            aesthetics_score_mean=0.0,
+            aesthetics_score_std=0.0,
+            vision_subject=0.0,
+        )
+        expected = (0.08 * 0.5 + 0.04 * 0.5) - 0.05
+        assert abs(composite_score(m) - expected) < 1e-9
 
 
 # -- improvement_epsilon ------------------------------------------------------
@@ -274,6 +287,7 @@ class TestAggregatedMetricsSummaryDict:
             "compliance_marker_coverage",
             "section_ordering_rate",
             "section_balance_rate",
+            "subject_specificity_rate",
             "requested_ref_count",
             "actual_ref_count",
         }
@@ -316,7 +330,7 @@ class TestAggregatedMetricsSummaryDict:
             aesthetics_score_mean=0.0,
             aesthetics_score_std=0.0,
         )
-        assert len(m.summary_dict()) == 24
+        assert len(m.summary_dict()) == 25
 
 
 # -- ConvergenceReason --------------------------------------------------------
