@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from art_style_search.contracts import Lessons, RefinementResult
+from art_style_search.prompt._parse import validate_template
 from art_style_search.types import PromptSection, PromptTemplate, ReviewResult, StyleProfile
 
 
@@ -204,6 +205,10 @@ def validate_style_compilation_payload(
     obj = _require_dict(data, label="style_compilation_response")
     profile_obj = _require_dict(obj.get("style_profile") or {}, label="style_profile")
     template = payload_to_template(obj.get("initial_template") or {}, label="initial_template")
+    errors = validate_template(template)
+    if errors:
+        msg = "; ".join(errors)
+        raise ValueError(msg)
     profile = StyleProfile(
         color_palette=_as_str(profile_obj.get("color_palette"), label="style_profile.color_palette"),
         composition=_as_str(profile_obj.get("composition"), label="style_profile.composition"),

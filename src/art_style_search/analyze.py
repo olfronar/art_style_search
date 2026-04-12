@@ -9,6 +9,7 @@ from pathlib import Path
 
 from google import genai  # type: ignore[attr-defined]
 
+from art_style_search.prompt._parse import validate_template
 from art_style_search.prompt.json_contracts import schema_hint, validate_style_compilation_payload
 from art_style_search.state import prompt_template_from_dict, style_profile_from_dict, to_dict
 from art_style_search.types import Caption, PromptTemplate, StyleProfile
@@ -215,6 +216,14 @@ def _load_cache(cache_path: Path) -> tuple[StyleProfile, PromptTemplate] | None:
         data = json.loads(cache_path.read_text(encoding="utf-8"))
         profile = style_profile_from_dict(data["style_profile"])
         template = prompt_template_from_dict(data["prompt_template"])
+        template_errors = validate_template(template)
+        if template_errors:
+            logger.warning(
+                "Invalid style analysis cache at %s, will re-analyze: %s",
+                cache_path,
+                "; ".join(template_errors),
+            )
+            return None
         logger.info("Loaded cached style analysis from %s", cache_path)
         return profile, template
     except (json.JSONDecodeError, KeyError, TypeError) as exc:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from art_style_search import contracts
 from art_style_search.prompt import (
     Lessons,
@@ -22,6 +24,7 @@ from art_style_search.prompt.json_contracts import (
     validate_experiment_batch_payload,
     validate_initial_templates_payload,
     validate_review_payload,
+    validate_style_compilation_payload,
     validate_synthesis_payload,
 )
 from art_style_search.types import AggregatedMetrics, PromptSection, PromptTemplate
@@ -559,3 +562,33 @@ class TestJsonContracts:
         )
         assert review.experiment_assessments == ["[EXP 0] SIGNAL - palette improved"]
         assert review.recommended_categories == ["color_palette", "composition"]
+
+    def test_style_compilation_payload_rejects_invalid_caption_sections(self) -> None:
+        payload = {
+            "style_profile": {
+                "color_palette": "Muted earth tones.",
+                "composition": "Low horizon.",
+                "technique": "Wet-on-wet watercolor.",
+                "mood_atmosphere": "Quiet and contemplative.",
+                "subject_matter": "Rural landscapes.",
+                "influences": "Turner and Wyeth.",
+            },
+            "initial_template": {
+                "sections": [
+                    {"name": "style_foundation", "description": "rules", "value": "Shared rules"},
+                    {"name": "color_palette", "description": "colors", "value": "Palette guidance"},
+                    {"name": "composition", "description": "layout", "value": "Composition guidance"},
+                    {"name": "technique", "description": "medium", "value": "Technique guidance"},
+                ],
+                "negative_prompt": "avoid blur",
+                "caption_sections": ["Art Style Overview", "Color Palette"],
+                "caption_length_target": 500,
+            },
+        }
+
+        with pytest.raises(ValueError, match="First caption section must be 'Art Style'"):
+            validate_style_compilation_payload(
+                payload,
+                gemini_raw="visual analysis",
+                reasoning_raw="reasoning analysis",
+            )
