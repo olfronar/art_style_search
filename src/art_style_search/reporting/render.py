@@ -797,6 +797,15 @@ def _render_holdout_section(data: ReportData) -> str:
     summary = data.holdout_summary
     if summary is None:
         if data.state.protocol == "rigorous" and data.state.silent_refs:
+            if not data.state.converged:
+                return (
+                    '<section class="holdout-section">'
+                    '<div class="section-head"><span class="section-numeral">VI</span>'
+                    "<h2>Silent-Image Holdout</h2></div>"
+                    '<p class="empty">Holdout data is not available yet for this in-progress rigorous run; '
+                    "holdout_summary.json will be written when the run finishes.</p>"
+                    "</section>"
+                )
             return (
                 '<section class="holdout-section">'
                 '<div class="section-head"><span class="section-numeral">VI</span>'

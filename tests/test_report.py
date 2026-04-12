@@ -384,6 +384,7 @@ class TestBuildReport:
         run_dir = tmp_path / "rigorous-missing-holdout"
         run_dir.mkdir()
         state = make_loop_state(iteration=1)
+        state.converged = True
         state.protocol = "rigorous"
         state.silent_refs = [Path("/tmp/silent.png")]
         save_state(state, run_dir / "state.json")
@@ -393,6 +394,20 @@ class TestBuildReport:
 
         assert "expected for this rigorous run" in text
         assert "Enable the rigorous protocol" not in text
+
+    def test_in_progress_rigorous_run_reports_holdout_as_pending(self, tmp_path: Path) -> None:
+        run_dir = tmp_path / "rigorous-pending-holdout"
+        run_dir.mkdir()
+        state = make_loop_state(iteration=1)
+        state.converged = False
+        state.protocol = "rigorous"
+        state.silent_refs = [Path("/tmp/silent.png")]
+        save_state(state, run_dir / "state.json")
+
+        text = build_report(run_dir).read_text(encoding="utf-8")
+
+        assert "will be written when the run finishes" in text
+        assert "expected for this rigorous run" not in text
 
     def test_report_shows_requested_actual_and_feedback_silent_counts(self, tmp_path: Path) -> None:
         run_dir = tmp_path / "counts"
