@@ -123,6 +123,7 @@ uv run python -m art_style_search clean --all
 | `--reasoning-model` | auto | Model name (default: `claude-sonnet-4-6` / `glm-5.1` / `gpt-5.4` / `grok-4.20-reasoning-latest`) |
 | `--comparison-provider` | `gemini` | Image comparison provider: `gemini` or `xai` |
 | `--comparison-model` | auto | Comparison model name (default: caption model for `gemini`, `grok-4.20-reasoning-latest` for `xai`) |
+| `--reasoning-base-url` | none | Required with `--reasoning-provider local`; base URL for an OpenAI-compatible server |
 | `--gemini-concurrency` | `50` | Max concurrent Gemini API calls |
 | `--eval-concurrency` | `4` | Max concurrent eval threads |
 
@@ -132,6 +133,7 @@ uv run python -m art_style_search clean --all
 - **Apple Silicon**. Works out of the box -- the code detects MPS automatically via `torch.backends.mps.is_available()` and uses it for DreamSim / HPS / aesthetics inference.
 - **Hugging Face download failures on first run**. The first invocation pulls ~2 GB of weights. If downloads fail with rate-limit errors, rerun once the limit resets. If the cache directory isn't writable, set `HF_HOME=/path/to/writable/cache` before running.
 - **Missing API keys**. The CLI refuses to start and tells you exactly which env var to set. Mapping: `GOOGLE_API_KEY` (always required, Gemini captioning/generation and zero-step analysis), `ANTHROPIC_API_KEY` (for `--reasoning-provider anthropic`), `ZAI_API_KEY` (for `zai`), `OPENAI_API_KEY` (for `openai`), `XAI_API_KEY` (for `--reasoning-provider xai` and/or `--comparison-provider xai`).
+- **Using a local reasoning model**. `--reasoning-provider local` skips third-party reasoning API keys, but it does require both `--reasoning-model` and `--reasoning-base-url`, for example `--reasoning-base-url http://localhost:8000/v1`.
 - **Empty `reference_images/`**. The loop raises `FileNotFoundError` with an actionable message. Drop at least `--num-fixed-refs` images of a supported type (see `IMAGE_EXTENSIONS` in `utils.py`).
 - **`KeyError: 'branches'` when resuming**. Your `state.json` predates the branch-based → shared-KB refactor. Delete the old state and start a new run with `--new`.
 
@@ -228,6 +230,12 @@ Optional — enable the [`gitleaks`](https://github.com/gitleaks/gitleaks) secre
 uv tool install pre-commit   # Install the pre-commit CLI (isolated via uv)
 pre-commit install           # Wire it into .git/hooks/pre-commit
 ```
+
+For a full git-history secret scan before publishing, run the dedicated GitHub Actions workflow in [`.github/workflows/gitleaks.yml`](.github/workflows/gitleaks.yml) or install the `gitleaks` CLI locally and run `gitleaks git .`.
+
+## Contributing
+
+Contributor workflow lives in [`CONTRIBUTING.md`](CONTRIBUTING.md). Security reporting guidance lives in [`SECURITY.md`](SECURITY.md).
 
 ## Acknowledgements
 

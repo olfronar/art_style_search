@@ -1,7 +1,7 @@
 # Pre-commit hooks for art_style_search.
 #
 # Optional — contributors can opt in with:
-#   pipx install pre-commit
+#   uv tool install pre-commit
 #   pre-commit install
 #
 # The gitleaks hook scans staged changes for accidentally-committed secrets
