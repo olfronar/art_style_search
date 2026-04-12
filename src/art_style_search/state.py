@@ -149,6 +149,7 @@ def load_manifest(path: Path) -> RunManifest | None:
         num_fixed_refs=raw.get("num_fixed_refs", 0),
         discovered_reference_count=raw.get("discovered_reference_count", 0),
         uv_lock_hash=raw.get("uv_lock_hash"),
+        comparison_provider=raw.get("comparison_provider", "gemini"),
     )
 
 

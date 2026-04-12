@@ -487,8 +487,10 @@ class TestManifestRoundTrip:
                 "caption_model": "gemini-pro",
                 "generator_model": "gemini-flash",
                 "reasoning_model": "claude-opus",
+                "comparison_model": "grok-4.20-reasoning-latest",
             },
             reasoning_provider="anthropic",
+            comparison_provider="xai",
             git_sha="abc1234",
             python_version="3.12.0",
             platform="darwin",
@@ -510,6 +512,7 @@ class TestManifestRoundTrip:
         assert loaded.cli_args == manifest.cli_args
         assert loaded.model_names == manifest.model_names
         assert loaded.reasoning_provider == manifest.reasoning_provider
+        assert loaded.comparison_provider == manifest.comparison_provider
         assert loaded.git_sha == manifest.git_sha
         assert loaded.python_version == manifest.python_version
         assert loaded.platform == manifest.platform
@@ -526,6 +529,7 @@ class TestManifestRoundTrip:
             cli_args={},
             model_names={},
             reasoning_provider="anthropic",
+            comparison_provider="gemini",
             git_sha=None,
             python_version="3.11.0",
             platform="darwin",
@@ -537,7 +541,7 @@ class TestManifestRoundTrip:
         manifest_path = tmp_path / "manifest.json"
         save_manifest(manifest, manifest_path)
         raw = json.loads(manifest_path.read_text(encoding="utf-8"))
-        assert raw["_schema_version"] == 2
+        assert raw["_schema_version"] == 3
 
 
 # ---------------------------------------------------------------------------

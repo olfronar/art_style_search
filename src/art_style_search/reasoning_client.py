@@ -127,7 +127,7 @@ async def stream_message(client: anthropic.AsyncAnthropic, **kwargs: object) -> 
 
 
 class ReasoningClient:
-    """Wraps Anthropic, Z.AI, OpenAI, or a local OpenAI-compatible server behind a unified async interface."""
+    """Wraps Anthropic, Z.AI, OpenAI, xAI, or a local OpenAI-compatible server behind a unified async interface."""
 
     def __init__(
         self,
@@ -136,6 +136,7 @@ class ReasoningClient:
         anthropic_api_key: str = "",
         zai_api_key: str = "",
         openai_api_key: str = "",
+        xai_api_key: str = "",
         base_url: str = "",
     ) -> None:
         self.provider = provider
@@ -157,6 +158,14 @@ class ReasoningClient:
             self._openai = AsyncOpenAI(
                 api_key=openai_api_key,
                 timeout=httpx.Timeout(600.0, connect=30.0),
+            )
+        elif provider == "xai":
+            from openai import AsyncOpenAI
+
+            self._xai = AsyncOpenAI(
+                api_key=xai_api_key,
+                base_url="https://api.x.ai/v1",
+                timeout=httpx.Timeout(3600.0, connect=30.0),
             )
         elif provider == "local":
             from openai import AsyncOpenAI
@@ -183,6 +192,8 @@ class ReasoningClient:
             return await self._call_anthropic(model=model, system=system, user=user, max_tokens=max_tokens)
         if self.provider == "openai":
             return await self._call_openai(model=model, system=system, user=user, max_tokens=max_tokens)
+        if self.provider == "xai":
+            return await self._call_xai(model=model, system=system, user=user, max_tokens=max_tokens)
         if self.provider == "local":
             return await self._call_local(model=model, system=system, user=user, max_tokens=max_tokens)
         return await self._call_zai(model=model, system=system, user=user, max_tokens=max_tokens)
@@ -273,6 +284,21 @@ class ReasoningClient:
             return response.output_text
 
         return await async_retry(_call, label="OpenAI call", base_delay=_STREAM_BASE_DELAY)
+
+    async def _call_xai(self, *, model: str, system: str, user: str, max_tokens: int) -> str:
+        async def _call() -> str:
+            response = await self._xai.responses.create(
+                model=model,
+                input=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                max_output_tokens=max_tokens,
+                store=False,
+            )
+            return response.output_text
+
+        return await async_retry(_call, label="xAI call", base_delay=_STREAM_BASE_DELAY)
 
     async def _call_local(self, *, model: str, system: str, user: str, max_tokens: int) -> str:
         async def _call() -> str:

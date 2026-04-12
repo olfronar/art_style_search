@@ -16,7 +16,9 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
 from google import genai  # type: ignore[attr-defined]
+from openai import AsyncOpenAI
 
 from art_style_search.config import Config
 from art_style_search.models import ModelRegistry
@@ -122,8 +124,10 @@ def _build_manifest(config: Config) -> RunManifest:
             "caption_model": config.caption_model,
             "generator_model": config.generator_model,
             "reasoning_model": config.reasoning_model,
+            "comparison_model": config.comparison_model,
         },
         reasoning_provider=config.reasoning_provider,
+        comparison_provider=config.comparison_provider,
         git_sha=git_sha,
         python_version=sys.version,
         platform=_platform.platform(),
@@ -209,8 +213,16 @@ async def _setup_run_context(config: Config) -> RunContext:
         anthropic_api_key=config.anthropic_api_key,
         zai_api_key=config.zai_api_key,
         openai_api_key=config.openai_api_key,
+        xai_api_key=config.xai_api_key,
         base_url=config.reasoning_base_url,
     )
+    xai_client = None
+    if config.comparison_provider == "xai":
+        xai_client = AsyncOpenAI(
+            api_key=config.xai_api_key,
+            base_url="https://api.x.ai/v1",
+            timeout=httpx.Timeout(3600.0, connect=30.0),
+        )
 
     gemini_semaphore = asyncio.Semaphore(config.gemini_concurrency)
     eval_semaphore = asyncio.Semaphore(config.eval_concurrency)
@@ -232,9 +244,11 @@ async def _setup_run_context(config: Config) -> RunContext:
         evaluation=EvaluationService(
             gemini_client=gemini_client,
             registry=registry,
-            caption_model=config.caption_model,
+            comparison_provider=config.comparison_provider,
+            comparison_model=config.comparison_model,
             gemini_semaphore=gemini_semaphore,
             eval_semaphore=eval_semaphore,
+            xai_client=xai_client,
         ),
         reasoning=ReasoningService(client=reasoning_client, model=config.reasoning_model),
     )

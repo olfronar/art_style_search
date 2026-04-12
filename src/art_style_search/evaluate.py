@@ -7,10 +7,12 @@ import logging
 import random
 import re
 from pathlib import Path
+from typing import Any
 
 from google import genai  # type: ignore[attr-defined]
 from PIL import Image
 
+from art_style_search.media import image_to_xai_data_url
 from art_style_search.models import ModelRegistry
 from art_style_search.types import (
     VISION_VERDICT_DEFAULT,
@@ -74,7 +76,7 @@ def _parse_vision_verdicts(text: str) -> VisionScores:
     )
 
 
-async def _compare_vision_single(
+async def _compare_vision_single_gemini(
     ref_path: Path,
     gen_path: Path,
     caption: str,
@@ -111,28 +113,87 @@ async def _compare_vision_single(
         return "", VisionScores.default()
 
 
+async def _compare_vision_single_xai(
+    ref_path: Path,
+    gen_path: Path,
+    caption: str,
+    *,
+    client: Any,
+    model: str,
+    semaphore: asyncio.Semaphore,
+) -> tuple[str, VisionScores]:
+    """Compare a single (original, generated) pair via xAI multimodal responses."""
+    contents = [
+        {"type": "input_text", "text": "### ORIGINAL:"},
+        {"type": "input_image", "image_url": image_to_xai_data_url(ref_path), "detail": "high"},
+        {"type": "input_text", "text": "### GENERATED (from caption):"},
+        {"type": "input_image", "image_url": image_to_xai_data_url(gen_path), "detail": "high"},
+        {"type": "input_text", "text": _VISION_SINGLE_PROMPT.format(caption=caption[:600])},
+    ]
+
+    async def _call() -> tuple[str, VisionScores]:
+        async with semaphore:
+            response = await asyncio.wait_for(
+                client.responses.create(
+                    model=model,
+                    input=[{"role": "user", "content": contents}],
+                    max_output_tokens=1000,
+                    store=False,
+                ),
+                timeout=90,
+            )
+        text = response.output_text or ""
+        return text, _parse_vision_verdicts(text)
+
+    try:
+        return await async_retry(_call, label=f"xAI vision {ref_path.name}", circuit_breaker=vision_circuit_breaker)
+    except RuntimeError:
+        logger.error("xAI vision %s failed after retries — using neutral defaults", ref_path.name)
+        return "", VisionScores.default()
+
+
 async def compare_vision_per_image(
     pairs: list[tuple[Path, Path]],
     captions: list[str],
     *,
-    client: genai.Client,
+    provider: str,
     model: str,
     semaphore: asyncio.Semaphore,
+    client: genai.Client | None = None,
+    xai_client: Any | None = None,
 ) -> tuple[list[str], list[VisionScores]]:
-    """Compare each (original, generated) pair individually via Gemini vision.
+    """Compare each (original, generated) pair individually via the configured provider.
 
     Returns (list_of_feedback_texts, list_of_vision_scores), one per pair.
     """
-    tasks = [
-        _compare_vision_single(ref, gen, cap, client=client, model=model, semaphore=semaphore)
-        for (ref, gen), cap in zip(pairs, captions, strict=True)
-    ]
+    if provider == "gemini":
+        if client is None:
+            msg = "Gemini comparison requires a Gemini client"
+            raise ValueError(msg)
+        tasks = [
+            _compare_vision_single_gemini(ref, gen, cap, client=client, model=model, semaphore=semaphore)
+            for (ref, gen), cap in zip(pairs, captions, strict=True)
+        ]
+    elif provider == "xai":
+        if xai_client is None:
+            msg = "xAI comparison requires an xAI client"
+            raise ValueError(msg)
+        tasks = [
+            _compare_vision_single_xai(ref, gen, cap, client=xai_client, model=model, semaphore=semaphore)
+            for (ref, gen), cap in zip(pairs, captions, strict=True)
+        ]
+    else:
+        msg = f"Unknown comparison provider: {provider}"
+        raise ValueError(msg)
+
     logger.info("Vision comparison: scoring %d image pairs", len(tasks))
     raw_results = await asyncio.gather(*tasks, return_exceptions=True)
     feedbacks: list[str] = []
     scores: list[VisionScores] = []
     for i, result in enumerate(raw_results):
         if isinstance(result, BaseException):
+            if isinstance(result, ValueError):
+                raise result
             logger.warning("Vision pair %d failed: %s: %s", i, type(result).__name__, result)
             feedbacks.append("")
             scores.append(VisionScores.default())
@@ -165,12 +226,14 @@ async def pairwise_compare_experiments(
     pairs_a: list[tuple[Path, Path]],
     pairs_b: list[tuple[Path, Path]],
     *,
-    client: genai.Client,
+    provider: str,
     model: str,
     semaphore: asyncio.Semaphore,
     max_images: int = 3,
+    client: genai.Client | None = None,
+    xai_client: Any | None = None,
 ) -> tuple[str, float]:
-    """Compare two experiments' outputs via Gemini vision.
+    """Compare two experiments' outputs via the configured provider.
 
     Samples up to *max_images* representative pairs (evenly spaced) from each
     experiment.  Returns (rationale, score_for_a) where score_for_a is 1.0 if
@@ -187,35 +250,81 @@ async def pairwise_compare_experiments(
     if swapped:
         pairs_a, pairs_b = pairs_b, pairs_a
 
-    contents: list[object] = []
-    for idx in indices:
-        ref_a, gen_a = pairs_a[idx]
-        _, gen_b = pairs_b[idx]
-        contents.extend(
-            [
-                f"### Image {idx + 1} — ORIGINAL:",
-                image_to_gemini_part(ref_a),
-                f"### Image {idx + 1} — SET A reproduction:",
-                image_to_gemini_part(gen_a),
-                f"### Image {idx + 1} — SET B reproduction:",
-                image_to_gemini_part(gen_b),
-            ]
-        )
-    contents.append(_PAIRWISE_COMPARE_PROMPT)
-
-    async def _call() -> tuple[str, float]:
-        async with semaphore:
-            response = await asyncio.wait_for(
-                client.aio.models.generate_content(model=model, contents=contents),
-                timeout=120,
+    if provider == "gemini":
+        if client is None:
+            msg = "Gemini comparison requires a Gemini client"
+            raise ValueError(msg)
+        contents: list[object] = []
+        for idx in indices:
+            ref_a, gen_a = pairs_a[idx]
+            _, gen_b = pairs_b[idx]
+            contents.extend(
+                [
+                    f"### Image {idx + 1} — ORIGINAL:",
+                    image_to_gemini_part(ref_a),
+                    f"### Image {idx + 1} — SET A reproduction:",
+                    image_to_gemini_part(gen_a),
+                    f"### Image {idx + 1} — SET B reproduction:",
+                    image_to_gemini_part(gen_b),
+                ]
             )
-        text = response.text or ""
-        winner_match = re.search(r"<winner>(\w+)</winner>", text)
-        rationale_match = re.search(r"<rationale>(.*?)</rationale>", text, re.DOTALL)
-        winner = winner_match.group(1).upper() if winner_match else "TIE"
-        rationale = rationale_match.group(1).strip() if rationale_match else text[:300]
-        score = {"A": 1.0, "B": 0.0, "TIE": 0.5}.get(winner, 0.5)
-        return (rationale, score)
+        contents.append(_PAIRWISE_COMPARE_PROMPT)
+
+        async def _call() -> tuple[str, float]:
+            async with semaphore:
+                response = await asyncio.wait_for(
+                    client.aio.models.generate_content(model=model, contents=contents),
+                    timeout=120,
+                )
+            text = response.text or ""
+            winner_match = re.search(r"<winner>(\w+)</winner>", text)
+            rationale_match = re.search(r"<rationale>(.*?)</rationale>", text, re.DOTALL)
+            winner = winner_match.group(1).upper() if winner_match else "TIE"
+            rationale = rationale_match.group(1).strip() if rationale_match else text[:300]
+            score = {"A": 1.0, "B": 0.0, "TIE": 0.5}.get(winner, 0.5)
+            return (rationale, score)
+    elif provider == "xai":
+        if xai_client is None:
+            msg = "xAI comparison requires an xAI client"
+            raise ValueError(msg)
+
+        contents = []
+        for idx in indices:
+            ref_a, gen_a = pairs_a[idx]
+            _, gen_b = pairs_b[idx]
+            contents.extend(
+                [
+                    {"type": "input_text", "text": f"### Image {idx + 1} — ORIGINAL:"},
+                    {"type": "input_image", "image_url": image_to_xai_data_url(ref_a), "detail": "high"},
+                    {"type": "input_text", "text": f"### Image {idx + 1} — SET A reproduction:"},
+                    {"type": "input_image", "image_url": image_to_xai_data_url(gen_a), "detail": "high"},
+                    {"type": "input_text", "text": f"### Image {idx + 1} — SET B reproduction:"},
+                    {"type": "input_image", "image_url": image_to_xai_data_url(gen_b), "detail": "high"},
+                ]
+            )
+        contents.append({"type": "input_text", "text": _PAIRWISE_COMPARE_PROMPT})
+
+        async def _call() -> tuple[str, float]:
+            async with semaphore:
+                response = await asyncio.wait_for(
+                    xai_client.responses.create(
+                        model=model,
+                        input=[{"role": "user", "content": contents}],
+                        max_output_tokens=1000,
+                        store=False,
+                    ),
+                    timeout=120,
+                )
+            text = response.output_text or ""
+            winner_match = re.search(r"<winner>(\w+)</winner>", text)
+            rationale_match = re.search(r"<rationale>(.*?)</rationale>", text, re.DOTALL)
+            winner = winner_match.group(1).upper() if winner_match else "TIE"
+            rationale = rationale_match.group(1).strip() if rationale_match else text[:300]
+            score = {"A": 1.0, "B": 0.0, "TIE": 0.5}.get(winner, 0.5)
+            return (rationale, score)
+    else:
+        msg = f"Unknown comparison provider: {provider}"
+        raise ValueError(msg)
 
     try:
         rationale, score = await async_retry(_call, label="Pairwise comparison", circuit_breaker=vision_circuit_breaker)

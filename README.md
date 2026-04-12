@@ -1,6 +1,6 @@
 # Art Style Search
 
-Self-improving loop that finds the best prompt to define and follow an art style from reference images. A meta-prompt instructs a captioner (Gemini Pro) how to describe images so a generator (Gemini Flash) can recreate them from the captions. A reasoning model (Claude, GLM-5.1, or GPT-5.4 — swappable via `--reasoning-provider`) optimizes the meta-prompt through hypothesis-driven experiments.
+Self-improving loop that finds the best prompt to define and follow an art style from reference images. A meta-prompt instructs a captioner (Gemini Pro) how to describe images so a generator (Gemini Flash) can recreate them from the captions. A reasoning model (Claude, GLM-5.1, GPT-5.4, or Grok 4.20 — swappable via `--reasoning-provider`) optimizes the meta-prompt through hypothesis-driven experiments, and image comparison can run on either Gemini or Grok via `--comparison-provider`.
 
 Inspired by [karpathy/autoresearch](https://github.com/karpathy/autoresearch).
 
@@ -47,7 +47,7 @@ The meta-prompt is the only thing being optimized. It tells the captioner *how* 
 
 Running this loop is not free. Know the order-of-magnitude before you start:
 
-- **API calls**. A default run is `--max-iterations 20 × --num-branches 5 × --num-fixed-refs 20` -- on the order of 2000 Gemini Pro captions, 2000 Gemini Flash generations, 2000 Gemini vision comparisons, and 60-100 reasoning-model calls (Claude, GLM, or GPT). Expect several US dollars per full run at current 2026 prices. Costs scale roughly linearly with `max_iterations × num_branches × num_fixed_refs`.
+- **API calls**. A default run is `--max-iterations 20 × --num-branches 5 × --num-fixed-refs 20` -- on the order of 2000 Gemini Pro captions, 2000 Gemini Flash generations, 2000 image-comparison calls (Gemini by default, optionally Grok), and 60-100 reasoning-model calls (Claude, GLM, GPT, or Grok). Expect several US dollars per full run at current 2026 prices. Costs scale roughly linearly with `max_iterations × num_branches × num_fixed_refs`.
 - **First-run ML model downloads**. The first invocation pulls ~2 GB of weights from Hugging Face Hub: DreamSim `dino_vitb16` (~870 MB), LAION-Aesthetics CLIP-L, and HPSv2 CLIP-H. These are cached under `~/.cache/huggingface/` and the `dreamsim` / `hpsv2` package cache dirs.
 - **GPU is optional**. CPU works but is slow. Apple Silicon uses MPS automatically. NVIDIA CUDA users have to pick a matching `torch` wheel (see Troubleshooting).
 - **Smoke-test recipe** (~1% of the cost of a default run):
@@ -69,6 +69,7 @@ Running this loop is not free. Know the order-of-magnitude before you start:
   - [Anthropic API key](https://console.anthropic.com/) (for Claude -- default)
   - [Z.AI API key](https://z.ai/) (for GLM-5.1 -- alternative)
   - [OpenAI API key](https://platform.openai.com/) (for GPT-5.4 -- alternative)
+  - [xAI API key](https://console.x.ai/) (for Grok 4.20 reasoning and/or comparison)
 
 ## Quick Start
 
@@ -118,8 +119,10 @@ uv run python -m art_style_search clean --all
 | `--aspect-ratio` | `1:1` | Aspect ratio for generated images |
 | `--caption-model` | `gemini-3.1-pro-preview` | Gemini model for captioning |
 | `--generator-model` | `gemini-3.1-flash-image-preview` | Gemini model for generation |
-| `--reasoning-provider` | `anthropic` | Reasoning provider: `anthropic`, `zai`, or `openai` |
-| `--reasoning-model` | auto | Model name (default: `claude-sonnet-4-6` / `glm-5.1` / `gpt-5.4`) |
+| `--reasoning-provider` | `anthropic` | Reasoning provider: `anthropic`, `zai`, `openai`, `xai`, or `local` |
+| `--reasoning-model` | auto | Model name (default: `claude-sonnet-4-6` / `glm-5.1` / `gpt-5.4` / `grok-4.20-reasoning-latest`) |
+| `--comparison-provider` | `gemini` | Image comparison provider: `gemini` or `xai` |
+| `--comparison-model` | auto | Comparison model name (default: caption model for `gemini`, `grok-4.20-reasoning-latest` for `xai`) |
 | `--gemini-concurrency` | `50` | Max concurrent Gemini API calls |
 | `--eval-concurrency` | `4` | Max concurrent eval threads |
 
@@ -128,7 +131,7 @@ uv run python -m art_style_search clean --all
 - **`torch` wheel doesn't match CUDA**. `uv sync` pulls the CPU wheel by default. NVIDIA CUDA users need to override the index: `uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124` (pick the channel that matches your CUDA version).
 - **Apple Silicon**. Works out of the box -- the code detects MPS automatically via `torch.backends.mps.is_available()` and uses it for DreamSim / HPS / aesthetics inference.
 - **Hugging Face download failures on first run**. The first invocation pulls ~2 GB of weights. If downloads fail with rate-limit errors, rerun once the limit resets. If the cache directory isn't writable, set `HF_HOME=/path/to/writable/cache` before running.
-- **Missing API keys**. The CLI refuses to start and tells you exactly which env var to set. Mapping: `GOOGLE_API_KEY` (always required, Gemini), `ANTHROPIC_API_KEY` (for `--reasoning-provider anthropic`), `ZAI_API_KEY` (for `zai`), `OPENAI_API_KEY` (for `openai`).
+- **Missing API keys**. The CLI refuses to start and tells you exactly which env var to set. Mapping: `GOOGLE_API_KEY` (always required, Gemini captioning/generation and zero-step analysis), `ANTHROPIC_API_KEY` (for `--reasoning-provider anthropic`), `ZAI_API_KEY` (for `zai`), `OPENAI_API_KEY` (for `openai`), `XAI_API_KEY` (for `--reasoning-provider xai` and/or `--comparison-provider xai`).
 - **Empty `reference_images/`**. The loop raises `FileNotFoundError` with an actionable message. Drop at least `--num-fixed-refs` images of a supported type (see `IMAGE_EXTENSIONS` in `utils.py`).
 - **`KeyError: 'branches'` when resuming**. Your `state.json` predates the branch-based → shared-KB refactor. Delete the old state and start a new run with `--new`.
 
@@ -212,8 +215,8 @@ This project stands on the shoulders of:
 - [**HPS v2**](https://github.com/tgxs002/HPSv2) (Wu et al.) -- human preference score for caption-image alignment.
 - [**LAION-Aesthetics-Predictor-v2**](https://laion.ai/blog/laion-aesthetics/) via [`simple-aesthetics-predictor`](https://github.com/shunk031/simple-aesthetics-predictor).
 - [**scikit-image**](https://scikit-image.org/) -- SSIM implementation.
-- [**Google Gemini**](https://ai.google.dev/) -- captioner, image generator, and vision comparator.
-- [**Anthropic Claude**](https://www.anthropic.com/) / [**Z.AI GLM-5.1**](https://z.ai/) / [**OpenAI GPT**](https://openai.com/) -- interchangeable reasoning / optimization backends.
+- [**Google Gemini**](https://ai.google.dev/) -- captioner, image generator, and default vision comparator.
+- [**Anthropic Claude**](https://www.anthropic.com/) / [**Z.AI GLM-5.1**](https://z.ai/) / [**OpenAI GPT**](https://openai.com/) / [**xAI Grok**](https://x.ai/) -- interchangeable reasoning backends, with Grok also available for image comparison.
 - [**karpathy/autoresearch**](https://github.com/karpathy/autoresearch) -- the self-improving research-loop pattern that inspired this project.
 
 ## License

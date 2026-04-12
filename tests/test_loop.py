@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import random
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -28,6 +29,7 @@ from art_style_search.workflow.context import (
     _discover_images,
     _finalize_run,
     _sample,
+    _setup_run_context,
     _split_information_barrier,
 )
 from art_style_search.workflow.iteration import (
@@ -101,6 +103,57 @@ class TestRunAccounting:
 
         assert manifest.num_fixed_refs == 20
         assert manifest.discovered_reference_count == 3
+
+    def test_build_manifest_records_comparison_backend(self, tmp_path: Path) -> None:
+        config = replace(
+            _make_config(tmp_path),
+            comparison_provider="xai",
+            comparison_model="grok-4.20-reasoning-latest",
+        )
+        config.reference_dir.mkdir(parents=True)
+
+        manifest = _build_manifest(config)
+
+        assert manifest.comparison_provider == "xai"
+        assert manifest.model_names["comparison_model"] == "grok-4.20-reasoning-latest"
+
+    @pytest.mark.asyncio
+    async def test_setup_run_context_wires_xai_keys_and_comparison_provider(self, tmp_path: Path, monkeypatch) -> None:
+        config = replace(
+            _make_config(tmp_path),
+            reasoning_provider="xai",
+            reasoning_model="grok-4.20-reasoning-latest",
+            comparison_provider="xai",
+            comparison_model="grok-4.20-reasoning-latest",
+            xai_api_key="xai-test-key",
+        )
+
+        reasoning_init: dict[str, object] = {}
+
+        class FakeReasoningClient:
+            def __init__(self, provider: str, **kwargs) -> None:
+                reasoning_init["provider"] = provider
+                reasoning_init.update(kwargs)
+
+        class FakeGeminiClient:
+            def __init__(self, api_key: str) -> None:
+                self.api_key = api_key
+
+        class FakeXAIClient:
+            def __init__(self, **kwargs) -> None:
+                self.kwargs = kwargs
+
+        monkeypatch.setattr("art_style_search.workflow.context.ReasoningClient", FakeReasoningClient)
+        monkeypatch.setattr("art_style_search.workflow.context.AsyncOpenAI", FakeXAIClient)
+        monkeypatch.setattr("art_style_search.workflow.context.genai.Client", FakeGeminiClient)
+        monkeypatch.setattr("art_style_search.workflow.context.ModelRegistry.load_all", lambda: MagicMock())
+
+        ctx = await _setup_run_context(config)
+
+        assert reasoning_init["provider"] == "xai"
+        assert reasoning_init["xai_api_key"] == "xai-test-key"
+        assert ctx.services.evaluation.comparison_provider == "xai"
+        assert ctx.services.evaluation.comparison_model == "grok-4.20-reasoning-latest"
 
     def test_finalize_run_writes_holdout_summary_for_rigorous_runs(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path, protocol="rigorous")

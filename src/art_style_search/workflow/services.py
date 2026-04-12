@@ -97,9 +97,11 @@ class EvaluationService:
 
     gemini_client: genai.Client
     registry: ModelRegistry
-    caption_model: str
+    comparison_provider: str
+    comparison_model: str
     gemini_semaphore: asyncio.Semaphore
     eval_semaphore: asyncio.Semaphore
+    xai_client: object | None = None
 
     async def evaluate_images(
         self,
@@ -123,8 +125,10 @@ class EvaluationService:
         return await compare_vision_per_image(
             pairs,
             captions,
+            provider=self.comparison_provider,
             client=self.gemini_client,
-            model=self.caption_model,
+            xai_client=self.xai_client,
+            model=self.comparison_model,
             semaphore=self.gemini_semaphore,
         )
 
@@ -138,8 +142,10 @@ class EvaluationService:
         return await pairwise_compare_experiments(
             pairs_a,
             pairs_b,
+            provider=self.comparison_provider,
             client=self.gemini_client,
-            model=self.caption_model,
+            xai_client=self.xai_client,
+            model=self.comparison_model,
             semaphore=self.gemini_semaphore,
             max_images=max_images,
         )

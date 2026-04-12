@@ -460,7 +460,7 @@ class RunManifest:
     protocol_version: str  # "classic" or "rigorous_v1"
     seed: int
     cli_args: dict[str, Any]
-    model_names: dict[str, str]  # caption_model, generator_model, reasoning_model
+    model_names: dict[str, str]  # caption_model, generator_model, reasoning_model, comparison_model
     reasoning_provider: str
     git_sha: str | None
     python_version: str
@@ -470,6 +470,7 @@ class RunManifest:
     num_fixed_refs: int
     discovered_reference_count: int = 0
     uv_lock_hash: str | None = None
+    comparison_provider: str = "gemini"
 
 
 @dataclass(frozen=True)

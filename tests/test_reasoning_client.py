@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from art_style_search.reasoning_client import ReasoningClient, parse_json_response
@@ -44,3 +46,36 @@ class TestCallJson:
         )
 
         assert result == "fixed"
+
+
+class TestCallText:
+    @pytest.mark.asyncio
+    async def test_xai_uses_role_based_input_without_reasoning_effort(self) -> None:
+        captured: dict[str, object] = {}
+
+        async def fake_create(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(output_text="xai ok")
+
+        client = ReasoningClient.__new__(ReasoningClient)
+        client.provider = "xai"
+        client._xai = SimpleNamespace(responses=SimpleNamespace(create=fake_create))
+
+        result = await ReasoningClient.call(
+            client,
+            model="grok-4.20-reasoning-latest",
+            system="system prompt",
+            user="user prompt",
+            max_tokens=321,
+        )
+
+        assert result == "xai ok"
+        assert captured == {
+            "model": "grok-4.20-reasoning-latest",
+            "input": [
+                {"role": "system", "content": "system prompt"},
+                {"role": "user", "content": "user prompt"},
+            ],
+            "max_output_tokens": 321,
+            "store": False,
+        }

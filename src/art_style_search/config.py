@@ -41,7 +41,7 @@ class Config:
     caption_model: str
     generator_model: str
     reasoning_model: str
-    reasoning_provider: str  # "anthropic", "zai", "openai", or "local"
+    reasoning_provider: str  # "anthropic", "zai", "openai", "xai", or "local"
     reasoning_base_url: str  # custom base URL for local/remote OpenAI-compatible servers
 
     # Concurrency
@@ -57,6 +57,9 @@ class Config:
     google_api_key: str
     zai_api_key: str
     openai_api_key: str
+    xai_api_key: str = ""
+    comparison_provider: str = "gemini"  # "gemini" or "xai"
+    comparison_model: str = ""
 
 
 def parse_args(argv: list[str] | None = None) -> Config:
@@ -99,14 +102,28 @@ def parse_args(argv: list[str] | None = None) -> Config:
     )
     models.add_argument(
         "--reasoning-provider",
-        choices=["anthropic", "zai", "openai", "local"],
+        choices=["anthropic", "zai", "openai", "xai", "local"],
         default="anthropic",
-        help="Reasoning model provider: anthropic (Claude), zai (GLM-5.1), openai (GPT-5.4), or local (OpenAI-compatible)",
+        help=(
+            "Reasoning model provider: anthropic (Claude), zai (GLM-5.1), openai (GPT-5.4), "
+            "xai (Grok 4.20), or local (OpenAI-compatible)"
+        ),
     )
     models.add_argument(
         "--reasoning-model",
         default=None,
-        help="Reasoning model name (default: claude-sonnet-4-6 / glm-5.1 / gpt-5.4)",
+        help="Reasoning model name (default: claude-sonnet-4-6 / glm-5.1 / gpt-5.4 / grok-4.20-reasoning-latest)",
+    )
+    models.add_argument(
+        "--comparison-provider",
+        choices=["gemini", "xai"],
+        default="gemini",
+        help="Image-comparison provider: gemini (default) or xai (Grok 4.20 multimodal)",
+    )
+    models.add_argument(
+        "--comparison-model",
+        default=None,
+        help="Image-comparison model name (default: caption model for gemini / grok-4.20-reasoning-latest for xai)",
     )
     models.add_argument(
         "--reasoning-base-url",
@@ -135,6 +152,7 @@ def parse_args(argv: list[str] | None = None) -> Config:
     keys.add_argument("--google-api-key", default=None, help="Google API key (env: GOOGLE_API_KEY)")
     keys.add_argument("--zai-api-key", default=None, help="Z.AI API key (env: ZAI_API_KEY)")
     keys.add_argument("--openai-api-key", default=None, help="OpenAI API key (env: OPENAI_API_KEY)")
+    keys.add_argument("--xai-api-key", default=None, help="xAI API key (env: XAI_API_KEY)")
 
     args = parser.parse_args(argv)
     return _validate_and_build_config(args, parser)
@@ -146,6 +164,7 @@ def _validate_and_build_config(args: argparse.Namespace, parser: argparse.Argume
     google_key = args.google_api_key or os.environ.get("GOOGLE_API_KEY", "")
     zai_key = args.zai_api_key or os.environ.get("ZAI_API_KEY", "")
     openai_key = args.openai_api_key or os.environ.get("OPENAI_API_KEY", "")
+    xai_key = args.xai_api_key or os.environ.get("XAI_API_KEY", "")
 
     provider = args.reasoning_provider
     if provider == "anthropic" and not anthropic_key:
@@ -154,6 +173,8 @@ def _validate_and_build_config(args: argparse.Namespace, parser: argparse.Argume
         parser.error("ZAI_API_KEY must be set via --zai-api-key or environment variable")
     if provider == "openai" and not openai_key:
         parser.error("OPENAI_API_KEY must be set via --openai-api-key or environment variable")
+    if provider == "xai" and not xai_key:
+        parser.error("XAI_API_KEY must be set via --xai-api-key or environment variable")
     if provider == "local" and not args.reasoning_base_url:
         parser.error("--reasoning-base-url is required when using --reasoning-provider local")
     if provider == "local" and not args.reasoning_model:
@@ -161,9 +182,24 @@ def _validate_and_build_config(args: argparse.Namespace, parser: argparse.Argume
     if not google_key:
         parser.error("GOOGLE_API_KEY must be set via --google-api-key or environment variable")
 
+    comparison_provider = args.comparison_provider
+    if comparison_provider == "xai" and not xai_key:
+        parser.error("XAI_API_KEY must be set via --xai-api-key or environment variable")
+
     # Default model based on provider
-    default_models = {"anthropic": "claude-sonnet-4-6", "zai": "glm-5.1", "openai": "gpt-5.4", "local": ""}
+    default_models = {
+        "anthropic": "claude-sonnet-4-6",
+        "zai": "glm-5.1",
+        "openai": "gpt-5.4",
+        "xai": "grok-4.20-reasoning-latest",
+        "local": "",
+    }
     reasoning_model = args.reasoning_model or default_models[provider]
+    default_comparison_models = {
+        "gemini": args.caption_model,
+        "xai": "grok-4.20-reasoning-latest",
+    }
+    comparison_model = args.comparison_model or default_comparison_models[comparison_provider]
 
     # Resolve seed: generate one if not provided
     seed = args.seed if args.seed is not None else random.randint(0, 2**32 - 1)
@@ -202,4 +238,7 @@ def _validate_and_build_config(args: argparse.Namespace, parser: argparse.Argume
         google_api_key=google_key,
         zai_api_key=zai_key,
         openai_api_key=openai_key,
+        xai_api_key=xai_key,
+        comparison_provider=comparison_provider,
+        comparison_model=comparison_model,
     )

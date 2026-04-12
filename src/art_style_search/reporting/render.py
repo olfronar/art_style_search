@@ -729,7 +729,9 @@ def _render_protocol_section(data: ReportData) -> str:
       <dt>Caption model</dt><dd>{_h(manifest.model_names.get("caption_model", ""))}</dd>
       <dt>Generator model</dt><dd>{_h(manifest.model_names.get("generator_model", ""))}</dd>
       <dt>Reasoning model</dt><dd>{_h(manifest.model_names.get("reasoning_model", ""))}</dd>
-      <dt>Provider</dt><dd>{_h(manifest.reasoning_provider)}</dd>
+      <dt>Reasoning provider</dt><dd>{_h(manifest.reasoning_provider)}</dd>
+      <dt>Comparison model</dt><dd>{_h(manifest.model_names.get("comparison_model", ""))}</dd>
+      <dt>Comparison provider</dt><dd>{_h(manifest.comparison_provider)}</dd>
       <dt>Platform</dt><dd>{_h(manifest.platform)}</dd>
       <dt>Python</dt><dd>{_h(manifest.python_version.split()[0] if manifest.python_version else "")}</dd>
       <dt>Timestamp</dt><dd>{_h(manifest.timestamp_utc)}</dd>

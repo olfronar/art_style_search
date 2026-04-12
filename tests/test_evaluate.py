@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
+from pathlib import Path
+from types import SimpleNamespace
 
-from art_style_search.evaluate import aggregate
+import pytest
+from PIL import Image
+
+from art_style_search.evaluate import aggregate, compare_vision_per_image, pairwise_compare_experiments
 from art_style_search.types import MetricScores
+
+
+def _write_image(path: Path, color: tuple[int, int, int]) -> None:
+    Image.new("RGB", (16, 16), color=color).save(path)
 
 
 class TestAggregateEmpty:
@@ -64,3 +74,82 @@ class TestAggregateMultiple:
         # aesthetics: values [5.0, 7.0, 9.0], mean=7.0, deviations [-2, 0, 2]
         expected_aes_std = ((4.0 + 0.0 + 4.0) / 3) ** 0.5
         assert math.isclose(result.aesthetics_score_std, expected_aes_std, abs_tol=1e-9)
+
+
+class TestXAIComparison:
+    @pytest.mark.asyncio
+    async def test_compare_vision_per_image_uses_xai_multimodal_payload(self, tmp_path: Path) -> None:
+        ref_path = tmp_path / "ref.png"
+        gen_path = tmp_path / "gen.png"
+        _write_image(ref_path, (10, 20, 30))
+        _write_image(gen_path, (30, 20, 10))
+
+        captured: dict[str, object] = {}
+        response_text = (
+            '<style verdict="MATCH">Style matches closely.</style>\n'
+            '<subject verdict="PARTIAL">Subject differs slightly.</subject>\n'
+            '<composition verdict="MISS">Composition is off.</composition>\n'
+            "<key_gap>Lighting drift</key_gap>"
+        )
+
+        async def fake_create(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(output_text=response_text)
+
+        xai_client = SimpleNamespace(responses=SimpleNamespace(create=fake_create))
+
+        feedbacks, scores = await compare_vision_per_image(
+            [(ref_path, gen_path)],
+            ["caption text"],
+            provider="xai",
+            client=None,
+            xai_client=xai_client,
+            model="grok-4.20-reasoning-latest",
+            semaphore=asyncio.Semaphore(1),
+        )
+
+        assert feedbacks == [response_text]
+        assert scores[0].style.score == 1.0
+        assert scores[0].subject.score == 0.5
+        assert scores[0].composition.score == 0.0
+        assert captured["model"] == "grok-4.20-reasoning-latest"
+        assert captured["store"] is False
+        content = captured["input"][0]["content"]  # type: ignore[index]
+        assert content[0]["type"] == "input_text"
+        assert content[1]["type"] == "input_image"
+        assert content[2]["type"] == "input_text"
+        assert content[3]["type"] == "input_image"
+
+    @pytest.mark.asyncio
+    async def test_pairwise_compare_experiments_uses_xai_and_parses_winner(self, tmp_path: Path, monkeypatch) -> None:
+        ref_path = tmp_path / "ref.png"
+        gen_a = tmp_path / "a.png"
+        gen_b = tmp_path / "b.png"
+        _write_image(ref_path, (10, 20, 30))
+        _write_image(gen_a, (30, 40, 50))
+        _write_image(gen_b, (50, 40, 30))
+
+        monkeypatch.setattr("art_style_search.evaluate.random.random", lambda: 0.9)
+
+        captured: dict[str, object] = {}
+
+        async def fake_create(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(output_text="<winner>A</winner><rationale>Set A is closer overall.</rationale>")
+
+        xai_client = SimpleNamespace(responses=SimpleNamespace(create=fake_create))
+
+        rationale, score = await pairwise_compare_experiments(
+            [(ref_path, gen_a)],
+            [(ref_path, gen_b)],
+            provider="xai",
+            client=None,
+            xai_client=xai_client,
+            model="grok-4.20-reasoning-latest",
+            semaphore=asyncio.Semaphore(1),
+            max_images=1,
+        )
+
+        assert rationale == "Set A is closer overall."
+        assert score == 1.0
+        assert captured["store"] is False

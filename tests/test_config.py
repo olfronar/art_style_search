@@ -136,6 +136,10 @@ class TestDefaults:
         assert cfg.reasoning_model == "claude-sonnet-4-6"
         assert cfg.reasoning_provider == "anthropic"
 
+    def test_comparison_model(self, cfg: Config) -> None:
+        assert cfg.comparison_provider == "gemini"
+        assert cfg.comparison_model == cfg.caption_model
+
     def test_gemini_concurrency(self, cfg: Config) -> None:
         assert cfg.gemini_concurrency == 50
 
@@ -174,6 +178,24 @@ class TestApiKeysFromEnv:
         )
         assert cfg.anthropic_api_key == "sk-cli-new"
         assert cfg.google_api_key == "gk-cli-new"
+
+    def test_xai_key_from_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        ref_dir = tmp_path / "refs"
+        ref_dir.mkdir()
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-env-anthropic")
+        monkeypatch.setenv("GOOGLE_API_KEY", "gk-env-google")
+        monkeypatch.setenv("XAI_API_KEY", "xai-env-key")
+        cfg = parse_args(
+            [
+                "--reference-dir",
+                str(ref_dir),
+                "--runs-dir",
+                str(tmp_path / "runs"),
+                "--comparison-provider",
+                "xai",
+            ]
+        )
+        assert cfg.xai_api_key == "xai-env-key"
 
 
 class TestMissingApiKey:
@@ -220,6 +242,61 @@ class TestMissingApiKey:
         monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
         with pytest.raises(SystemExit):
             parse_args(["--reference-dir", str(ref_dir), "--runs-dir", str(tmp_path / "runs")])
+
+    def test_missing_xai_key_for_reasoning_provider(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        ref_dir = tmp_path / "refs"
+        ref_dir.mkdir()
+        monkeypatch.delenv("XAI_API_KEY", raising=False)
+        with pytest.raises(SystemExit):
+            parse_args(
+                [
+                    *_base_args(tmp_path, ref_dir=ref_dir),
+                    "--reasoning-provider",
+                    "xai",
+                ]
+            )
+
+    def test_missing_xai_key_for_comparison_provider(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        ref_dir = tmp_path / "refs"
+        ref_dir.mkdir()
+        monkeypatch.delenv("XAI_API_KEY", raising=False)
+        with pytest.raises(SystemExit):
+            parse_args(
+                [
+                    *_base_args(tmp_path, ref_dir=ref_dir),
+                    "--comparison-provider",
+                    "xai",
+                ]
+            )
+
+
+class TestXAIProviders:
+    def test_xai_reasoning_defaults_to_grok_4_20_reasoning_latest(self, tmp_path: Path) -> None:
+        cfg = parse_args(
+            _base_args(
+                tmp_path,
+                reasoning_provider="xai",
+                xai_api_key="xai-test-key",
+            )
+        )
+        assert cfg.reasoning_provider == "xai"
+        assert cfg.reasoning_model == "grok-4.20-reasoning-latest"
+
+    def test_xai_comparison_defaults_to_grok_4_20_reasoning_latest(self, tmp_path: Path) -> None:
+        cfg = parse_args(
+            _base_args(
+                tmp_path,
+                comparison_provider="xai",
+                xai_api_key="xai-test-key",
+            )
+        )
+        assert cfg.comparison_provider == "xai"
+        assert cfg.comparison_model == "grok-4.20-reasoning-latest"
+
+    def test_gemini_comparison_defaults_to_caption_model(self, tmp_path: Path) -> None:
+        cfg = parse_args(_base_args(tmp_path))
+        assert cfg.comparison_provider == "gemini"
+        assert cfg.comparison_model == cfg.caption_model
 
 
 class TestNonExistentReferenceDir:
