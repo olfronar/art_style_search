@@ -53,10 +53,10 @@ _VERDICT_RE = re.compile(
     re.DOTALL,
 )
 
-_ART_STYLE_BLOCK_RE = re.compile(
-    re.escape("[Art Style]") + r"\s*(.*?)(?=\n\[|\Z)",
-    re.DOTALL | re.IGNORECASE,
-)
+_SUBJECT_MIN_WORDS = 80
+_SUBJECT_MIN_FACETS = 4
+_SUBJECT_MIN_SPECIFIC_WORDS = 8
+_SUBJECT_WORD_RE = re.compile(r"[a-z0-9'-]+")
 _SUBJECT_GENERIC_WORDS = {
     "figure",
     "person",
@@ -485,139 +485,147 @@ async def pairwise_compare_experiments(
     return (rationale, score)
 
 
-def _check_section_ordering(caption_text: str, expected_sections: list[str]) -> str:
-    """Check if labeled sections appear in the expected order."""
-    positions = []
-    for section in expected_sections:
-        marker = f"[{section}]"
-        pos = caption_text.find(marker)
-        if pos >= 0:
-            positions.append((pos, section))
-
-    if len(positions) < 2:
+def _ordering_from_parsed(parsed: dict[str, str], expected_sections: list[str]) -> str:
+    """Check if the parsed section keys appear in the expected order."""
+    present = [name for name in parsed if name in set(expected_sections)]
+    if len(present) < 2:
         return "SKIP"
 
-    sorted_by_pos = sorted(positions, key=lambda x: x[0])
-    actual_order = [s for _, s in sorted_by_pos]
-    expected_present = [s for s in expected_sections if s in {x[1] for x in positions}]
-
-    if actual_order == expected_present:
+    expected_present = [s for s in expected_sections if s in present]
+    if present == expected_present:
         return "OK"
-    return f"MISORDERED (expected {expected_present[:3]}..., got {actual_order[:3]}...)"
+    return f"MISORDERED (expected {expected_present[:3]}..., got {present[:3]}...)"
 
 
-def _check_section_lengths(caption_text: str, expected_sections: list[str]) -> str:
-    """Check if sections have roughly proportional word counts."""
-    section_texts: dict[str, str] = {}
-    for i, section in enumerate(expected_sections):
-        start_marker = f"[{section}]"
-        start = caption_text.find(start_marker)
-        if start < 0:
-            continue
-        start += len(start_marker)
-        end = len(caption_text)
-        for next_section in expected_sections[i + 1 :]:
-            next_pos = caption_text.find(f"[{next_section}]", start)
-            if next_pos >= 0:
-                end = next_pos
-                break
-        section_texts[section] = caption_text[start:end].strip()
-
+def _lengths_from_parsed(parsed: dict[str, str], expected_sections: list[str]) -> str:
+    """Check if parsed sections have roughly proportional word counts."""
+    section_texts = {name: body for name, body in parsed.items() if name in set(expected_sections)}
     if not section_texts:
         return "SKIP"
 
-    total_words = sum(len(t.split()) for t in section_texts.values())
+    word_counts = {name: len(body.split()) for name, body in section_texts.items()}
+    total_words = sum(word_counts.values())
     if total_words == 0:
         return "EMPTY"
 
     issues: list[str] = []
-    for section, text in section_texts.items():
-        ratio = len(text.split()) / total_words
+    for name, count in word_counts.items():
+        ratio = count / total_words
         if ratio > 0.50:
-            issues.append(f"{section} too long ({ratio:.0%})")
+            issues.append(f"{name} too long ({ratio:.0%})")
         elif ratio < 0.05 and len(expected_sections) <= 6:
-            issues.append(f"{section} too short ({ratio:.0%})")
+            issues.append(f"{name} too short ({ratio:.0%})")
 
     return "OK" if not issues else f"IMBALANCED: {'; '.join(issues)}"
 
 
-def _check_subject_specificity(caption_text: str) -> str:
+def _subject_specificity_from_parsed(parsed: dict[str, str]) -> str:
     """Check whether the ``[Subject]`` block is detailed and specific."""
-    subject_text = parse_labeled_sections(caption_text).get("Subject", "").strip()
+    subject_text = parsed.get("Subject", "").strip()
     if not subject_text:
         return "MISSING"
 
     lowered = subject_text.lower()
-    words = re.findall(r"[a-z0-9'-]+", lowered)
-    if len(words) < 80:
+    words = _SUBJECT_WORD_RE.findall(lowered)
+    if len(words) < _SUBJECT_MIN_WORDS:
         return f"WEAK (too short: {len(words)} words)"
 
+    n_facets = len(_SUBJECT_FACET_KEYWORDS)
     facet_count = sum(1 for keywords in _SUBJECT_FACET_KEYWORDS.values() if any(kw in lowered for kw in keywords))
-    if facet_count < 4:
-        return f"WEAK (facet coverage {facet_count}/6)"
+    if facet_count < _SUBJECT_MIN_FACETS:
+        return f"WEAK (facet coverage {facet_count}/{n_facets})"
 
     meaningful = [w for w in words if len(w) > 2 and w not in _SUBJECT_FILLER_WORDS]
     generic_count = sum(1 for w in meaningful if w in _SUBJECT_GENERIC_WORDS)
-    specific_count = sum(1 for w in meaningful if w not in _SUBJECT_GENERIC_WORDS)
-    if generic_count > 0 and specific_count < max(8, generic_count * 2):
+    specific_count = len(meaningful) - generic_count
+    if generic_count > 0 and specific_count < max(_SUBJECT_MIN_SPECIFIC_WORDS, generic_count * 2):
         return "WEAK (generic subject terms without enough modifiers)"
 
     return "OK"
 
 
-def compute_caption_compliance_stats(
+def _check_section_ordering(caption_text: str, expected_sections: list[str]) -> str:
+    """Check if labeled sections appear in the expected order."""
+    return _ordering_from_parsed(parse_labeled_sections(caption_text), expected_sections)
+
+
+def _check_section_lengths(caption_text: str, expected_sections: list[str]) -> str:
+    """Check if sections have roughly proportional word counts."""
+    return _lengths_from_parsed(parse_labeled_sections(caption_text), expected_sections)
+
+
+def _check_subject_specificity(caption_text: str) -> str:
+    """Check whether the ``[Subject]`` block is detailed and specific."""
+    return _subject_specificity_from_parsed(parse_labeled_sections(caption_text))
+
+
+def compute_caption_compliance(
     section_names: list[str],
     captions: list[Caption],
     caption_sections: list[str] | None = None,
-) -> CaptionComplianceStats:
-    """Compute structured caption-compliance rates for scoring/reporting."""
+) -> tuple[CaptionComplianceStats, str]:
+    """Parse every caption once and produce both structured stats and prose.
+
+    Captions are parsed a single time via ``parse_labeled_sections`` and the
+    ordering / length / subject checks all share that result.  Returns
+    ``(stats, prose)`` — callers wanting only one piece discard the other.
+    """
+    has_subject = bool(caption_sections and "Subject" in caption_sections)
     if not captions or not section_names:
-        return CaptionComplianceStats(
+        empty_stats = CaptionComplianceStats(
             section_topic_coverage=0.0,
             section_marker_coverage=0.0 if caption_sections else 1.0,
             section_ordering_rate=0.0 if caption_sections else 1.0,
             section_balance_rate=0.0 if caption_sections else 1.0,
-            subject_specificity_rate=0.0 if caption_sections and "Subject" in caption_sections else 1.0,
+            subject_specificity_rate=0.0 if has_subject else 1.0,
         )
+        return empty_stats, ""
 
     total = len(captions)
     lowered = [c.text.lower() for c in captions]
+    parsed = [parse_labeled_sections(c.text) for c in captions]
 
-    section_hits: list[float] = []
+    # Topic coverage: keywords derived from each meta-prompt section name
+    section_hits: dict[str, int] = {}
     for name in section_names:
         keywords = name.replace("_", " ").split()
-        hits = sum(1 for text_lower in lowered if any(kw in text_lower for kw in keywords))
-        section_hits.append(hits / total)
-    topic_coverage = sum(section_hits) / len(section_hits) if section_hits else 1.0
+        section_hits[name] = sum(1 for tl in lowered if any(kw in tl for kw in keywords))
+    topic_coverage = sum(section_hits.values()) / (len(section_names) * total)
 
-    marker_coverage = 1.0
-    ordering_rate = 1.0
-    balance_rate = 1.0
+    # Marker presence: count captions containing each labeled `[Section]` marker
+    marker_hits: dict[str, int] = {}
     if caption_sections:
-        marker_hits: list[float] = []
         for sec_name in caption_sections:
             marker = f"[{sec_name}]".lower()
-            hits = sum(1 for tl in lowered if marker in tl)
-            marker_hits.append(hits / total)
-        marker_coverage = sum(marker_hits) / len(marker_hits) if marker_hits else 1.0
+            marker_hits[sec_name] = sum(1 for tl in lowered if marker in tl)
+        marker_coverage = sum(marker_hits.values()) / (len(caption_sections) * total)
+    else:
+        marker_coverage = 1.0
 
-        ordering_results = [_check_section_ordering(c.text, caption_sections) for c in captions]
+    # Per-caption structural checks, computed once from parsed sections
+    ordering_results: list[str] = []
+    length_results: list[str] = []
+    subject_results: list[str] = []
+    if caption_sections:
+        ordering_results = [_ordering_from_parsed(p, caption_sections) for p in parsed]
+        length_results = [_lengths_from_parsed(p, caption_sections) for p in parsed]
+    if has_subject:
+        subject_results = [_subject_specificity_from_parsed(p) for p in parsed]
+
+    if caption_sections:
         checked_ordering = [r for r in ordering_results if r != "SKIP"]
-        if checked_ordering:
-            ordering_rate = sum(1 for r in checked_ordering if r == "OK") / len(checked_ordering)
-        else:
-            ordering_rate = 0.0
-
-        length_results = [_check_section_lengths(c.text, caption_sections) for c in captions]
+        ordering_rate = (
+            sum(1 for r in checked_ordering if r == "OK") / len(checked_ordering) if checked_ordering else 0.0
+        )
         checked_lengths = [r for r in length_results if r not in {"SKIP", "EMPTY"}]
         balance_rate = sum(1 for r in checked_lengths if r == "OK") / len(checked_lengths) if checked_lengths else 0.0
+    else:
+        ordering_rate = 1.0
+        balance_rate = 1.0
 
-    subject_specificity_rate = 1.0
-    if caption_sections and "Subject" in caption_sections:
-        subject_results = [_check_subject_specificity(c.text) for c in captions]
-        subject_specificity_rate = sum(1 for r in subject_results if r == "OK") / len(subject_results)
+    subject_specificity_rate = sum(1 for r in subject_results if r == "OK") / total if has_subject else 1.0
 
-    return CaptionComplianceStats(
+    stats = CaptionComplianceStats(
         section_topic_coverage=topic_coverage,
         section_marker_coverage=marker_coverage,
         section_ordering_rate=ordering_rate,
@@ -625,83 +633,63 @@ def compute_caption_compliance_stats(
         subject_specificity_rate=subject_specificity_rate,
     )
 
+    # Prose summary — same per-caption results drive the human-readable report
+    lines: list[str] = []
+    for name, hits in section_hits.items():
+        pct = hits / total * 100
+        status = "OK" if pct >= 70 else "WEAK" if pct >= 30 else "MISSING"
+        lines.append(f"  {name}: {status} ({hits}/{total} captions address this)")
+
+    if caption_sections:
+        lines.append("Labeled section markers in captions:")
+        for sec_name, hits in marker_hits.items():
+            pct = hits / total * 100
+            status = "OK" if pct >= 70 else "WEAK" if pct >= 30 else "MISSING"
+            lines.append(f"  [{sec_name}]: {status} ({hits}/{total} captions contain this label)")
+
+        ok_ordering = sum(1 for r in ordering_results if r == "OK")
+        checked = total - sum(1 for r in ordering_results if r == "SKIP")
+        if checked > 0:
+            pct = ok_ordering / checked * 100
+            status = "OK" if pct >= 70 else "WEAK" if pct >= 30 else "MISORDERED"
+            lines.append(f"Section ordering: {status} ({ok_ordering}/{checked} captions in correct order)")
+
+        ok_lengths = sum(1 for r in length_results if r == "OK")
+        imbalanced = [r for r in length_results if r.startswith("IMBALANCED")]
+        if imbalanced:
+            lines.append(f"Section balance: IMBALANCED ({len(imbalanced)}/{total} captions) — {imbalanced[0]}")
+        elif ok_lengths > 0:
+            lines.append(f"Section balance: OK ({ok_lengths}/{total} captions well-balanced)")
+
+    if has_subject:
+        ok_subject = sum(1 for r in subject_results if r == "OK")
+        if ok_subject == total:
+            lines.append(f"Subject specificity: OK ({ok_subject}/{total} captions)")
+        else:
+            first_issue = next((r for r in subject_results if r != "OK"), "MISSING")
+            status = "WEAK" if ok_subject > 0 else "MISSING"
+            lines.append(f"Subject specificity: {status} ({ok_subject}/{total} captions) — {first_issue}")
+
+    prose = "Caption compliance with meta-prompt sections:\n" + "\n".join(lines)
+    return stats, prose
+
+
+def compute_caption_compliance_stats(
+    section_names: list[str],
+    captions: list[Caption],
+    caption_sections: list[str] | None = None,
+) -> CaptionComplianceStats:
+    """Structured caption-compliance rates — thin wrapper over :func:`compute_caption_compliance`."""
+    return compute_caption_compliance(section_names, captions, caption_sections)[0]
+
 
 def check_caption_compliance(
     section_names: list[str],
     captions: list[Caption],
     caption_sections: list[str] | None = None,
 ) -> str:
-    """Check whether captions address the topics from the meta-prompt sections.
-
-    When *caption_sections* is provided, also checks for the presence of
-    labeled ``[Section Name]`` markers in the caption text.
-
-    Returns a summary of which sections are well-covered vs missed.
-    """
-    if not captions or not section_names:
-        return ""
-
-    total = len(captions)
-    lines: list[str] = []
-    lowered = [c.text.lower() for c in captions]
-
-    # Keyword presence check per meta-prompt section
-    section_hits: dict[str, int] = {name: 0 for name in section_names}
-    for text_lower in lowered:
-        for name in section_names:
-            keywords = name.replace("_", " ").split()
-            if any(kw in text_lower for kw in keywords):
-                section_hits[name] += 1
-
-    for name, hits in section_hits.items():
-        pct = hits / total * 100
-        status = "OK" if pct >= 70 else "WEAK" if pct >= 30 else "MISSING"
-        lines.append(f"  {name}: {status} ({hits}/{total} captions address this)")
-
-    # Labeled section marker check (e.g. "[Art Style]" in caption text)
-    if caption_sections:
-        marker_lines: list[str] = []
-        for sec_name in caption_sections:
-            marker = f"[{sec_name}]".lower()
-            hits = sum(1 for tl in lowered if marker in tl)
-            pct = hits / total * 100
-            status = "OK" if pct >= 70 else "WEAK" if pct >= 30 else "MISSING"
-            marker_lines.append(f"  [{sec_name}]: {status} ({hits}/{total} captions contain this label)")
-        lines.append("Labeled section markers in captions:")
-        lines.extend(marker_lines)
-
-    # Section ordering check
-    if caption_sections:
-        ordering_results = [_check_section_ordering(c.text, caption_sections) for c in captions]
-        ok_count = sum(1 for r in ordering_results if r == "OK")
-        skip_count = sum(1 for r in ordering_results if r == "SKIP")
-        checked = total - skip_count
-        if checked > 0:
-            pct = ok_count / checked * 100
-            status = "OK" if pct >= 70 else "WEAK" if pct >= 30 else "MISORDERED"
-            lines.append(f"Section ordering: {status} ({ok_count}/{checked} captions in correct order)")
-
-    # Section length balance check
-    if caption_sections:
-        length_results = [_check_section_lengths(c.text, caption_sections) for c in captions]
-        ok_count = sum(1 for r in length_results if r == "OK")
-        issue_results = [r for r in length_results if r.startswith("IMBALANCED")]
-        if issue_results:
-            lines.append(f"Section balance: IMBALANCED ({len(issue_results)}/{total} captions) — {issue_results[0]}")
-        elif ok_count > 0:
-            lines.append(f"Section balance: OK ({ok_count}/{total} captions well-balanced)")
-
-    if caption_sections and "Subject" in caption_sections:
-        subject_results = [_check_subject_specificity(c.text) for c in captions]
-        ok_count = sum(1 for r in subject_results if r == "OK")
-        if ok_count == total:
-            lines.append(f"Subject specificity: OK ({ok_count}/{total} captions)")
-        else:
-            first_issue = next((r for r in subject_results if r != "OK"), "MISSING")
-            status = "WEAK" if ok_count > 0 else "MISSING"
-            lines.append(f"Subject specificity: {status} ({ok_count}/{total} captions) — {first_issue}")
-
-    return "Caption compliance with meta-prompt sections:\n" + "\n".join(lines)
+    """Human-readable compliance summary — thin wrapper over :func:`compute_caption_compliance`."""
+    return compute_caption_compliance(section_names, captions, caption_sections)[1]
 
 
 def compute_style_consistency(captions: list[Caption]) -> float:
@@ -717,11 +705,10 @@ def compute_style_consistency(captions: list[Caption]) -> float:
 
     blocks: list[set[str]] = []
     for cap in captions:
-        m = _ART_STYLE_BLOCK_RE.search(cap.text)
-        if m:
-            words = set(m.group(1).lower().split())
-            if words:
-                blocks.append(words)
+        art_style_text = parse_labeled_sections(cap.text).get("Art Style", "")
+        words = set(art_style_text.lower().split())
+        if words:
+            blocks.append(words)
 
     if len(blocks) < 2:
         return 0.0

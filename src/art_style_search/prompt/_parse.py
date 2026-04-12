@@ -208,6 +208,31 @@ _MAX_SECTIONS = 20
 _MIN_CAPTION_LENGTH = 100
 _MAX_CAPTION_LENGTH = 2000
 
+# Ordered anchor requirements for sections and caption sections.  Adding a third
+# required anchor means one-line edits here — the validator iterates both tables.
+_REQUIRED_SECTION_ANCHORS: tuple[tuple[int, str], ...] = (
+    (0, "style_foundation"),
+    (1, "subject_anchor"),
+)
+_REQUIRED_CAPTION_ANCHORS: tuple[tuple[int, str], ...] = (
+    (0, "Art Style"),
+    (1, "Subject"),
+)
+
+
+def _check_anchors(actual: list[str], required: tuple[tuple[int, str], ...], label: str) -> list[str]:
+    """Verify each required (position, name) anchor, using ordinal labels in errors."""
+    ordinals = ["First", "Second", "Third", "Fourth", "Fifth"]
+    errors: list[str] = []
+    for index, expected in required:
+        position = ordinals[index] if index < len(ordinals) else f"Position-{index + 1}"
+        if index < len(actual):
+            if actual[index] != expected:
+                errors.append(f"{position} {label} must be '{expected}', got '{actual[index]}'")
+        else:
+            errors.append(f"{position} {label} must be '{expected}', got missing section")
+    return errors
+
 
 def validate_template(template: PromptTemplate, changed_section: str = "") -> list[str]:
     """Return a list of validation errors (empty list = valid template).
@@ -217,19 +242,8 @@ def validate_template(template: PromptTemplate, changed_section: str = "") -> li
     """
     errors: list[str] = []
 
-    if template.sections and template.sections[0].name != "style_foundation":
-        errors.append(f"First section must be 'style_foundation', got '{template.sections[0].name}'")
-    if len(template.sections) >= 2 and template.sections[1].name != "subject_anchor":
-        errors.append(f"Second section must be 'subject_anchor', got '{template.sections[1].name}'")
-    elif len(template.sections) == 1:
-        errors.append("Second section must be 'subject_anchor', got missing section")
-
-    if template.caption_sections and template.caption_sections[0] != "Art Style":
-        errors.append(f"First caption section must be 'Art Style', got '{template.caption_sections[0]}'")
-    if len(template.caption_sections) >= 2 and template.caption_sections[1] != "Subject":
-        errors.append(f"Second caption section must be 'Subject', got '{template.caption_sections[1]}'")
-    elif len(template.caption_sections) == 1:
-        errors.append("Second caption section must be 'Subject', got missing section")
+    errors.extend(_check_anchors([s.name for s in template.sections], _REQUIRED_SECTION_ANCHORS, "section"))
+    errors.extend(_check_anchors(list(template.caption_sections), _REQUIRED_CAPTION_ANCHORS, "caption section"))
 
     n = len(template.sections)
     if n < _MIN_SECTIONS or n > _MAX_SECTIONS:

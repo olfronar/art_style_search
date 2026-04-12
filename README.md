@@ -23,7 +23,7 @@ Reference Image + Meta-Prompt
         |
         v
   Compare with Original
-  (DreamSim, Color, SSIM, HPS, Aesthetics + Gemini vision)
+  (DreamSim, Color, SSIM, HPS, Aesthetics, Gemini ternary vision, caption compliance)
         |
         v
   Reasoning model (optimizer)
@@ -137,19 +137,29 @@ uv run python -m art_style_search clean --all
 
 ## Evaluation Metrics
 
-Each metric compares a generated image against its specific paired original:
+Each metric compares a generated image against its specific paired original; weights sum to 1.00:
 
 | Metric | Weight | Measures | Better |
 |--------|--------|----------|--------|
-| **DreamSim** | 40% | Human-aligned perceptual similarity | Higher |
-| **Color histogram** | 22% | HSV histogram intersection | Higher |
-| **SSIM** | 11% | Structural similarity index | Higher |
+| **DreamSim** | 34% | Human-aligned perceptual similarity | Higher |
+| **Color histogram** | 17% | HSV histogram intersection | Higher |
+| **Vision (subject)** | 10% | Gemini ternary subject fidelity | Higher |
+| **SSIM** | 10% | Structural similarity index | Higher |
+| **Vision (style)** | 8% | Gemini ternary style fidelity | Higher |
+| **HPS v2** | 7% | Caption-image alignment (normalized / 0.35) | Higher |
 | **Aesthetics** | 6% | Visual quality (LAION predictor, 1-10) | Higher |
-| **HPS v2** | 5% | Caption-image alignment | Higher |
+| **Vision (composition)** | 4% | Gemini ternary spatial layout | Higher |
 | **Style consistency** | 4% | Jaccard overlap of [Art Style] blocks | Higher |
-| **Vision (style/subject/composition)** | 4% each | Gemini ternary comparison | Higher |
 
-A consistency penalty (30% weight on per-image std of DreamSim and color) penalizes high variance across images.
+Additional penalties (subtracted from the weighted sum, floor-clamped to 0):
+
+- **Variance penalty** (×0.30): mean of per-image DreamSim and color-histogram std — punishes inconsistent reproduction across images.
+- **Completion penalty** (×0.15): `1 - completion_rate`, punishes experiments that drop images.
+- **Compliance penalty** (×0.08): `1 - mean(compliance rates)` over topic coverage, marker coverage, section ordering, section balance, subject specificity.
+- **Ref-shortfall penalty** (×0.04): fraction of requested reference images that were skipped.
+- **Subject-floor penalty** (×0.05): triggers only when `vision_subject < 0.35`, scaling linearly to the floor.
+
+`per_image_composite` (used for paired statistical testing in rigorous mode) applies the same base weights minus `style_consistency` (experiment-level) and without any penalties — max output 0.96.
 
 ## Scientific Rigor Mode
 
@@ -169,22 +179,34 @@ Cost: rigorous mode is ~2.8x more expensive per iteration (confirmatory replicat
 
 ```
 src/art_style_search/
-  __main__.py    Entry point + list/clean subcommands
-  loop.py        Experiment-based orchestration loop
-  prompt/        Meta-prompt proposal/refinement package (reasoning-model calls)
-  analyze.py     Zero-step: parallel Gemini vision + reasoning-model style analysis
-  caption.py     Gemini Pro captioning with disk cache
-  generate.py    Gemini Flash image generation with retry
-  experiment.py  Single-experiment execution pipeline + replicated evaluation
-  evaluate.py    Per-image paired metrics + Gemini vision comparison
-  scoring.py     Composite scoring, per-image scoring, Wilcoxon promotion test
-  knowledge.py   Knowledge Base maintenance (hypothesis tracking)
-  models.py      Lazy-loaded DreamSim/HPS/Aesthetics/SSIM models
-  runs.py        Run directory management (isolation, listing, cleanup)
-  types.py       Shared dataclasses + KnowledgeBase
-  config.py      CLI argument parsing
-  state.py       JSON persistence + backward compat migration
-  utils.py       Shared helpers (API wrappers, MIME map)
+  __main__.py             Entry point + list/clean/report subcommands
+  loop.py                 Façade re-exporting workflow.run
+  workflow/               Internal orchestration (context, iteration phases, policy, services, zero-step)
+  prompt/                 Reasoning-model interface (proposals, synthesis, review, JSON contracts, parsing)
+  analyze.py              Zero-step: parallel Gemini vision + reasoning-model style analysis
+  caption.py              Gemini Pro captioning with disk cache
+  caption_sections.py     [Section] parser + subject-first generator prompt builder
+  generate.py             Gemini Flash image generation with retry
+  experiment.py           Single-experiment caption→generate→evaluate pipeline + replicated evaluation
+  evaluate.py             Per-image paired metrics + Gemini vision comparison + caption compliance
+  scoring.py              Composite scoring, per-image scoring, Wilcoxon promotion test
+  knowledge.py            Knowledge Base maintenance (hypothesis tracking)
+  models.py               Lazy-loaded DreamSim/HPS/Aesthetics/SSIM models
+  taxonomy.py             CATEGORY_SYNONYMS — canonical hypothesis category synonyms
+  contracts.py            Transient workflow dataclasses (Lessons, RefinementResult, ExperimentProposal)
+  reasoning_client.py     Provider-agnostic ReasoningClient (Anthropic/OpenAI/xAI/Z.AI/local)
+  retry.py                async_retry + rate-limit and circuit-breaker helpers
+  media.py                MIME map, IMAGE_EXTENSIONS, xAI data-URL helpers
+  runs.py                 Run directory management (isolation, listing, cleanup)
+  state.py                Public JSON persistence API (loaders/writers, manifest, promotion log)
+  state_codec.py          Low-level encoders/decoders for persisted dataclasses
+  state_migrations.py     Schema versions + backward-compat payload migrations
+  types.py                Shared dataclasses (MetricScores, AggregatedMetrics, KnowledgeBase, ...)
+  config.py               CLI argument parsing → Config
+  utils.py                Shared helpers (CATEGORY_SYNONYMS re-export, build_ref_gen_pairs, ...)
+  report.py               HTML report façade
+  report_data.py          ReportData — centralized data loading for reports
+  reporting/              HTML rendering (charts, document assembly, section renderers, CSS)
 ```
 
 ## Development

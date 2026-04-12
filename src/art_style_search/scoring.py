@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 
-from art_style_search.types import AggregatedMetrics, MetricScores, PromotionTestResult
+from art_style_search.types import AggregatedMetrics, MetricScores, PromotionTestResult, compliance_components_mean
 from art_style_search.utils import CATEGORY_SYNONYMS as _CATEGORY_SYNONYMS
 
 _HPS_CEILING = 0.35  # default empirical max for HPS v2 scores; used to normalize to [0, 1]
@@ -79,13 +79,13 @@ def composite_score(m: AggregatedMetrics) -> float:
     variance_penalty = _W_VARIANCE_PENALTY * (m.dreamsim_similarity_std + m.color_histogram_std) / 2.0
     # Penalize incomplete experiments: missing images should not inflate scores
     completion_penalty = (1.0 - m.completion_rate) * _W_COMPLETION_PENALTY
-    compliance_score = (
-        m.compliance_topic_coverage
-        + m.compliance_marker_coverage
-        + m.section_ordering_rate
-        + m.section_balance_rate
-        + m.subject_specificity_rate
-    ) / 5.0
+    compliance_score = compliance_components_mean(
+        m.compliance_topic_coverage,
+        m.compliance_marker_coverage,
+        m.section_ordering_rate,
+        m.section_balance_rate,
+        m.subject_specificity_rate,
+    )
     compliance_penalty = (1.0 - compliance_score) * _W_COMPLIANCE_PENALTY
 
     ref_shortfall = 0.0
@@ -98,7 +98,12 @@ def composite_score(m: AggregatedMetrics) -> float:
         subject_floor_penalty = shortfall * _W_VISION_SUBJECT_FLOOR_PENALTY
     return max(
         0.0,
-        base - variance_penalty - completion_penalty - compliance_penalty - ref_shortfall_penalty - subject_floor_penalty,
+        base
+        - variance_penalty
+        - completion_penalty
+        - compliance_penalty
+        - ref_shortfall_penalty
+        - subject_floor_penalty,
     )
 
 
@@ -125,14 +130,13 @@ def adaptive_composite_score(
         lambda r: r.vision_style,
         lambda r: r.vision_subject,
         lambda r: r.vision_composition,
-        lambda r: (
-            r.compliance_topic_coverage
-            + r.compliance_marker_coverage
-            + r.section_ordering_rate
-            + r.section_balance_rate
-            + r.subject_specificity_rate
-        )
-        / 5.0,
+        lambda r: compliance_components_mean(
+            r.compliance_topic_coverage,
+            r.compliance_marker_coverage,
+            r.section_ordering_rate,
+            r.section_balance_rate,
+            r.subject_specificity_rate,
+        ),
     ]
 
     weighted_sum = 0.0

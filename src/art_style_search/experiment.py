@@ -13,8 +13,7 @@ from art_style_search.caption_sections import build_generation_prompt
 from art_style_search.config import Config
 from art_style_search.evaluate import (
     aggregate,
-    check_caption_compliance,
-    compute_caption_compliance_stats,
+    compute_caption_compliance,
     compute_style_consistency,
 )
 from art_style_search.types import (
@@ -239,8 +238,7 @@ async def run_experiment(
     )
 
     section_names = [s.name for s in template.sections]
-    compliance = check_caption_compliance(section_names, captions, caption_sections=template.caption_sections)
-    compliance_stats = compute_caption_compliance_stats(
+    compliance_stats, compliance = compute_caption_compliance(
         section_names,
         captions,
         caption_sections=template.caption_sections,
@@ -395,7 +393,7 @@ async def replicate_experiment(
 
         scores = [_merge_vision(ms, vs) for ms, vs in zip(metric_scores, vision_scores_list, strict=True)]
         aggregated = aggregate(scores)
-        compliance_stats = compute_caption_compliance_stats(
+        compliance_stats, _ = compute_caption_compliance(
             [s.name for s in template.sections],
             captions,
             caption_sections=template.caption_sections,

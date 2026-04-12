@@ -7,7 +7,7 @@ hypothesis classification live in ``art_style_search.scoring``.
 from __future__ import annotations
 
 import enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -88,13 +88,24 @@ class CaptionComplianceStats:
 
     @property
     def overall(self) -> float:
-        return (
-            self.section_topic_coverage
-            + self.section_marker_coverage
-            + self.section_ordering_rate
-            + self.section_balance_rate
-            + self.subject_specificity_rate
-        ) / 5.0
+        return compliance_components_mean(
+            self.section_topic_coverage,
+            self.section_marker_coverage,
+            self.section_ordering_rate,
+            self.section_balance_rate,
+            self.subject_specificity_rate,
+        )
+
+
+_COMPLIANCE_COMPONENT_COUNT = len(fields(CaptionComplianceStats))
+
+
+def compliance_components_mean(*values: float) -> float:
+    """Mean of the caption-compliance components — divisor tracks dataclass field count."""
+    if len(values) != _COMPLIANCE_COMPONENT_COUNT:
+        msg = f"Expected {_COMPLIANCE_COMPONENT_COUNT} compliance components, got {len(values)}"
+        raise ValueError(msg)
+    return sum(values) / _COMPLIANCE_COMPONENT_COUNT
 
 
 @dataclass(frozen=True)
