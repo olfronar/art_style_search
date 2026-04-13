@@ -18,6 +18,8 @@ import numpy as np
 import torch
 from PIL import Image
 
+from .hps import score as hps_score
+
 logger = logging.getLogger(__name__)
 
 
@@ -121,12 +123,9 @@ class ModelRegistry:
 
         Returns a float; higher is better.
         """
-        with self._hps_lock:
-            import hpsv2
-
-            with torch.no_grad():
-                scores = hpsv2.score(generated, prompt)
-                return float(scores[0])
+        with self._hps_lock, torch.no_grad():
+            scores = hps_score(generated, prompt, device=str(self.device))
+            return float(scores[0])
 
     def compute_aesthetics(self, generated: Image.Image) -> float:
         """LAION Aesthetics v2 score (1-10 scale).

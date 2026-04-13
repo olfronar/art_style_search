@@ -48,7 +48,7 @@ The meta-prompt is the only thing being optimized. It tells the captioner *how* 
 Running this loop is not free. Know the order-of-magnitude before you start:
 
 - **API calls**. A default run is `--max-iterations 20 × --num-branches 5 × --num-fixed-refs 20` -- on the order of 2000 Gemini Pro captions, 2000 Gemini Flash generations, 2000 image-comparison calls (Gemini by default, optionally Grok), and 60-100 reasoning-model calls (Claude, GLM, GPT, or Grok). Expect several US dollars per full run at current 2026 prices. Costs scale roughly linearly with `max_iterations × num_branches × num_fixed_refs`.
-- **First-run ML model downloads**. The first invocation pulls ~2 GB of weights from Hugging Face Hub: DreamSim `dino_vitb16` (~870 MB), LAION-Aesthetics CLIP-L, and HPSv2 CLIP-H. These are cached under `~/.cache/huggingface/` and the `dreamsim` / `hpsv2` package cache dirs.
+- **First-run ML model downloads**. The first invocation pulls ~2 GB of weights from Hugging Face Hub: DreamSim `dino_vitb16` (~870 MB), LAION-Aesthetics CLIP-L, and HPSv2 CLIP-H. These are cached under `~/.cache/huggingface/` plus the local package caches used by DreamSim/OpenCLIP.
 - **GPU is optional**. CPU works but is slow. Apple Silicon uses MPS automatically. NVIDIA CUDA users have to pick a matching `torch` wheel (see Troubleshooting).
 - **Smoke-test recipe** (~1% of the cost of a default run):
 
