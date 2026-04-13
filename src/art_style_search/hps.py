@@ -70,14 +70,14 @@ def score(
 ) -> list[float]:
     resolved_device = _resolve_device(device)
     model, preprocess, tokenizer = _load_artifacts(resolved_device, hps_version)
-    autocast = torch.cuda.amp.autocast if resolved_device.startswith("cuda") else nullcontext
+    autocast = (lambda: torch.amp.autocast("cuda")) if resolved_device.startswith("cuda") else nullcontext
 
     inputs = image_input if isinstance(image_input, list) else [image_input]
+    text = tokenizer([prompt]).to(device=resolved_device, non_blocking=True)
     results: list[float] = []
 
     for item in inputs:
         image = preprocess(_load_image(item)).unsqueeze(0).to(device=resolved_device, non_blocking=True)
-        text = tokenizer([prompt]).to(device=resolved_device, non_blocking=True)
         with torch.no_grad(), autocast():
             outputs = model(image, text)
             logits_per_image = outputs["image_features"] @ outputs["text_features"].T

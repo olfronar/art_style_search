@@ -25,7 +25,7 @@ from art_style_search.types import (
     VisionDimensionScore,
     VisionScores,
 )
-from art_style_search.utils import async_retry, image_to_gemini_part, vision_circuit_breaker
+from art_style_search.utils import async_retry, extract_xml_tag, image_to_gemini_part, vision_circuit_breaker
 
 logger = logging.getLogger(__name__)
 
@@ -424,10 +424,8 @@ async def pairwise_compare_experiments(
                     timeout=120,
                 )
             text = response.text or ""
-            winner_match = re.search(r"<winner>(\w+)</winner>", text)
-            rationale_match = re.search(r"<rationale>(.*?)</rationale>", text, re.DOTALL)
-            winner = winner_match.group(1).upper() if winner_match else "TIE"
-            rationale = rationale_match.group(1).strip() if rationale_match else text[:300]
+            winner = (extract_xml_tag(text, "winner") or "TIE").upper()
+            rationale = extract_xml_tag(text, "rationale") or text[:300]
             score = {"A": 1.0, "B": 0.0, "TIE": 0.5}.get(winner, 0.5)
             return (rationale, score)
     elif provider == "xai":
@@ -463,10 +461,8 @@ async def pairwise_compare_experiments(
                     timeout=120,
                 )
             text = response.output_text or ""
-            winner_match = re.search(r"<winner>(\w+)</winner>", text)
-            rationale_match = re.search(r"<rationale>(.*?)</rationale>", text, re.DOTALL)
-            winner = winner_match.group(1).upper() if winner_match else "TIE"
-            rationale = rationale_match.group(1).strip() if rationale_match else text[:300]
+            winner = (extract_xml_tag(text, "winner") or "TIE").upper()
+            rationale = extract_xml_tag(text, "rationale") or text[:300]
             score = {"A": 1.0, "B": 0.0, "TIE": 0.5}.get(winner, 0.5)
             return (rationale, score)
     else:
