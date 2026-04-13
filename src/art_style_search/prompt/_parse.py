@@ -239,6 +239,7 @@ def validate_template(
     changed_section: str = "",
     changed_sections: list[str] | None = None,
     risk_level: str = "targeted",
+    reference_template: PromptTemplate | None = None,
 ) -> list[str]:
     """Return a list of validation errors (empty list = valid template).
 
@@ -263,12 +264,15 @@ def validate_template(
         normalized_changed_sections = [changed_section]
 
     names = {s.name for s in template.sections}
-    if changed_section and changed_section not in names:
+    reference_names = {s.name for s in reference_template.sections} if reference_template is not None else set()
+    structural_names = {"caption_sections", "caption_length_target", "negative_prompt"}
+    allowed_changed_names = names | reference_names | structural_names
+    if changed_section and changed_section not in allowed_changed_names:
         errors.append(f"changed_section '{changed_section}' not in template sections: {sorted(names)}")
     for section_name in normalized_changed_sections:
         if section_name == changed_section:
             continue
-        if section_name not in names:
+        if section_name not in allowed_changed_names:
             errors.append(f"changed_sections contains '{section_name}' not in template sections: {sorted(names)}")
 
     if risk_level == "targeted" and len(normalized_changed_sections) > 1:

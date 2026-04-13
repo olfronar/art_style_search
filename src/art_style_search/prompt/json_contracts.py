@@ -61,9 +61,11 @@ def _normalize_changed_sections(exp: dict[str, Any], *, label: str) -> tuple[str
     changed_section = _as_str(exp.get("changed_section"), label=f"{label}.changed_section")
     changed_sections = _as_str_list(exp.get("changed_sections") or [], label=f"{label}.changed_sections")
 
+    # changed_sections is the authoritative multi-section field. If repair output
+    # leaves the legacy singular field inconsistent, normalize it instead of
+    # dropping the whole batch.
     if changed_sections and changed_section and changed_sections[0] != changed_section:
-        msg = f"{label}.changed_section must match experiments[i].changed_sections[0] when both are provided"
-        raise ValueError(msg)
+        changed_section = changed_sections[0]
     if not changed_sections and changed_section:
         changed_sections = [changed_section]
     if not changed_section and changed_sections:

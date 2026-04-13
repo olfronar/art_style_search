@@ -481,6 +481,39 @@ class TestValidateTemplate:
         t = _make_valid_template()
         assert validate_template(t, changed_section="color_palette") == []
 
+    def test_changed_section_allows_caption_structure_fields(self) -> None:
+        t = _make_valid_template()
+        assert (
+            validate_template(
+                t,
+                changed_section="caption_sections",
+                changed_sections=["caption_sections"],
+            )
+            == []
+        )
+
+    def test_changed_sections_allow_removed_incumbent_section_when_reference_template_provided(self) -> None:
+        current = _make_valid_template()
+        current.sections[2] = PromptSection(name="face_hands_pose", description="anatomy", value="Pose rules.")
+
+        proposed = _make_valid_template()
+        proposed.sections[2] = PromptSection(
+            name="scene_type_and_asset_class",
+            description="scene taxonomy",
+            value="Scene taxonomy rules.",
+        )
+
+        assert (
+            validate_template(
+                proposed,
+                changed_section="face_hands_pose",
+                changed_sections=["face_hands_pose", "caption_sections"],
+                risk_level="bold",
+                reference_template=current,
+            )
+            == []
+        )
+
     def test_targeted_change_rejects_multiple_changed_sections(self) -> None:
         t = _make_valid_template()
         errors = validate_template(
@@ -623,6 +656,44 @@ class TestJsonContracts:
         assert converged is False
         assert results[0].changed_sections == ["subject_anchor"]
         assert results[0].changed_section == "subject_anchor"
+
+    def test_experiment_batch_payload_prefers_changed_sections_when_legacy_field_mismatches(self) -> None:
+        payload = {
+            "experiments": [
+                {
+                    "analysis": "Repair output mixed the legacy and list fields",
+                    "lessons": {"confirmed": "", "rejected": "", "new_insight": ""},
+                    "hypothesis": "Keep the multi-section metadata authoritative",
+                    "builds_on": None,
+                    "experiment": "Tune composition and environment together",
+                    "changed_section": "subject_anchor",
+                    "changed_sections": ["composition", "environment_staging"],
+                    "target_category": "composition",
+                    "risk_level": "bold",
+                    "template_changes": "none",
+                    "template": {
+                        "sections": [
+                            {"name": "style_foundation", "description": "rules", "value": "Shared rules"},
+                            {"name": "subject_anchor", "description": "subject rules", "value": "Subject guidance"},
+                            {"name": "composition", "description": "layout", "value": "Layout guidance"},
+                            {
+                                "name": "environment_staging",
+                                "description": "scene staging",
+                                "value": "Environment guidance",
+                            },
+                        ],
+                        "caption_sections": ["Art Style", "Subject", "Composition"],
+                        "caption_length_target": 500,
+                    },
+                }
+            ]
+        }
+
+        results, converged = validate_experiment_batch_payload(payload, num_experiments=1)
+
+        assert converged is False
+        assert results[0].changed_sections == ["composition", "environment_staging"]
+        assert results[0].changed_section == "composition"
 
     def test_synthesis_payload_accepts_negative_prompt_key(self) -> None:
         template, rationale = validate_synthesis_payload(

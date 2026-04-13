@@ -92,6 +92,7 @@ async def _propose_iteration_experiments(
             proposal.changed_section,
             proposal.changed_sections,
             proposal.risk_level,
+            state.current_template,
         )
         if errors:
             logger.warning("Skipping invalid proposal (hyp: %.80s): %s", proposal.hypothesis, "; ".join(errors))

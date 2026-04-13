@@ -47,6 +47,41 @@ class TestCallJson:
 
         assert result == "fixed"
 
+    @pytest.mark.asyncio
+    async def test_retries_validation_after_repair_with_followup_feedback(self) -> None:
+        client = ReasoningClient.__new__(ReasoningClient)
+        responses = iter(
+            [
+                '{"status": 1}',
+                '{"status": 2}',
+                '{"status": "fixed"}',
+            ]
+        )
+
+        async def fake_call(*, model, system, user, max_tokens):
+            return next(responses)
+
+        client.call = fake_call  # type: ignore[method-assign]
+
+        def validator(data: object) -> str:
+            value = data["status"]  # type: ignore[index]
+            if not isinstance(value, str):
+                raise ValueError("status must be a string")
+            return value
+
+        result = await ReasoningClient.call_json(
+            client,
+            model="fake-model",
+            system="system",
+            user="user",
+            validator=validator,
+            response_name="test_payload",
+            schema_hint='{"status": "..."}',
+            repair_retries=2,
+        )
+
+        assert result == "fixed"
+
 
 class TestCallText:
     @pytest.mark.asyncio

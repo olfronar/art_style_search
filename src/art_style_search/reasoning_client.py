@@ -210,39 +210,50 @@ class ReasoningClient:
         max_tokens: int = 16000,
         repair_retries: int = 1,
     ) -> T:
-        """Send a reasoning request, parse JSON, validate it, and optionally repair once."""
+        """Send a reasoning request, parse JSON, validate it, and optionally repair it."""
 
-        raw_text = await self.call(model=model, system=system, user=user, max_tokens=max_tokens)
+        current_text = await self.call(model=model, system=system, user=user, max_tokens=max_tokens)
         try:
-            return validator(parse_json_response(raw_text))
+            return validator(parse_json_response(current_text))
         except Exception as exc:
             if repair_retries <= 0:
                 msg = f"{response_name} validation failed"
                 raise RuntimeError(msg) from exc
 
-            logger.warning("%s validation failed: %s — attempting JSON repair", response_name, exc)
-            repair_system = (
-                "You repair malformed model outputs into valid JSON.\n"
-                "Return a single JSON object only. No markdown fences, no commentary."
+            current_exc = exc
+
+        repair_system = (
+            "You repair malformed model outputs into valid JSON.\n"
+            "Return a single JSON object only. No markdown fences, no commentary."
+        )
+        hint_block = f"\nExpected schema:\n{schema_hint}\n" if schema_hint else ""
+        for attempt in range(repair_retries):
+            logger.warning(
+                "%s validation failed: %s — attempting JSON repair (%d/%d)",
+                response_name,
+                current_exc,
+                attempt + 1,
+                repair_retries,
             )
-            hint_block = f"\nExpected schema:\n{schema_hint}\n" if schema_hint else ""
             repair_user = (
                 f"The previous response for '{response_name}' was invalid.\n"
-                f"Validation error: {exc}\n"
+                f"Validation error: {current_exc}\n"
                 f"{hint_block}"
                 "Original system prompt:\n"
                 f"{system}\n\n"
                 "Original user prompt:\n"
                 f"{user}\n\n"
                 "Invalid response:\n"
-                f"{raw_text}\n"
+                f"{current_text}\n"
             )
-            repaired = await self.call(model=model, system=repair_system, user=repair_user, max_tokens=max_tokens)
+            current_text = await self.call(model=model, system=repair_system, user=repair_user, max_tokens=max_tokens)
             try:
-                return validator(parse_json_response(repaired))
+                return validator(parse_json_response(current_text))
             except Exception as repair_exc:
-                msg = f"{response_name} validation failed after repair"
-                raise RuntimeError(msg) from repair_exc
+                current_exc = repair_exc
+
+        msg = f"{response_name} validation failed after repair"
+        raise RuntimeError(msg) from current_exc
 
     async def _call_anthropic(self, *, model: str, system: str, user: str, max_tokens: int) -> str:
         response = await stream_message(

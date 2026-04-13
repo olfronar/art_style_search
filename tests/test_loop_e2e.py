@@ -366,7 +366,13 @@ def _apply_all_patches(monkeypatch, tmp_path: Path, ref_paths: list[Path]):
     )
 
     # 7. Mock validate_template (always valid)
-    def fake_validate_template(template, changed_section="", changed_sections=None, risk_level="targeted"):
+    def fake_validate_template(
+        template,
+        changed_section="",
+        changed_sections=None,
+        risk_level="targeted",
+        reference_template=None,
+    ):
         return []
 
     monkeypatch.setattr("art_style_search.workflow.zero_step.validate_template", fake_validate_template)

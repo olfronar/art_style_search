@@ -35,6 +35,20 @@ def _valid_template() -> PromptTemplate:
     )
 
 
+def _current_template_with_face_hands_pose() -> PromptTemplate:
+    return PromptTemplate(
+        sections=[
+            PromptSection(name="style_foundation", description="rules", value="Shared style rules."),
+            PromptSection(name="subject_anchor", description="subject", value="Subject rules."),
+            PromptSection(name="face_hands_pose", description="anatomy", value="Pose rules."),
+            PromptSection(name="global_layout_grid", description="layout", value="Layout rules."),
+            PromptSection(name="palette_temperature", description="palette", value="Palette rules."),
+        ],
+        caption_sections=["Art Style", "Subject", "Pose", "Layout"],
+        caption_length_target=500,
+    )
+
+
 def _make_config(tmp_path: Path) -> Config:
     ref_dir = tmp_path / "refs"
     ref_dir.mkdir(parents=True, exist_ok=True)
@@ -157,3 +171,79 @@ async def test_propose_iteration_experiments_requests_raw_batch_and_selects_port
     assert [proposal.direction_id for proposal in proposals[:3]] == ["D1", "D2", "D3"]
     assert [proposal.risk_level for proposal in proposals[:3]] == ["targeted", "targeted", "targeted"]
     assert [proposal.risk_level for proposal in proposals[3:]] == ["bold", "bold"]
+
+
+@pytest.mark.asyncio
+async def test_propose_iteration_experiments_keeps_proposal_with_removed_incumbent_section_and_caption_schema_change(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    state = _make_state()
+    state.current_template = _current_template_with_face_hands_pose()
+    state.best_template = state.current_template
+    ctx = RunContext(
+        config=_make_config(tmp_path),
+        gemini_client=MagicMock(),
+        reasoning_client=MagicMock(),
+        registry=MagicMock(),
+        gemini_semaphore=MagicMock(),
+        eval_semaphore=MagicMock(),
+        services=MagicMock(),
+    )
+
+    proposed_template = PromptTemplate(
+        sections=[
+            PromptSection(name="style_foundation", description="rules", value="Shared style rules."),
+            PromptSection(name="subject_anchor", description="subject", value="Subject rules."),
+            PromptSection(
+                name="scene_type_and_asset_class",
+                description="scene taxonomy",
+                value="Scene taxonomy rules.",
+            ),
+            PromptSection(name="global_layout_grid", description="layout", value="Layout rules."),
+            PromptSection(name="palette_temperature", description="palette", value="Palette rules."),
+        ],
+        caption_sections=["Art Style", "Subject", "Scene Type", "Layout"],
+        caption_length_target=500,
+    )
+
+    async def fake_propose_experiments(*args, **kwargs):
+        return [
+            RefinementResult(
+                template=proposed_template,
+                analysis="Analysis",
+                template_changes="Changed face_hands_pose and caption schema",
+                should_stop=False,
+                hypothesis="Replace anatomy-only logic with scene taxonomy.",
+                experiment="Rename anatomy section and revise caption schema.",
+                lessons=Lessons(),
+                builds_on=None,
+                open_problems=[],
+                changed_section="face_hands_pose",
+                changed_sections=["face_hands_pose", "caption_sections"],
+                target_category="subject_anchor",
+                direction_id="D1",
+                direction_summary="Schema rewrite",
+                failure_mechanism="Anatomy-only logic is too narrow.",
+                intervention_type="section_schema",
+                risk_level="bold",
+                expected_primary_metric="vision_subject",
+                expected_tradeoff="May reduce continuity with older captions.",
+            )
+        ]
+
+    monkeypatch.setattr("art_style_search.workflow.iteration_proposals.propose_experiments", fake_propose_experiments)
+    monkeypatch.setattr(
+        "art_style_search.workflow.iteration_proposals.enforce_hypothesis_diversity",
+        lambda refinements, template: refinements,
+    )
+    monkeypatch.setattr(
+        "art_style_search.workflow.iteration_proposals.select_experiment_portfolio",
+        lambda refinements, **kwargs: refinements,
+    )
+
+    proposals, should_stop = await _propose_iteration_experiments(state, ctx, "", "", "")
+
+    assert should_stop is False
+    assert len(proposals) == 1
+    assert proposals[0].changed_sections == ["face_hands_pose", "caption_sections"]
