@@ -35,7 +35,7 @@ The meta-prompt is the only thing being optimized. It tells the captioner *how* 
 ### Optimization Loop
 
 0. **Zero-step**: Fix the reference images. Caption them, run parallel style analysis (Gemini vision + reasoning model) to build a `StyleProfile` and N diverse initial meta-prompts.
-1. **Propose**: the reasoning model proposes N experiments per iteration, each testing a different hypothesis about what to change in the meta-prompt (one section per experiment for clean attribution).
+1. **Propose**: the reasoning model emits a single JSON batch of 8-12 raw hypotheses grouped into 3 mechanism-tagged directions (`D1`/`D2`/`D3`), each carrying 1 targeted proposal (one section changed) + 1-3 bold proposals (up to 3 related sections). The workflow dedups duplicates on `(category, failure_mechanism, intervention_type)` and selects up to `--num-branches` experiments to evaluate (one targeted per direction first, then bolds fill remaining slots).
 2. **Run**: each experiment runs in parallel -- caption all references with the proposed meta-prompt, generate images from captions, evaluate against originals.
 3. **Rank & synthesize**: experiments are ranked by an adaptive composite score; the top 2-3 are merged into a synthesized template (picks the best section from each) even if none individually beat the baseline.
 4. **Pairwise vision comparison** (SPO-inspired): the top two experiments' reproductions are sent to Gemini vision for a head-to-head verdict, and the rationale is fed back into the next iteration.
@@ -47,14 +47,14 @@ The meta-prompt is the only thing being optimized. It tells the captioner *how* 
 
 Running this loop is not free. Know the order-of-magnitude before you start:
 
-- **API calls**. A default run is `--max-iterations 20 × --num-branches 5 × --num-fixed-refs 20` -- on the order of 2000 Gemini Pro captions, 2000 Gemini Flash generations, 2000 image-comparison calls (Gemini by default, optionally Grok), and 60-100 reasoning-model calls (Claude, GLM, GPT, or Grok). Expect several US dollars per full run at current 2026 prices. Costs scale roughly linearly with `max_iterations × num_branches × num_fixed_refs`.
+- **API calls**. A default run is `--max-iterations 10 × --num-branches 5 × --num-fixed-refs 20` -- on the order of 1000 Gemini Pro captions, 1000 Gemini Flash generations, 1000 image-comparison calls (Gemini by default, optionally Grok), and 30-50 reasoning-model calls (Claude, GLM, GPT, or Grok). Expect several US dollars per full run at current 2026 prices. Costs scale roughly linearly with `max_iterations × num_branches × num_fixed_refs`.
 - **First-run ML model downloads**. The first invocation pulls ~2 GB of weights from Hugging Face Hub: DreamSim `dino_vitb16` (~870 MB), LAION-Aesthetics CLIP-L, and HPSv2 CLIP-H. These are cached under `~/.cache/huggingface/` plus the local package caches used by DreamSim/OpenCLIP.
 - **GPU is optional**. CPU works but is slow. Apple Silicon uses MPS automatically. NVIDIA CUDA users have to pick a matching `torch` wheel (see Troubleshooting).
 - **Smoke-test recipe** (~1% of the cost of a default run):
 
   ```bash
   uv run python -m art_style_search \
-    --max-iterations 1 --num-branches 1 --num-fixed-refs 3 \
+    --max-iterations 1 --num-branches 1 --raw-proposals 8 --num-fixed-refs 3 \
     --run smoke-test --new
   ```
 
@@ -110,9 +110,10 @@ uv run python -m art_style_search clean --all
 | `--runs-dir` | `runs` | Base directory for all runs |
 | `--run` | auto | Run name (auto-incremented if omitted) |
 | `--new` | | Force new run (error if name exists) |
-| `--max-iterations` | `20` | Maximum optimization iterations |
+| `--max-iterations` | `10` | Maximum optimization iterations |
 | `--plateau-window` | `5` | Iterations without improvement before stop |
-| `--num-branches` | `5` | Parallel experiments per iteration |
+| `--num-branches` | `5` | Parallel experiments per iteration (portfolio size after selection) |
+| `--raw-proposals` | `9` | Raw proposals per iteration before portfolio selection (range 8-12) |
 | `--num-fixed-refs` | `20` | Fixed reference images for optimization |
 | `--protocol` | `classic` | `classic` (default) or `rigorous` (info barrier + replication + statistical testing) |
 | `--seed` | random | RNG seed for reproducible reference selection |
