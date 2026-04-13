@@ -137,6 +137,8 @@ async def propose_experiments(
 ) -> list[RefinementResult]:
     """Propose a raw batch of experiments in a single reasoning-model call."""
 
+    section_name_list = ", ".join(section.name for section in current_template.sections)
+    structural_change_targets = ", ".join(["caption_sections", "caption_length_target", "negative_prompt"])
     system = (
         "You are an expert art director and prompt engineer optimizing a META-PROMPT.\n\n"
         "## How this system works\n"
@@ -210,6 +212,11 @@ async def propose_experiments(
         "- The targeted proposal for a direction MUST appear first for that direction in the output.\n"
         "- Bold proposals for a direction must appear after the targeted proposal, ordered strongest to weakest.\n"
         "- Targeted proposals must change EXACTLY 1 section. Bold proposals may change 1-3 related sections.\n"
+        f"- For this iteration, valid concrete section names are: {section_name_list}.\n"
+        f"- Structural change targets are: {structural_change_targets}.\n"
+        "- target_category may use taxonomy labels such as 'caption_structure'.\n"
+        "- changed_section and changed_sections must use concrete template section names or structural change targets only.\n"
+        "- Never put taxonomy aliases such as 'caption_structure' inside changed_section or changed_sections.\n"
         "- Bold proposals must change information priority, scene-type policy, section schema, or a small cluster of related sections. "
         "Do not spend a bold slot on sentence counts or tiny wording polish alone.\n"
         "- It is acceptable for multiple directions to touch the same category if they test DIFFERENT mechanisms or intervention types.\n"
@@ -382,6 +389,7 @@ async def propose_experiments(
         response_name="experiment_batch",
         schema_hint=schema_hint("experiment_batch"),
         max_tokens=30000,
+        repair_retries=2,
     )
 
     if converged:

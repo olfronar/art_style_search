@@ -247,3 +247,145 @@ async def test_propose_iteration_experiments_keeps_proposal_with_removed_incumbe
     assert should_stop is False
     assert len(proposals) == 1
     assert proposals[0].changed_sections == ["face_hands_pose", "caption_sections"]
+
+
+@pytest.mark.asyncio
+async def test_propose_iteration_experiments_recovers_caption_structure_alias_from_template_diff(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    state = _make_state()
+    ctx = RunContext(
+        config=_make_config(tmp_path),
+        gemini_client=MagicMock(),
+        reasoning_client=MagicMock(),
+        registry=MagicMock(),
+        gemini_semaphore=MagicMock(),
+        eval_semaphore=MagicMock(),
+        services=MagicMock(),
+    )
+
+    proposed_template = _valid_template()
+    proposed_template.caption_sections = ["Art Style", "Subject", "Silhouette", "Lighting"]
+
+    async def fake_propose_experiments(*args, **kwargs):
+        return [
+            RefinementResult(
+                template=proposed_template,
+                analysis="Analysis",
+                template_changes="Reworked caption section ordering",
+                should_stop=False,
+                hypothesis="If caption structure changes, section salience will improve.",
+                experiment="Change caption structure ordering.",
+                lessons=Lessons(),
+                builds_on=None,
+                open_problems=[],
+                changed_section="caption_structure",
+                changed_sections=["caption_structure"],
+                target_category="caption_structure",
+                direction_id="D1",
+                direction_summary="Schema rewrite",
+                failure_mechanism="Section order hides the most important locks.",
+                intervention_type="section_schema",
+                risk_level="targeted",
+                expected_primary_metric="vision_subject",
+                expected_tradeoff="May reduce continuity with prior captions.",
+            )
+        ]
+
+    monkeypatch.setattr("art_style_search.workflow.iteration_proposals.propose_experiments", fake_propose_experiments)
+    monkeypatch.setattr(
+        "art_style_search.workflow.iteration_proposals.enforce_hypothesis_diversity",
+        lambda refinements, template: refinements,
+    )
+    monkeypatch.setattr(
+        "art_style_search.workflow.iteration_proposals.select_experiment_portfolio",
+        lambda refinements, **kwargs: refinements,
+    )
+
+    proposals, should_stop = await _propose_iteration_experiments(state, ctx, "", "", "")
+
+    assert should_stop is False
+    assert len(proposals) == 1
+    assert proposals[0].changed_section == "caption_sections"
+    assert proposals[0].changed_sections == ["caption_sections"]
+
+
+@pytest.mark.asyncio
+async def test_propose_iteration_experiments_logs_recovery_summary(monkeypatch, tmp_path: Path, caplog) -> None:
+    state = _make_state()
+    ctx = RunContext(
+        config=_make_config(tmp_path),
+        gemini_client=MagicMock(),
+        reasoning_client=MagicMock(),
+        registry=MagicMock(),
+        gemini_semaphore=MagicMock(),
+        eval_semaphore=MagicMock(),
+        services=MagicMock(),
+    )
+
+    recoverable_template = _valid_template()
+    recoverable_template.caption_sections = ["Art Style", "Subject", "Silhouette", "Lighting"]
+
+    async def fake_propose_experiments(*args, **kwargs):
+        return [
+            RefinementResult(
+                template=recoverable_template,
+                analysis="Analysis",
+                template_changes="Reworked caption section ordering",
+                should_stop=False,
+                hypothesis="Recoverable schema change",
+                experiment="Change caption structure ordering.",
+                lessons=Lessons(),
+                builds_on=None,
+                open_problems=[],
+                changed_section="caption_structure",
+                changed_sections=["caption_structure"],
+                target_category="caption_structure",
+                direction_id="D1",
+                direction_summary="Schema rewrite",
+                failure_mechanism="Section order hides the most important locks.",
+                intervention_type="section_schema",
+                risk_level="targeted",
+                expected_primary_metric="vision_subject",
+                expected_tradeoff="May reduce continuity with prior captions.",
+            ),
+            RefinementResult(
+                template=_valid_template(),
+                analysis="Analysis",
+                template_changes="Unknown metadata only",
+                should_stop=False,
+                hypothesis="Unrecoverable change metadata",
+                experiment="Emit bad changed sections.",
+                lessons=Lessons(),
+                builds_on=None,
+                open_problems=[],
+                changed_section="totally_unknown_field",
+                changed_sections=["totally_unknown_field"],
+                target_category="general",
+                direction_id="D2",
+                direction_summary="Broken metadata",
+                failure_mechanism="None",
+                intervention_type="information_priority",
+                risk_level="targeted",
+                expected_primary_metric="vision_subject",
+                expected_tradeoff="None",
+            ),
+        ]
+
+    monkeypatch.setattr("art_style_search.workflow.iteration_proposals.propose_experiments", fake_propose_experiments)
+    monkeypatch.setattr(
+        "art_style_search.workflow.iteration_proposals.enforce_hypothesis_diversity",
+        lambda refinements, template: refinements,
+    )
+    monkeypatch.setattr(
+        "art_style_search.workflow.iteration_proposals.select_experiment_portfolio",
+        lambda refinements, **kwargs: refinements,
+    )
+
+    with caplog.at_level("INFO"):
+        proposals, should_stop = await _propose_iteration_experiments(state, ctx, "", "", "")
+
+    assert should_stop is False
+    assert len(proposals) == 1
+    assert "Proposal validation summary" in caplog.text

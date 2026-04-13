@@ -18,6 +18,7 @@ from art_style_search.prompt import (
     _parse_open_problems,
     _parse_template,
     _parse_template_changes,
+    propose_experiments,
     validate_template,
 )
 from art_style_search.prompt.json_contracts import (
@@ -27,7 +28,8 @@ from art_style_search.prompt.json_contracts import (
     validate_style_compilation_payload,
     validate_synthesis_payload,
 )
-from art_style_search.types import AggregatedMetrics, PromptSection, PromptTemplate
+from art_style_search.types import AggregatedMetrics, KnowledgeBase, PromptSection, PromptTemplate
+from tests.conftest import make_style_profile
 
 # ---------------------------------------------------------------------------
 # _parse_template
@@ -756,3 +758,31 @@ class TestJsonContracts:
                 gemini_raw="visual analysis",
                 reasoning_raw="reasoning analysis",
             )
+
+
+class TestProposeExperiments:
+    @pytest.mark.asyncio
+    async def test_uses_two_repair_retries_and_concrete_changed_section_instructions(self) -> None:
+        captured: dict[str, object] = {}
+
+        class FakeClient:
+            async def call_json(self, **kwargs):
+                captured.update(kwargs)
+                return ([], False)
+
+        await propose_experiments(
+            make_style_profile(),
+            _make_valid_template(),
+            KnowledgeBase(),
+            None,
+            None,
+            client=FakeClient(),  # type: ignore[arg-type]
+            model="fake-model",
+            num_experiments=9,
+        )
+
+        assert captured["repair_retries"] == 2
+        system = captured["system"]  # type: ignore[assignment]
+        assert "changed_sections must use concrete template section names" in system
+        assert "caption_sections" in system
+        assert "caption_length_target" in system
