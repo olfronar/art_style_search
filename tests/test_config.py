@@ -118,7 +118,7 @@ class TestDefaults:
         assert cfg.plateau_window == 5
 
     def test_num_branches(self, cfg: Config) -> None:
-        assert cfg.num_branches == 5
+        assert cfg.num_branches == 9
 
     def test_raw_proposals(self, cfg: Config) -> None:
         assert cfg.raw_proposals == 9

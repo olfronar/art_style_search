@@ -83,7 +83,7 @@ def parse_args(argv: list[str] | None = None) -> Config:
     loop.add_argument(
         "--plateau-window", type=int, default=5, help="Iterations without improvement before branch stops"
     )
-    loop.add_argument("--num-branches", type=int, default=5, help="Number of parallel population branches")
+    loop.add_argument("--num-branches", type=int, default=9, help="Number of parallel population branches")
     loop.add_argument(
         "--raw-proposals",
         type=int,

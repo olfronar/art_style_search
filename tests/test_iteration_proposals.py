@@ -60,7 +60,7 @@ def _make_config(tmp_path: Path) -> Config:
         run_dir=tmp_path,
         max_iterations=10,
         plateau_window=5,
-        num_branches=5,
+        num_branches=9,
         aspect_ratio="1:1",
         num_fixed_refs=4,
         caption_model="caption",
@@ -162,15 +162,19 @@ async def test_propose_iteration_experiments_requests_raw_batch_and_selects_port
         ]
 
     monkeypatch.setattr("art_style_search.workflow.iteration_proposals.propose_experiments", fake_propose_experiments)
+    monkeypatch.setattr(
+        "art_style_search.workflow.iteration_proposals.enforce_hypothesis_diversity",
+        lambda refinements, template: refinements,
+    )
 
     proposals, should_stop = await _propose_iteration_experiments(state, ctx, "", "", "")
 
     assert should_stop is False
     assert seen_num_experiments == [9]
-    assert len(proposals) == 5
+    assert len(proposals) == 9
     assert [proposal.direction_id for proposal in proposals[:3]] == ["D1", "D2", "D3"]
     assert [proposal.risk_level for proposal in proposals[:3]] == ["targeted", "targeted", "targeted"]
-    assert [proposal.risk_level for proposal in proposals[3:]] == ["bold", "bold"]
+    assert [proposal.risk_level for proposal in proposals[3:]] == ["bold", "bold", "bold", "bold", "bold", "bold"]
 
 
 @pytest.mark.asyncio

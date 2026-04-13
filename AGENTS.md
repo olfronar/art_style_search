@@ -21,7 +21,7 @@ Use `uv` for all Python workflows:
 - `uv run python -m art_style_search report --run <name>` regenerates one run report.
 - `uv run python -m art_style_search report --run <name> --offline` embeds Plotly for portable offline viewing.
 - `uv run python -m art_style_search report --all` regenerates reports for all runs with `state.json`.
-Default search settings are now `--max-iterations 10`, `--num-branches 5`, and `--raw-proposals 9`; the reasoner generates 8-12 raw ideas grouped into 3 directions, then the workflow selects the evaluated portfolio.
+Default search settings are now `--max-iterations 10`, `--num-branches 9`, and `--raw-proposals 9`; the reasoner generates 8-12 raw ideas grouped into 3 directions, then the workflow selects the evaluated portfolio.
 
 ## Coding Style & Naming Conventions
 Target Python 3.11+ and follow Ruff defaults configured in `pyproject.toml`: 4-space indentation, line length 120, and double quotes. Prefer explicit type hints and dataclasses for structured state. Use `snake_case` for modules, functions, and variables; `PascalCase` for classes; keep tests named `test_<behavior>`. Preserve the public facade imports in `loop.py`, `report.py`, and `prompt/__init__.py` unless the change explicitly intends to break that surface. Keep edits narrowly scoped in large, high-traffic modules such as `evaluate.py`, `experiment.py`, `prompt/experiments.py`, `workflow/context.py`, and `reporting/render.py`.
