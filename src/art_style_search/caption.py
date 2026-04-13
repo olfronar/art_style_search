@@ -16,16 +16,23 @@ logger = logging.getLogger(__name__)
 
 CAPTION_PROMPT = (
     "You are an expert art analyst. Describe this image in comprehensive detail for someone who cannot see it. "
-    "Structure your response with these clearly labeled sections:\n\n"
-    "**Colors**: Dominant palette (name specific colors), color relationships, saturation, temperature, gradients.\n"
-    "**Composition**: Layout, focal points, balance, use of space, perspective, framing.\n"
+    "These descriptions will be used to understand and reproduce the art style.\n\n"
+    "## Output format\n"
+    "Use these labeled sections in this exact order. Each section: 2-4 sentences with specific details.\n\n"
+    "**Subjects** (MOST IMPORTANT): What is depicted — identity, species, poses, expressions, "
+    "clothing, relationships between figures. Be specific about distinguishing features.\n"
+    "**Colors**: Dominant palette (name specific colors like 'burnt sienna', not just 'brown'), "
+    "color relationships, saturation, temperature, gradients.\n"
     "**Technique**: Medium (oil, watercolor, digital, etc.), brushwork or rendering style, line quality, "
     "level of detail, abstraction vs realism.\n"
-    "**Textures**: Surface qualities, patterns, tactile impressions.\n"
-    "**Mood & Atmosphere**: Emotional tone, lighting quality, sense of time or place.\n"
-    "**Subjects**: What is depicted, their poses, expressions, relationships.\n\n"
-    "Be precise and specific. Use art terminology where appropriate. "
-    "Aim for 200-400 words. Do not speculate about the artist's intent; describe only what is visible."
+    "**Composition**: Layout, focal points, balance, use of space, perspective, framing.\n"
+    "**Lighting & Atmosphere**: Light direction, shadow treatment, emotional tone, sense of time or place.\n"
+    "**Textures**: Surface qualities, patterns, tactile impressions.\n\n"
+    "## Constraints\n"
+    "- Be precise. Use art terminology and specific color names.\n"
+    "- Target 200-400 words total.\n"
+    "- Do not speculate about the artist's intent; describe only what is visible.\n"
+    "- Subjects section must be the most detailed (aim for 50-100 words)."
 )
 
 
