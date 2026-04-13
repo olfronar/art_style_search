@@ -51,7 +51,7 @@ art-style-search = "art_style_search.__main__:main"
 [dependency-groups]
 dev = [
     "ruff>=0.9.0",
-    "pytest>=7.2.0",
+    "pytest>=9.0.3",
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=5.0.0",
 ]
