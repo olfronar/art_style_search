@@ -34,8 +34,9 @@ class _FakeModel:
 
 
 @pytest.fixture(autouse=True)
-def _reset_hps_caches() -> None:
+def _reset_hps_caches(monkeypatch: pytest.MonkeyPatch) -> None:
     hps._load_artifacts.cache_clear()
+    monkeypatch.setattr(hps.torch.backends.mps, "is_available", lambda: False)
 
 
 def test_score_uses_cached_local_hps_artifacts(monkeypatch: pytest.MonkeyPatch) -> None:
