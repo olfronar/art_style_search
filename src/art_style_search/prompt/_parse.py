@@ -234,7 +234,12 @@ def _check_anchors(actual: list[str], required: tuple[tuple[int, str], ...], lab
     return errors
 
 
-def validate_template(template: PromptTemplate, changed_section: str = "") -> list[str]:
+def validate_template(
+    template: PromptTemplate,
+    changed_section: str = "",
+    changed_sections: list[str] | None = None,
+    risk_level: str = "targeted",
+) -> list[str]:
     """Return a list of validation errors (empty list = valid template).
 
     Enforces structural invariants that are specified in the prompt text
@@ -253,9 +258,22 @@ def validate_template(template: PromptTemplate, changed_section: str = "") -> li
     if clt != 0 and (clt < _MIN_CAPTION_LENGTH or clt > _MAX_CAPTION_LENGTH):
         errors.append(f"Caption length target {clt} outside bounds [{_MIN_CAPTION_LENGTH}, {_MAX_CAPTION_LENGTH}]")
 
-    if changed_section:
-        names = {s.name for s in template.sections}
-        if changed_section not in names:
-            errors.append(f"changed_section '{changed_section}' not in template sections: {sorted(names)}")
+    normalized_changed_sections = list(changed_sections or [])
+    if not normalized_changed_sections and changed_section:
+        normalized_changed_sections = [changed_section]
+
+    names = {s.name for s in template.sections}
+    if changed_section and changed_section not in names:
+        errors.append(f"changed_section '{changed_section}' not in template sections: {sorted(names)}")
+    for section_name in normalized_changed_sections:
+        if section_name == changed_section:
+            continue
+        if section_name not in names:
+            errors.append(f"changed_sections contains '{section_name}' not in template sections: {sorted(names)}")
+
+    if risk_level == "targeted" and len(normalized_changed_sections) > 1:
+        errors.append("targeted experiments must change exactly 1 section")
+    if risk_level == "bold" and len(normalized_changed_sections) > 3:
+        errors.append("bold experiments may change up to 3 related sections")
 
     return errors

@@ -169,6 +169,15 @@ class TestRoundTrip:
 
     def test_iteration_result_round_trip(self) -> None:
         original = make_iteration_result(branch_id=2, iteration=4)
+        original.direction_id = "D2"
+        original.direction_summary = "Subject archetype disambiguation"
+        original.failure_mechanism = "The generator swaps in a nearby archetype because the caption lacks contrastive cues."
+        original.intervention_type = "negative_constraints"
+        original.risk_level = "bold"
+        original.expected_primary_metric = "vision_subject"
+        original.expected_tradeoff = "May reduce style consistency on sparse scenes."
+        original.changed_sections = ["subject_anchor", "scene_geometry"]
+        original.changed_section = "subject_anchor"
         d = json.loads(json.dumps(to_dict(original)))
         restored = _iteration_result_from_dict(d)
         assert restored.branch_id == original.branch_id
@@ -178,6 +187,15 @@ class TestRoundTrip:
         assert restored.per_image_scores == original.per_image_scores
         assert restored.aggregated == original.aggregated
         assert restored.kept == original.kept
+        assert restored.direction_id == "D2"
+        assert restored.direction_summary == "Subject archetype disambiguation"
+        assert restored.failure_mechanism.startswith("The generator swaps in")
+        assert restored.intervention_type == "negative_constraints"
+        assert restored.risk_level == "bold"
+        assert restored.expected_primary_metric == "vision_subject"
+        assert restored.expected_tradeoff.startswith("May reduce style consistency")
+        assert restored.changed_sections == ["subject_anchor", "scene_geometry"]
+        assert restored.changed_section == "subject_anchor"
 
     def test_convergence_reason_round_trip(self) -> None:
         for reason in ConvergenceReason:

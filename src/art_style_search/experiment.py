@@ -194,7 +194,15 @@ async def run_experiment(
     analysis: str = "",
     template_changes: str = "",
     changed_section: str = "",
+    changed_sections: list[str] | None = None,
     target_category: str = "",
+    direction_id: str = "",
+    direction_summary: str = "",
+    failure_mechanism: str = "",
+    intervention_type: str = "",
+    risk_level: str = "targeted",
+    expected_primary_metric: str = "",
+    expected_tradeoff: str = "",
 ) -> IterationResult:
     """Execute one experiment: caption -> generate -> evaluate (no reasoning-model call here)."""
     meta_prompt = template.render()
@@ -294,6 +302,14 @@ async def run_experiment(
         n_images_succeeded=n_succeeded,
         changed_section=changed_section,
         target_category=target_category,
+        changed_sections=list(changed_sections or ([changed_section] if changed_section else [])),
+        direction_id=direction_id,
+        direction_summary=direction_summary,
+        failure_mechanism=failure_mechanism,
+        intervention_type=intervention_type,
+        risk_level=risk_level,
+        expected_primary_metric=expected_primary_metric,
+        expected_tradeoff=expected_tradeoff,
     )
 
 

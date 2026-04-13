@@ -316,3 +316,49 @@ class TestKnowledgeBaseDecisionHandling:
         assert problem.category == "color_palette"
         assert problem.priority == "HIGH"
         assert problem.since_iteration == 3
+
+    def test_direction_and_mechanism_metadata_persist_on_hypothesis(self) -> None:
+        kb = KnowledgeBase()
+        proposal = ExperimentProposal(
+            template=PromptTemplate(),
+            hypothesis="Contrastive subject identity lock",
+            experiment_desc="Test experiment",
+            builds_on=None,
+            open_problems=[],
+            lessons=Lessons(confirmed="Contrastive identity cues reduce archetype swaps."),
+            target_category="subject_anchor",
+            direction_id="D2",
+            direction_summary="Character identity disambiguation",
+            failure_mechanism="The generator swaps in nearby archetypes when early subject tokens are generic.",
+            intervention_type="negative_constraints",
+            risk_level="bold",
+            expected_primary_metric="vision_subject",
+            expected_tradeoff="May over-constrain sparse scenes.",
+            changed_sections=["subject_anchor", "scene_geometry"],
+            changed_section="subject_anchor",
+        )
+        result = self._make_result(kept=True, target_category="subject_anchor")
+        result.changed_sections = ["subject_anchor", "scene_geometry"]
+
+        update_knowledge_base(
+            kb,
+            result,
+            PromptTemplate(),
+            None,
+            proposal,
+            iteration=4,
+            decision="promoted",
+        )
+
+        hyp = kb.hypotheses[0]
+        cat = kb.categories["subject_anchor"]
+        assert hyp.direction_id == "D2"
+        assert hyp.direction_summary == "Character identity disambiguation"
+        assert hyp.failure_mechanism.startswith("The generator swaps in nearby archetypes")
+        assert hyp.intervention_type == "negative_constraints"
+        assert hyp.risk_level == "bold"
+        assert hyp.expected_primary_metric == "vision_subject"
+        assert hyp.expected_tradeoff == "May over-constrain sparse scenes."
+        assert hyp.changed_sections == ["subject_anchor", "scene_geometry"]
+        assert cat.last_mechanism_tried.startswith("The generator swaps in nearby archetypes")
+        assert cat.last_confirmed_mechanism.startswith("The generator swaps in nearby archetypes")

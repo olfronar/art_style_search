@@ -57,6 +57,20 @@ def _as_str_list(data: object, *, label: str) -> list[str]:
     return result
 
 
+def _normalize_changed_sections(exp: dict[str, Any], *, label: str) -> tuple[str, list[str]]:
+    changed_section = _as_str(exp.get("changed_section"), label=f"{label}.changed_section")
+    changed_sections = _as_str_list(exp.get("changed_sections") or [], label=f"{label}.changed_sections")
+
+    if changed_sections and changed_section and changed_sections[0] != changed_section:
+        msg = f"{label}.changed_section must match experiments[i].changed_sections[0] when both are provided"
+        raise ValueError(msg)
+    if not changed_sections and changed_section:
+        changed_sections = [changed_section]
+    if not changed_section and changed_sections:
+        changed_section = changed_sections[0]
+    return changed_section, changed_sections
+
+
 def template_to_payload(template: PromptTemplate) -> dict[str, Any]:
     return {
         "sections": [
@@ -139,6 +153,7 @@ def validate_experiment_batch_payload(data: object, *, num_experiments: int) -> 
         exp = _require_dict(item, label=f"experiments[{i}]")
         lessons_obj = _require_dict(exp.get("lessons") or {}, label=f"experiments[{i}].lessons")
         template = payload_to_template(exp.get("template") or {}, label=f"experiments[{i}].template")
+        changed_section, changed_sections = _normalize_changed_sections(exp, label=f"experiments[{i}]")
         results.append(
             RefinementResult(
                 template=template,
@@ -161,13 +176,31 @@ def validate_experiment_batch_payload(data: object, *, num_experiments: int) -> 
                 ),
                 builds_on=_as_str(exp.get("builds_on"), label=f"experiments[{i}].builds_on", default="") or None,
                 open_problems=_as_str_list(exp.get("open_problems") or [], label=f"experiments[{i}].open_problems"),
-                changed_section=_as_str(
-                    exp.get("changed_section"),
-                    label=f"experiments[{i}].changed_section",
-                ),
+                changed_section=changed_section,
+                changed_sections=changed_sections,
                 target_category=_as_str(
                     exp.get("target_category"),
                     label=f"experiments[{i}].target_category",
+                ),
+                direction_id=_as_str(exp.get("direction_id"), label=f"experiments[{i}].direction_id"),
+                direction_summary=_as_str(exp.get("direction_summary"), label=f"experiments[{i}].direction_summary"),
+                failure_mechanism=_as_str(
+                    exp.get("failure_mechanism"),
+                    label=f"experiments[{i}].failure_mechanism",
+                ),
+                intervention_type=_as_str(
+                    exp.get("intervention_type"),
+                    label=f"experiments[{i}].intervention_type",
+                ),
+                risk_level=_as_str(exp.get("risk_level"), label=f"experiments[{i}].risk_level", default="targeted")
+                or "targeted",
+                expected_primary_metric=_as_str(
+                    exp.get("expected_primary_metric"),
+                    label=f"experiments[{i}].expected_primary_metric",
+                ),
+                expected_tradeoff=_as_str(
+                    exp.get("expected_tradeoff"),
+                    label=f"experiments[{i}].expected_tradeoff",
                 ),
             )
         )
@@ -245,7 +278,15 @@ _SCHEMA_HINTS = {
                 "builds_on": "H3",
                 "experiment": "...",
                 "changed_section": "color_palette",
+                "changed_sections": ["color_palette"],
                 "target_category": "color_palette",
+                "direction_id": "D1",
+                "direction_summary": "Palette localization",
+                "failure_mechanism": "Large frame regions and tiny accents are described with the same priority.",
+                "intervention_type": "information_priority",
+                "risk_level": "targeted",
+                "expected_primary_metric": "color_histogram",
+                "expected_tradeoff": "May make captions read more schematically.",
                 "open_problems": ["..."],
                 "template_changes": "...",
                 "template": {

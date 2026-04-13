@@ -481,6 +481,38 @@ class TestValidateTemplate:
         t = _make_valid_template()
         assert validate_template(t, changed_section="color_palette") == []
 
+    def test_targeted_change_rejects_multiple_changed_sections(self) -> None:
+        t = _make_valid_template()
+        errors = validate_template(
+            t,
+            changed_section="color_palette",
+            changed_sections=["color_palette", "composition"],
+            risk_level="targeted",
+        )
+        assert any("targeted" in error for error in errors)
+
+    def test_bold_change_allows_up_to_three_changed_sections(self) -> None:
+        t = _make_valid_template()
+        assert (
+            validate_template(
+                t,
+                changed_section="color_palette",
+                changed_sections=["color_palette", "composition", "technique"],
+                risk_level="bold",
+            )
+            == []
+        )
+
+    def test_bold_change_rejects_more_than_three_changed_sections(self) -> None:
+        t = _make_valid_template()
+        errors = validate_template(
+            t,
+            changed_section="color_palette",
+            changed_sections=["color_palette", "composition", "technique", "subject_anchor"],
+            risk_level="bold",
+        )
+        assert any("up to 3" in error for error in errors)
+
     def test_zero_caption_length_allowed(self) -> None:
         t = _make_valid_template()
         t.caption_length_target = 0
@@ -519,19 +551,26 @@ class TestJsonContracts:
                     "hypothesis": "Strengthen palette anchoring",
                     "builds_on": "H3",
                     "experiment": "Tighten the color section",
-                    "changed_section": "color_palette",
+                    "changed_sections": ["color_palette"],
                     "target_category": "color_palette",
+                    "direction_id": "D1",
+                    "direction_summary": "Palette localization",
+                    "failure_mechanism": "Large background fields and tiny accents are described at the same priority.",
+                    "intervention_type": "information_priority",
+                    "risk_level": "targeted",
+                    "expected_primary_metric": "color_histogram",
+                    "expected_tradeoff": "May reduce caption naturalness if the section becomes too rigid.",
                     "open_problems": ["Dark palettes drift"],
                     "template_changes": "none",
                     "template": {
                         "sections": [
                             {"name": "style_foundation", "description": "rules", "value": "Shared rules"},
+                            {"name": "subject_anchor", "description": "subject rules", "value": "Subject guidance"},
                             {"name": "color_palette", "description": "colors", "value": "Detailed palette guidance"},
                             {"name": "composition", "description": "layout", "value": "Layout guidance"},
-                            {"name": "technique", "description": "medium", "value": "Technique guidance"},
                         ],
                         "negative_prompt": "avoid blur",
-                        "caption_sections": ["Art Style", "Color Palette"],
+                        "caption_sections": ["Art Style", "Subject", "Color Palette"],
                         "caption_length_target": 500,
                     },
                 }
@@ -543,6 +582,47 @@ class TestJsonContracts:
         assert len(results) == 1
         assert results[0].builds_on == "H3"
         assert results[0].target_category == "color_palette"
+        assert results[0].direction_id == "D1"
+        assert results[0].direction_summary == "Palette localization"
+        assert results[0].failure_mechanism.startswith("Large background fields")
+        assert results[0].intervention_type == "information_priority"
+        assert results[0].risk_level == "targeted"
+        assert results[0].expected_primary_metric == "color_histogram"
+        assert results[0].expected_tradeoff.startswith("May reduce caption naturalness")
+        assert results[0].changed_sections == ["color_palette"]
+        assert results[0].changed_section == "color_palette"
+
+    def test_experiment_batch_payload_backfills_changed_sections_from_changed_section(self) -> None:
+        payload = {
+            "experiments": [
+                {
+                    "analysis": "Need a bolder schema change",
+                    "lessons": {"confirmed": "", "rejected": "", "new_insight": ""},
+                    "hypothesis": "Try a two-section schema shift",
+                    "builds_on": None,
+                    "experiment": "Rewrite subject and scene geometry together",
+                    "changed_section": "subject_anchor",
+                    "target_category": "subject_anchor",
+                    "risk_level": "bold",
+                    "template_changes": "none",
+                    "template": {
+                        "sections": [
+                            {"name": "style_foundation", "description": "rules", "value": "Shared rules"},
+                            {"name": "subject_anchor", "description": "subject rules", "value": "Subject guidance"},
+                            {"name": "scene_geometry", "description": "layout", "value": "Layout guidance"},
+                            {"name": "texture_vocabulary", "description": "texture", "value": "Texture guidance"},
+                        ],
+                        "caption_sections": ["Art Style", "Subject", "Scene Geometry"],
+                        "caption_length_target": 500,
+                    },
+                }
+            ]
+        }
+
+        results, converged = validate_experiment_batch_payload(payload, num_experiments=1)
+        assert converged is False
+        assert results[0].changed_sections == ["subject_anchor"]
+        assert results[0].changed_section == "subject_anchor"
 
     def test_synthesis_payload_accepts_negative_prompt_key(self) -> None:
         template, rationale = validate_synthesis_payload(

@@ -280,6 +280,14 @@ class Hypothesis:
     metric_delta: dict[str, float]  # {"dreamsim": +0.02, "hps": +0.01, ...}
     kept: bool
     lesson: str  # confirmed/rejected/insight text
+    direction_id: str = ""
+    direction_summary: str = ""
+    failure_mechanism: str = ""
+    intervention_type: str = ""
+    risk_level: str = "targeted"
+    expected_primary_metric: str = ""
+    expected_tradeoff: str = ""
+    changed_sections: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -302,6 +310,8 @@ class CategoryProgress:
     confirmed_insights: list[str] = field(default_factory=list)
     rejected_approaches: list[str] = field(default_factory=list)
     hypothesis_ids: list[str] = field(default_factory=list)
+    last_mechanism_tried: str = ""
+    last_confirmed_mechanism: str = ""
 
 
 @dataclass
@@ -325,6 +335,14 @@ class KnowledgeBase:
         lesson: str,
         confirmed: str,
         rejected: str,
+        direction_id: str = "",
+        direction_summary: str = "",
+        failure_mechanism: str = "",
+        intervention_type: str = "",
+        risk_level: str = "targeted",
+        expected_primary_metric: str = "",
+        expected_tradeoff: str = "",
+        changed_sections: list[str] | None = None,
         *,
         outcome: str | None = None,
         update_progress: bool = True,
@@ -358,6 +376,14 @@ class KnowledgeBase:
             metric_delta=metric_delta,
             kept=kept,
             lesson=lesson,
+            direction_id=direction_id,
+            direction_summary=direction_summary,
+            failure_mechanism=failure_mechanism,
+            intervention_type=intervention_type,
+            risk_level=risk_level,
+            expected_primary_metric=expected_primary_metric,
+            expected_tradeoff=expected_tradeoff,
+            changed_sections=list(changed_sections or []),
         )
         self.hypotheses.append(hyp)
 
@@ -367,6 +393,8 @@ class KnowledgeBase:
             cat = CategoryProgress(category=category)
             self.categories[category] = cat
         cat.hypothesis_ids.append(hid)
+        if failure_mechanism:
+            cat.last_mechanism_tried = failure_mechanism
 
         if not update_progress:
             return hyp
@@ -382,6 +410,8 @@ class KnowledgeBase:
                     cat.confirmed_insights = cat.confirmed_insights[-max_insights:]
             if cat.best_perceptual_delta is None or perceptual_delta > cat.best_perceptual_delta:
                 cat.best_perceptual_delta = perceptual_delta
+            if failure_mechanism:
+                cat.last_confirmed_mechanism = failure_mechanism
         if outcome == "rejected":
             short = statement[:120]
             if short not in cat.rejected_approaches:
@@ -429,6 +459,14 @@ class IterationResult:
     n_images_succeeded: int = 0
     changed_section: str = ""
     target_category: str = ""
+    changed_sections: list[str] = field(default_factory=list)
+    direction_id: str = ""
+    direction_summary: str = ""
+    failure_mechanism: str = ""
+    intervention_type: str = ""
+    risk_level: str = "targeted"
+    expected_primary_metric: str = ""
+    expected_tradeoff: str = ""
 
 
 @dataclass

@@ -1,4 +1,4 @@
-"""Per-iteration experiment proposals: propose N branches in one call, then dedup."""
+"""Per-iteration experiment proposals: propose raw candidates, then build a direction portfolio."""
 
 from __future__ import annotations
 
@@ -28,31 +28,97 @@ from art_style_search.utils import ReasoningClient
 logger = logging.getLogger(__name__)
 
 
+def _normalized_category(result: RefinementResult, category_names: list[str]) -> str:
+    return result.target_category if result.target_category else classify_hypothesis(result.hypothesis, category_names)
+
+
+def _diversity_key(result: RefinementResult, category_names: list[str]) -> tuple[str, str, str]:
+    return (
+        _normalized_category(result, category_names),
+        result.failure_mechanism.strip().lower(),
+        result.intervention_type.strip().lower(),
+    )
+
+
 def enforce_hypothesis_diversity(
     results: list[RefinementResult],
     template: PromptTemplate,
 ) -> list[RefinementResult]:
-    """Deduplicate experiments targeting the same category. Keep the first occurrence."""
-    seen_categories: set[str] = set()
+    """Deduplicate exact mechanism repeats while allowing multiple ideas per category."""
+    seen_keys: set[tuple[str, str, str]] = set()
     diverse_results: list[RefinementResult] = []
     category_names = get_category_names(template)
 
     for r in results:
-        # Prefer the model's explicit target_category; fall back to keyword classification
-        cat = r.target_category if r.target_category else classify_hypothesis(r.hypothesis, category_names)
-        if cat in seen_categories:
+        key = _diversity_key(r, category_names)
+        if key in seen_keys:
             logger.warning(
-                "Dropping duplicate-category experiment (category=%s): %s",
-                cat,
+                "Dropping duplicate experiment (category=%s, mechanism=%s, intervention=%s): %s",
+                key[0],
+                key[1] or "<none>",
+                key[2] or "<none>",
                 r.hypothesis[:80],
             )
             continue
-        seen_categories.add(cat)
+        seen_keys.add(key)
         diverse_results.append(r)
 
     if len(diverse_results) < len(results):
         logger.info("Diversity filter: kept %d/%d experiments", len(diverse_results), len(results))
     return diverse_results
+
+
+def select_experiment_portfolio(
+    results: list[RefinementResult],
+    *,
+    num_experiments: int,
+    num_directions: int = 3,
+) -> list[RefinementResult]:
+    """Select a portfolio from raw proposals.
+
+    Take one targeted proposal per direction first, preserving direction order,
+    then fill remaining slots with bold proposals in original order.
+    """
+    if not results or num_experiments <= 0:
+        return []
+
+    direction_order: list[str] = []
+    grouped: dict[str, list[RefinementResult]] = {}
+    for idx, result in enumerate(results):
+        direction_id = result.direction_id or f"UNGROUPED_{idx}"
+        if direction_id not in grouped:
+            direction_order.append(direction_id)
+            grouped[direction_id] = []
+        grouped[direction_id].append(result)
+
+    selected: list[RefinementResult] = []
+    seen_ids: set[int] = set()
+
+    for direction_id in direction_order[:num_directions]:
+        targeted = next((r for r in grouped[direction_id] if r.risk_level != "bold"), None)
+        if targeted is None:
+            continue
+        selected.append(targeted)
+        seen_ids.add(id(targeted))
+        if len(selected) >= num_experiments:
+            return selected[:num_experiments]
+
+    bold_candidates = [r for r in results if r.risk_level == "bold" and id(r) not in seen_ids]
+    for candidate in bold_candidates:
+        selected.append(candidate)
+        seen_ids.add(id(candidate))
+        if len(selected) >= num_experiments:
+            return selected[:num_experiments]
+
+    for candidate in results:
+        if id(candidate) in seen_ids:
+            continue
+        selected.append(candidate)
+        seen_ids.add(id(candidate))
+        if len(selected) >= num_experiments:
+            break
+
+    return selected[:num_experiments]
 
 
 async def propose_experiments(
@@ -69,12 +135,7 @@ async def propose_experiments(
     roundtrip_feedback: str = "",
     caption_diffs: str = "",
 ) -> list[RefinementResult]:
-    """Propose N experiments in a single reasoning-model call.
-
-    Uses ``<branch>`` tags so the model generates all experiments at once,
-    ensuring inherent diversity without sequential dedup.  Follows the
-    same pattern as :func:`propose_initial_templates`.
-    """
+    """Propose a raw batch of experiments in a single reasoning-model call."""
 
     system = (
         "You are an expert art director and prompt engineer optimizing a META-PROMPT.\n\n"
@@ -142,12 +203,16 @@ async def propose_experiments(
         "- vision_composition: spatial layout accuracy.\n"
         "Weights are ADAPTIVE — metrics with more variance across experiments get higher weight.\n\n"
         "## Iteration strategy\n"
-        f"- Propose exactly {num_experiments} experiments in a single JSON response. "
-        "Each MUST have a DIFFERENT hypothesis targeting a DIFFERENT weakness or category.\n"
-        "- There are no fixed 'branches' — shift focus freely between categories "
-        "as the weakest area changes.\n"
-        "- Make EXACTLY 1 section change per experiment — modify a single section's value. "
-        "This enables clean attribution of which change helped or hurt.\n"
+        f"- Propose exactly {num_experiments} experiments in a single JSON response, grouped into EXACTLY 3 directions.\n"
+        "- Think in two stages: first diagnose 3 distinct failure mechanisms, then create a portfolio for each direction.\n"
+        "- Use direction ids D1, D2, D3. Order directions from highest priority to lowest priority.\n"
+        "- Each direction MUST contain exactly 1 targeted proposal and 1-3 bold proposals.\n"
+        "- The targeted proposal for a direction MUST appear first for that direction in the output.\n"
+        "- Bold proposals for a direction must appear after the targeted proposal, ordered strongest to weakest.\n"
+        "- Targeted proposals must change EXACTLY 1 section. Bold proposals may change 1-3 related sections.\n"
+        "- Bold proposals must change information priority, scene-type policy, section schema, or a small cluster of related sections. "
+        "Do not spend a bold slot on sentence counts or tiny wording polish alone.\n"
+        "- It is acceptable for multiple directions to touch the same category if they test DIFFERENT mechanisms or intervention types.\n"
         "- Experiments can vary: section content, caption output section names/ordering, "
         "caption length target, balance of shared style vs per-image detail.\n"
         "- If DreamSim is weak: the captions miss structural, color, or semantic details — "
@@ -170,18 +235,12 @@ async def propose_experiments(
         "These are VALIDATED improvements — double down on them. If a confirmed insight "
         "improved one aspect, explore whether the same principle applies to other sections. "
         "Do not revisit or undo confirmed improvements unless metrics specifically regressed.\n\n"
-        "**Step size**: Adapt the magnitude of your changes to the current score level:\n"
-        "- When composite score is LOW (<0.35): make BOLD changes — restructure sections, "
-        "try very different instruction styles, experiment with caption length.\n"
-        "- When composite score is MODERATE (0.35-0.50): make TARGETED changes — refine "
-        "specific wording, adjust emphasis within sections, fine-tune constraints.\n"
-        "- When composite score is HIGH (>0.50): make SURGICAL changes — tweak individual "
-        "phrases, adjust quantitative thresholds, polish specific failure modes. "
-        "Small changes matter more here; large changes risk regression.\n\n"
-        "**Diversity pressure**: Each experiment in this batch MUST target a different "
-        "hypothesis category. If a category has 3+ rejected approaches with no confirmed "
-        "insights, DEPRIORITIZE it — focus effort where confirmed partial improvements "
-        "suggest further gains are possible.\n\n"
+        "**Boldness policy**: Assume the incumbent is locally polished but still conceptually wrong in at least one important way. "
+        "Do not spend the full batch polishing wording. Every direction must contain one targeted test and at least one genuine bold variant.\n\n"
+        "**Search depth**: Within a direction, vary the intervention type rather than repeating the same checklist idea. "
+        "Good intervention types include information priority, negative constraints, scene-type split, schema change, and related multi-section rewrites.\n\n"
+        "**Diversity pressure**: Batch diversity is defined by failure mechanism and intervention type, not only by category name. "
+        "Do not emit two proposals that share the same category, failure mechanism, and intervention type.\n\n"
         "Only emit [CONVERGED] (at the very end of the LAST branch) if you have verified "
         "ALL of the following: (1) the plateau is deep — multiple flat iterations in a row, "
         "(2) every hypothesis category in the knowledge base has been directly targeted at "
@@ -196,7 +255,15 @@ async def propose_experiments(
         "- builds_on (string or null)\n"
         "- experiment\n"
         "- changed_section\n"
+        "- changed_sections\n"
         "- target_category\n"
+        "- direction_id\n"
+        "- direction_summary\n"
+        "- failure_mechanism\n"
+        "- intervention_type\n"
+        "- risk_level\n"
+        "- expected_primary_metric\n"
+        "- expected_tradeoff\n"
         "- open_problems (array of strings)\n"
         "- template_changes\n"
         "- template: {sections, negative_prompt, caption_sections, caption_length_target}\n"
@@ -217,8 +284,7 @@ async def propose_experiments(
         user_parts.append("\n\n## Best Metrics So Far\n")
         user_parts.append(_format_metrics(best_metrics))
         score = composite_score(best_metrics)
-        regime = "LOW" if score < 0.35 else "MODERATE" if score < 0.50 else "HIGH"
-        user_parts.append(f"\nCurrent composite score: {score:.4f} ({regime} regime)\n")
+        user_parts.append(f"\nCurrent composite score: {score:.4f}\n")
 
     # Knowledge base — structured lessons from all previous experiments
     kb_text = format_knowledge_base(knowledge_base)
@@ -230,7 +296,7 @@ async def propose_experiments(
     # available, including on iteration 1, so the unexplored synonym-map categories
     # (lighting, texture, background, caption_structure, …) surface at priority 1.0.
     category_names = get_category_names(current_template)
-    suggested = suggest_target_categories(knowledge_base, num_experiments, category_names) if knowledge_base else []
+    suggested = suggest_target_categories(knowledge_base, 3, category_names) if knowledge_base else []
     if suggested:
         user_parts.append(
             "\n## Suggested Target Categories (ranked by improvement potential; "
@@ -292,8 +358,8 @@ async def propose_experiments(
     has_feedback = vision_feedback or roundtrip_feedback
     instruction = (
         f"\n\nPropose {num_experiments} improved templates in one JSON object. "
-        "Each experiment must target a DIFFERENT weakness — review the Knowledge Base, "
-        "then formulate hypotheses that build on previous insights (reference H-ids). "
+        "First diagnose 3 failure mechanisms. Then produce 3 directions (D1-D3) with one targeted proposal "
+        "plus bold variants inside each direction. Use the Knowledge Base to avoid repeating the same mechanism/intervention pair. "
         "Update open problems in each branch."
     )
     if has_feedback:

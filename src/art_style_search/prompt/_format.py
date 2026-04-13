@@ -111,6 +111,10 @@ def format_knowledge_base(kb: KnowledgeBase, max_words: int = 1500) -> str:
         cat_lines.append(
             f"**{cat_name}** [{len(cat.hypothesis_ids)} hyp, {n_conf} confirmed, {n_rej} rejected{delta_str}]"
         )
+        if cat.last_mechanism_tried:
+            cat_lines.append(f"  Last mechanism: {cat.last_mechanism_tried[:120]}")
+        if cat.last_confirmed_mechanism:
+            cat_lines.append(f"  Last confirmed mechanism: {cat.last_confirmed_mechanism[:120]}")
         if cat.confirmed_insights:
             cat_lines.append(f"  Latest: {cat.confirmed_insights[-1][:120]}")
         if cat.rejected_approaches:
@@ -194,11 +198,13 @@ def suggest_target_categories(kb: KnowledgeBase, num_targets: int, categories: l
         n_total = len(progress.hypothesis_ids)
 
         if n_rejected >= 3 and n_confirmed == 0:
-            score = 0.1  # diminishing returns
+            score = 0.3 if progress.last_mechanism_tried else 0.2
         elif n_confirmed > 0 and progress.best_perceptual_delta and progress.best_perceptual_delta > 0:
             score = 0.7  # partial success, room to build
         else:
             score = 0.5 / max(n_total, 1)
+            if progress.last_mechanism_tried and not progress.last_confirmed_mechanism:
+                score += 0.1
         scored.append((cat, score))
 
     scored.sort(key=lambda x: -x[1])

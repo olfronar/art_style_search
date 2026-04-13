@@ -116,6 +116,7 @@ def _build_manifest(config: Config) -> RunManifest:
             "max_iterations": config.max_iterations,
             "plateau_window": config.plateau_window,
             "num_branches": config.num_branches,
+            "raw_proposals": config.raw_proposals,
             "aspect_ratio": config.aspect_ratio,
             "num_fixed_refs": config.num_fixed_refs,
             "protocol": config.protocol,

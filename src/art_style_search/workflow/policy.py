@@ -60,6 +60,38 @@ def _candidate_results_for_validation(ranking: IterationRanking) -> list[Iterati
     return candidates
 
 
+def _select_exploration_candidate(state: LoopState, ranking: IterationRanking) -> tuple[IterationResult, str]:
+    """Prefer bold or untried-mechanism candidates over raw second-best."""
+    ranked = sorted(ranking.exp_results, key=lambda result: ranking.adaptive_scores[id(result)], reverse=True)
+    fallback = ranked[1]
+    historical_mechanisms = {hyp.failure_mechanism for hyp in state.knowledge_base.hypotheses if hyp.failure_mechanism}
+    exploration_pool = ranked[1:]
+
+    bold_untried = [
+        result
+        for result in exploration_pool
+        if result.risk_level == "bold"
+        and result.failure_mechanism
+        and result.failure_mechanism not in historical_mechanisms
+    ]
+    if bold_untried:
+        return bold_untried[0], "Plateau escape via bold untried mechanism"
+
+    bold_candidates = [result for result in exploration_pool if result.risk_level == "bold"]
+    if bold_candidates:
+        return bold_candidates[0], "Plateau escape via bold candidate"
+
+    untried = [
+        result
+        for result in exploration_pool
+        if result.failure_mechanism and result.failure_mechanism not in historical_mechanisms
+    ]
+    if untried:
+        return untried[0], "Plateau escape via untried mechanism"
+
+    return fallback, "Plateau escape via second-best"
+
+
 def _log_promotion_decision(
     state: LoopState,
     ranking: IterationRanking,
@@ -130,18 +162,17 @@ def _apply_iteration_result(state: LoopState, ranking: IterationRanking, config:
         and len(ranking.exp_results) >= 2
     )
     if can_explore:
-        ranked = sorted(ranking.exp_results, key=lambda result: ranking.adaptive_scores[id(result)], reverse=True)
-        second_best = ranked[1]
-        logger.info("Exploration: adopting second-best experiment to escape potential local optimum")
-        _apply_exploration_result(state, second_best)
+        candidate, reason = _select_exploration_candidate(state, ranking)
+        logger.info("Exploration: adopting branch %d (%s)", candidate.branch_id, reason)
+        _apply_exploration_result(state, candidate)
         state.plateau_counter = _EXPLORATION_RESET_PLATEAU
         _log_promotion_decision(
             state,
             ranking,
             "exploration",
-            "Plateau escape via second-best",
+            reason,
             config,
-            candidate=second_best,
+            candidate=candidate,
         )
         return "exploration"
 

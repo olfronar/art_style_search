@@ -271,7 +271,15 @@ def _apply_all_patches(monkeypatch, tmp_path: Path, ref_paths: list[Path]):
         analysis="",
         template_changes="",
         changed_section="",
+        changed_sections=None,
         target_category="",
+        direction_id="",
+        direction_summary="",
+        failure_mechanism="",
+        intervention_type="",
+        risk_level="targeted",
+        expected_primary_metric="",
+        expected_tradeoff="",
     ):
         from art_style_search.types import IterationResult
 
@@ -313,6 +321,14 @@ def _apply_all_patches(monkeypatch, tmp_path: Path, ref_paths: list[Path]):
             n_images_succeeded=n_imgs,
             changed_section=changed_section,
             target_category=target_category,
+            changed_sections=list(changed_sections or ([changed_section] if changed_section else [])),
+            direction_id=direction_id,
+            direction_summary=direction_summary,
+            failure_mechanism=failure_mechanism,
+            intervention_type=intervention_type,
+            risk_level=risk_level,
+            expected_primary_metric=expected_primary_metric,
+            expected_tradeoff=expected_tradeoff,
         )
 
     monkeypatch.setattr("art_style_search.workflow.zero_step.run_experiment", fake_run_experiment)
@@ -350,7 +366,7 @@ def _apply_all_patches(monkeypatch, tmp_path: Path, ref_paths: list[Path]):
     )
 
     # 7. Mock validate_template (always valid)
-    def fake_validate_template(template, changed_section=""):
+    def fake_validate_template(template, changed_section="", changed_sections=None, risk_level="targeted"):
         return []
 
     monkeypatch.setattr("art_style_search.workflow.zero_step.validate_template", fake_validate_template)

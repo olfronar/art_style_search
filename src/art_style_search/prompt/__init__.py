@@ -32,7 +32,11 @@ from art_style_search.prompt._parse import (
     _parse_template_changes,
     validate_template,
 )
-from art_style_search.prompt.experiments import enforce_hypothesis_diversity, propose_experiments
+from art_style_search.prompt.experiments import (
+    enforce_hypothesis_diversity,
+    propose_experiments,
+    select_experiment_portfolio,
+)
 from art_style_search.prompt.initial import propose_initial_templates
 from art_style_search.prompt.review import review_iteration
 from art_style_search.prompt.synthesis import synthesize_templates
@@ -60,6 +64,7 @@ __all__ = [
     "propose_experiments",
     "propose_initial_templates",
     "review_iteration",
+    "select_experiment_portfolio",
     "synthesize_templates",
     "validate_template",
 ]

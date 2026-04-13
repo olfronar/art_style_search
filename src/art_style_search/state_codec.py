@@ -131,6 +131,9 @@ def style_profile_from_dict(d: dict[str, Any]) -> StyleProfile:
 
 
 def _iteration_result_from_dict(d: dict[str, Any]) -> IterationResult:
+    changed_sections = d.get("changed_sections")
+    if not changed_sections:
+        changed_sections = [d["changed_section"]] if d.get("changed_section") else []
     return IterationResult(
         branch_id=d["branch_id"],
         iteration=d["iteration"],
@@ -151,6 +154,14 @@ def _iteration_result_from_dict(d: dict[str, Any]) -> IterationResult:
         n_images_succeeded=d.get("n_images_succeeded", 0),
         changed_section=d.get("changed_section", ""),
         target_category=d.get("target_category", ""),
+        changed_sections=changed_sections,
+        direction_id=d.get("direction_id", ""),
+        direction_summary=d.get("direction_summary", ""),
+        failure_mechanism=d.get("failure_mechanism", ""),
+        intervention_type=d.get("intervention_type", ""),
+        risk_level=d.get("risk_level", "targeted"),
+        expected_primary_metric=d.get("expected_primary_metric", ""),
+        expected_tradeoff=d.get("expected_tradeoff", ""),
     )
 
 
@@ -166,6 +177,14 @@ def _hypothesis_from_dict(d: dict[str, Any]) -> Hypothesis:
         metric_delta=d.get("metric_delta", {}),
         kept=d["kept"],
         lesson=d.get("lesson", ""),
+        direction_id=d.get("direction_id", ""),
+        direction_summary=d.get("direction_summary", ""),
+        failure_mechanism=d.get("failure_mechanism", ""),
+        intervention_type=d.get("intervention_type", ""),
+        risk_level=d.get("risk_level", "targeted"),
+        expected_primary_metric=d.get("expected_primary_metric", ""),
+        expected_tradeoff=d.get("expected_tradeoff", ""),
+        changed_sections=d.get("changed_sections", []),
     )
 
 
@@ -186,6 +205,8 @@ def _category_progress_from_dict(d: dict[str, Any]) -> CategoryProgress:
         confirmed_insights=d.get("confirmed_insights", []),
         rejected_approaches=d.get("rejected_approaches", []),
         hypothesis_ids=d.get("hypothesis_ids", []),
+        last_mechanism_tried=d.get("last_mechanism_tried", ""),
+        last_confirmed_mechanism=d.get("last_confirmed_mechanism", ""),
     )
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-_SCHEMA_VERSION = 3  # v1: dino_similarity era, v2: vision+KB+rigorous, v3: changed_section+target_category
+_SCHEMA_VERSION = 4  # v1: dino_similarity era, v2: vision+KB+rigorous, v3: changed_section+target_category, v4: direction metadata
 _ITERATION_LOG_SCHEMA_VERSION = 1
 _MANIFEST_SCHEMA_VERSION = 3
 _PROMOTION_LOG_SCHEMA_VERSION = 1
@@ -33,16 +33,38 @@ def _migrate_iteration_result_payload(data: dict[str, Any]) -> dict[str, Any]:
             for score in data["per_image_scores"]
         ]
     data.setdefault("changed_section", "")
+    data.setdefault("changed_sections", [data["changed_section"]] if data.get("changed_section") else [])
     data.setdefault("target_category", "")
+    data.setdefault("direction_id", "")
+    data.setdefault("direction_summary", "")
+    data.setdefault("failure_mechanism", "")
+    data.setdefault("intervention_type", "")
+    data.setdefault("risk_level", "targeted")
+    data.setdefault("expected_primary_metric", "")
+    data.setdefault("expected_tradeoff", "")
     data.setdefault("vision_feedback", "")
     data.setdefault("roundtrip_feedback", "")
     data.setdefault("iteration_captions", [])
     return data
 
 
+def _migrate_hypothesis_payload(data: dict[str, Any]) -> dict[str, Any]:
+    data.setdefault("direction_id", "")
+    data.setdefault("direction_summary", "")
+    data.setdefault("failure_mechanism", "")
+    data.setdefault("intervention_type", "")
+    data.setdefault("risk_level", "targeted")
+    data.setdefault("expected_primary_metric", "")
+    data.setdefault("expected_tradeoff", "")
+    data.setdefault("changed_sections", [])
+    return data
+
+
 def _migrate_category_progress_payload(data: dict[str, Any]) -> dict[str, Any]:
     if "best_perceptual_delta" not in data and "best_dino_delta" in data:
         data["best_perceptual_delta"] = data.pop("best_dino_delta")
+    data.setdefault("last_mechanism_tried", "")
+    data.setdefault("last_confirmed_mechanism", "")
     return data
 
 
@@ -52,6 +74,11 @@ def _migrate_knowledge_base_payload(data: dict[str, Any]) -> dict[str, Any]:
         data["categories"] = {
             k: _migrate_category_progress_payload(dict(v)) if isinstance(v, dict) else v for k, v in categories.items()
         }
+    hypotheses = data.get("hypotheses", [])
+    if isinstance(hypotheses, list):
+        data["hypotheses"] = [
+            _migrate_hypothesis_payload(dict(h)) if isinstance(h, dict) else h for h in hypotheses
+        ]
     return data
 
 
@@ -65,6 +92,17 @@ def _migrate_state_payload(raw: dict[str, Any], version: int) -> dict[str, Any]:
         data.setdefault("feedback_refs", [])
         data.setdefault("silent_refs", [])
     if version < 3:
+        results = data.get("experiment_history", [])
+        data["experiment_history"] = [
+            _migrate_iteration_result_payload(dict(result)) if isinstance(result, dict) else result
+            for result in results
+        ]
+        last_results = data.get("last_iteration_results", [])
+        data["last_iteration_results"] = [
+            _migrate_iteration_result_payload(dict(result)) if isinstance(result, dict) else result
+            for result in last_results
+        ]
+    if version < 4:
         results = data.get("experiment_history", [])
         data["experiment_history"] = [
             _migrate_iteration_result_payload(dict(result)) if isinstance(result, dict) else result

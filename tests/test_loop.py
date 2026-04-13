@@ -558,6 +558,47 @@ class TestApplyIterationResult:
         assert state.best_metrics is original_best_metrics  # NOT changed
         assert state.current_template is result_b.template
 
+    def test_exploration_prefers_bold_candidate_over_plain_second_best(self, tmp_path: Path) -> None:
+        state = make_loop_state()
+        config = _make_config(tmp_path)
+        state.plateau_counter = 1
+
+        baseline_agg = _make_agg(dreamsim=0.70, color=0.50)
+        state.best_metrics = baseline_agg
+
+        agg_best = _make_agg(dreamsim=0.70, color=0.50)
+        agg_second = _make_agg(dreamsim=0.695, color=0.495)
+        agg_bold = _make_agg(dreamsim=0.685, color=0.49)
+        result_best = _make_result(branch_id=0, agg=agg_best)
+        result_second = _make_result(branch_id=1, agg=agg_second)
+        result_bold = _make_result(branch_id=2, agg=agg_bold)
+        result_second.risk_level = "targeted"
+        result_bold.risk_level = "bold"
+
+        baseline_score = composite_score(baseline_agg)
+        score_best = composite_score(agg_best)
+        score_second = composite_score(agg_second)
+        score_bold = composite_score(agg_bold)
+        eps = improvement_epsilon(baseline_score)
+
+        ranking = IterationRanking(
+            exp_results=[result_best, result_second, result_bold],
+            adaptive_scores={
+                id(result_best): score_best + 0.02,
+                id(result_second): score_second + 0.01,
+                id(result_bold): score_bold,
+            },
+            best_exp=result_best,
+            best_score=score_best,
+            baseline_score=baseline_score,
+            epsilon=eps,
+        )
+
+        _apply_iteration_result(state, ranking, config)
+
+        assert state.plateau_counter == 1
+        assert state.current_template is result_bold.template
+
 
 # ---------------------------------------------------------------------------
 # Rigorous-mode validation + template sanitization

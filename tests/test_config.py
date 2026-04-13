@@ -112,13 +112,16 @@ class TestDefaults:
         return parse_args(_base_args(tmp_path))
 
     def test_max_iterations(self, cfg: Config) -> None:
-        assert cfg.max_iterations == 20
+        assert cfg.max_iterations == 10
 
     def test_plateau_window(self, cfg: Config) -> None:
         assert cfg.plateau_window == 5
 
     def test_num_branches(self, cfg: Config) -> None:
         assert cfg.num_branches == 5
+
+    def test_raw_proposals(self, cfg: Config) -> None:
+        assert cfg.raw_proposals == 9
 
     def test_aspect_ratio(self, cfg: Config) -> None:
         assert cfg.aspect_ratio == "1:1"

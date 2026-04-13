@@ -64,7 +64,15 @@ async def _run_experiments_parallel(
             analysis=proposal.analysis,
             template_changes=proposal.template_changes,
             changed_section=proposal.changed_section,
+            changed_sections=proposal.changed_sections,
             target_category=proposal.target_category,
+            direction_id=proposal.direction_id,
+            direction_summary=proposal.direction_summary,
+            failure_mechanism=proposal.failure_mechanism,
+            intervention_type=proposal.intervention_type,
+            risk_level=proposal.risk_level,
+            expected_primary_metric=proposal.expected_primary_metric,
+            expected_tradeoff=proposal.expected_tradeoff,
             services=ctx.services,
         )
         for i, proposal in enumerate(proposals)

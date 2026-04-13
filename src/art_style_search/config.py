@@ -60,6 +60,7 @@ class Config:
     xai_api_key: str = ""
     comparison_provider: str = "gemini"  # "gemini" or "xai"
     comparison_model: str = ""
+    raw_proposals: int = 9
 
 
 def parse_args(argv: list[str] | None = None) -> Config:
@@ -78,11 +79,17 @@ def parse_args(argv: list[str] | None = None) -> Config:
 
     # Loop control
     loop = parser.add_argument_group("Loop Control")
-    loop.add_argument("--max-iterations", type=int, default=20, help="Maximum optimization iterations")
+    loop.add_argument("--max-iterations", type=int, default=10, help="Maximum optimization iterations")
     loop.add_argument(
         "--plateau-window", type=int, default=5, help="Iterations without improvement before branch stops"
     )
     loop.add_argument("--num-branches", type=int, default=5, help="Number of parallel population branches")
+    loop.add_argument(
+        "--raw-proposals",
+        type=int,
+        default=9,
+        help="Number of raw proposals per iteration before portfolio selection (8-12)",
+    )
 
     # Generation
     gen = parser.add_argument_group("Generation")
@@ -185,6 +192,8 @@ def _validate_and_build_config(args: argparse.Namespace, parser: argparse.Argume
     comparison_provider = args.comparison_provider
     if comparison_provider == "xai" and not xai_key:
         parser.error("XAI_API_KEY must be set via --xai-api-key or environment variable")
+    if not 8 <= args.raw_proposals <= 12:
+        parser.error("--raw-proposals must be between 8 and 12")
 
     # Default model based on provider
     default_models = {
@@ -241,4 +250,5 @@ def _validate_and_build_config(args: argparse.Namespace, parser: argparse.Argume
         xai_api_key=xai_key,
         comparison_provider=comparison_provider,
         comparison_model=comparison_model,
+        raw_proposals=args.raw_proposals,
     )

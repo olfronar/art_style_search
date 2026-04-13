@@ -30,7 +30,15 @@ class RefinementResult:
     builds_on: str | None
     open_problems: list[str]
     changed_section: str = ""
+    changed_sections: list[str] | None = None
     target_category: str = ""
+    direction_id: str = ""
+    direction_summary: str = ""
+    failure_mechanism: str = ""
+    intervention_type: str = ""
+    risk_level: str = "targeted"
+    expected_primary_metric: str = ""
+    expected_tradeoff: str = ""
 
 
 @dataclass
@@ -46,4 +54,12 @@ class ExperimentProposal:
     analysis: str = ""
     template_changes: str = ""
     changed_section: str = ""
+    changed_sections: list[str] | None = None
     target_category: str = ""
+    direction_id: str = ""
+    direction_summary: str = ""
+    failure_mechanism: str = ""
+    intervention_type: str = ""
+    risk_level: str = "targeted"
+    expected_primary_metric: str = ""
+    expected_tradeoff: str = ""
