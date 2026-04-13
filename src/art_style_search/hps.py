@@ -44,7 +44,7 @@ def _load_artifacts(device: str, hps_version: str):
         output_dict=True,
     )
     checkpoint_path = huggingface_hub.hf_hub_download(_HPS_REPO_ID, checkpoint_name)
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
     state_dict = checkpoint["state_dict"] if isinstance(checkpoint, dict) and "state_dict" in checkpoint else checkpoint
     model.load_state_dict(state_dict)
     model = model.to(device)

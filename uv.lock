@@ -119,7 +119,7 @@ requires-dist = [
     { name = "scikit-image", specifier = ">=0.22.0,<1.0" },
     { name = "scipy", specifier = ">=1.11.0,<2.0" },
     { name = "simple-aesthetics-predictor", specifier = ">=0.1.2,<1.0" },
-    { name = "torch", specifier = ">=2.1.0,<3.0" },
+    { name = "torch", specifier = ">=2.6.0,<3.0" },
     { name = "torchvision", specifier = ">=0.16.0,<1.0" },
     { name = "transformers", specifier = ">=4.40.0,<5.0" },
     { name = "zai-sdk", specifier = ">=0.2.0,<1.0" },

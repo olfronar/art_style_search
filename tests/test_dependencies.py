@@ -3,6 +3,8 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
+from packaging.version import Version
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -26,3 +28,20 @@ def test_uv_lock_has_no_hpsv2_or_protobuf() -> None:
 
     assert "hpsv2" not in package_names
     assert "protobuf" not in package_names
+
+
+def test_pyproject_requires_torch_2_6_or_newer() -> None:
+    pyproject = _load_toml(REPO_ROOT / "pyproject.toml")
+    dependencies = pyproject["project"]["dependencies"]
+
+    torch_specs = [dependency for dependency in dependencies if dependency.startswith("torch>=")]
+
+    assert torch_specs
+    assert any(spec.startswith("torch>=2.6.0") for spec in torch_specs)
+
+
+def test_uv_lock_uses_torch_2_6_or_newer() -> None:
+    lock = _load_toml(REPO_ROOT / "uv.lock")
+    torch_package = next(package for package in lock["package"] if package["name"] == "torch")
+
+    assert Version(torch_package["version"]) >= Version("2.6.0")
