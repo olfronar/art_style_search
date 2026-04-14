@@ -208,7 +208,7 @@ _MAX_SECTIONS = 15
 _MIN_CAPTION_LENGTH = 200
 _MAX_CAPTION_LENGTH = 1200
 _MIN_RENDERED_WORDS = 1200
-_MAX_RENDERED_WORDS = 1800
+_MAX_RENDERED_WORDS = 2500
 
 # Ordered anchor requirements for sections and caption sections.  Adding a third
 # required anchor means one-line edits here — the validator iterates both tables.

@@ -45,7 +45,7 @@ _BASE_REQUIREMENTS = (
     "2. Second section MUST be 'subject_anchor' — produces the [Subject] block (identity, features, pose; "
     "most important for reproduction).\n"
     "3. caption_sections MUST start with ['Art Style', 'Subject', ...].\n"
-    "4. Total rendered template MUST be 1200-1800 words across 8-15 sections (4-8 sentences each).\n"
+    "4. Total rendered template MUST be 1200-2500 words across 8-15 sections (4-8 sentences each).\n"
 )
 
 
@@ -145,7 +145,7 @@ def _expand_system() -> str:
         "cover technique/medium, lighting, mood, textures, and a negative-instruction section.\n"
         "- Each section embeds the relevant style rules from the Style Profile as literal text the captioner "
         "should repeat verbatim, then layers per-image observations on top.\n"
-        "- Total rendered template MUST be 1200-1800 words.\n\n"
+        "- Total rendered template MUST be 1200-2500 words.\n\n"
         "## Output format\n"
         "Return EXACTLY one JSON object — a single PromptTemplate. No markdown fences. No commentary.\n"
         "Required keys: sections (list of {name,description,value}), negative_prompt (string), "
@@ -157,7 +157,7 @@ def _expand_system() -> str:
 def _expand_user(sketch: InitialTemplateSketch, style_profile: StyleProfile) -> str:
     return (
         "Expand the following sketch into a complete meta-prompt. The sketch defines the approach; "
-        "you must realize it in a 1200-1800 word template that obeys all anchor rules.\n\n"
+        "you must realize it in a 1200-2500 word template that obeys all anchor rules.\n\n"
         "## Sketch to Expand\n"
         f"{_render_sketch(sketch, 0)}\n"
         "## Style Profile\n"

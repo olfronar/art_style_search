@@ -14,6 +14,7 @@ from art_style_search.prompt._format import (
     format_knowledge_base,
     suggest_target_categories,
 )
+from art_style_search.prompt._parse import _MAX_RENDERED_WORDS, _MIN_RENDERED_WORDS
 from art_style_search.prompt.json_contracts import (
     schema_hint,
     validate_brainstorm_payload,
@@ -116,7 +117,7 @@ def _experiment_system_prompt(
             "Captions serve TWO purposes: (1) recreate the image faithfully, (2) embed REUSABLE art-style guidance in labeled sections.\n"
             "Embed core style rules as literal text the captioner repeats verbatim, plus per-image observations.\n\n"
             "### Meta-prompt structure\n"
-            "8-15 sections, each 4-8 sentences, 1200-1800 words total. Cover: colors, technique, characters, background, composition, lighting, textures, mood, and what to AVOID.\n\n"
+            "8-15 sections, each 4-8 sentences, 1200-2500 words total. Cover: colors, technique, characters, background, composition, lighting, textures, mood, and what to AVOID.\n\n"
             "### Caption output structure\n"
             "First: [Art Style] (shared rules, identical across captions). Second: [Subject] (image-specific, 80-140 words). Remaining: your choice — the optimization surface.\n\n"
             "### Metrics\n"
@@ -193,7 +194,7 @@ def _expand_system(current_template: PromptTemplate, *, is_first_iteration: bool
             "- [ ] changed_sections[0] == changed_section\n"
             "- [ ] First template section is 'style_foundation', second is 'subject_anchor'\n"
             "- [ ] caption_sections starts with ['Art Style', 'Subject']\n"
-            "- [ ] Total rendered template is 1200-1800 words\n\n"
+            "- [ ] Total rendered template is 1200-2500 words\n\n"
             "Critical field types:\n"
             "- analysis: one string field, never an array\n"
             '- lessons: one JSON object with keys {"confirmed","rejected","new_insight"}, each a string\n'
@@ -407,8 +408,8 @@ def _validate_expanded_template(result: RefinementResult, incumbent: PromptTempl
     # Check word count
     rendered = tmpl.render()
     word_count = len(rendered.split())
-    if word_count < 1200 or word_count > 1800:
-        issues.append(f"Rendered template is {word_count} words (target: 1200-1800)")
+    if word_count < _MIN_RENDERED_WORDS or word_count > _MAX_RENDERED_WORDS:
+        issues.append(f"Rendered template is {word_count} words (target: {_MIN_RENDERED_WORDS}-{_MAX_RENDERED_WORDS})")
 
     # Check changed_sections consistency
     if result.changed_sections and result.changed_section and result.changed_sections[0] != result.changed_section:

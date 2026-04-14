@@ -93,7 +93,7 @@ _COMPILATION_PROMPT = (
     "- Each section value should be detailed (4-8 sentences) and EMBED the core style rules "
     "from the StyleProfile as literal text that the captioner weaves into every caption. "
     "Why: embedding rules as literal text ensures the captioner repeats them verbatim rather than interpreting them.\n"
-    "- Total rendered meta-prompt should be 1200-1800 words.\n"
+    "- Total rendered meta-prompt should be 1200-2500 words.\n"
     "- The negative prompt should target common failure modes the reasoning model identified.\n"
     '- Include the JSON key "caption_sections": an ordered list of labeled sections '
     'the captioner should produce in its output (e.g. ["Art Style", "Subject", "Color Palette"]).\n'
