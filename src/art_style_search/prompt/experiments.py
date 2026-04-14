@@ -516,16 +516,20 @@ async def rank_experiment_sketches(
 ) -> list[ExperimentSketch]:
     if len(sketches) <= 1:
         return list(sketches)
-    ranked_indices = await client.call_json(
-        model=model,
-        system=_rank_system(),
-        user=_rank_user(sketches, knowledge_base, best_metrics),
-        validator=lambda data: validate_ranking_payload(data, num_sketches=len(sketches)),
-        response_name="ranking",
-        schema_hint=schema_hint("ranking"),
-        max_tokens=1000,
-        repair_retries=1,
-    )
+    try:
+        ranked_indices = await client.call_json(
+            model=model,
+            system=_rank_system(),
+            user=_rank_user(sketches, knowledge_base, best_metrics),
+            validator=lambda data: validate_ranking_payload(data, num_sketches=len(sketches)),
+            response_name="ranking",
+            schema_hint=schema_hint("ranking"),
+            max_tokens=1000,
+            repair_retries=1,
+        )
+    except Exception as exc:
+        logger.warning("Ranking failed; falling back to brainstorm order: %s: %s", type(exc).__name__, exc)
+        return list(sketches)
     return [sketches[idx] for idx in ranked_indices]
 
 

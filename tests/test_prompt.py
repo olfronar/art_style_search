@@ -19,6 +19,7 @@ from art_style_search.prompt import (
     _parse_template,
     _parse_template_changes,
     propose_experiments,
+    rank_experiment_sketches,
     validate_template,
 )
 from art_style_search.prompt.json_contracts import (
@@ -858,3 +859,46 @@ class TestProposeExperiments:
         assert "changed_sections must use concrete template section names" in system
         assert "caption_sections" in system
         assert "caption_length_target" in system
+
+
+class TestRankExperimentSketches:
+    @pytest.mark.asyncio
+    async def test_falls_back_to_original_order_when_ranking_json_fails(self, caplog) -> None:
+        sketches = [
+            contracts.ExperimentSketch(
+                hypothesis="First sketch",
+                target_category="subject_anchor",
+                failure_mechanism="identity drift",
+                intervention_type="information_priority",
+                direction_id="D1",
+                direction_summary="Direction D1",
+                risk_level="targeted",
+                expected_primary_metric="vision_subject",
+            ),
+            contracts.ExperimentSketch(
+                hypothesis="Second sketch",
+                target_category="composition",
+                failure_mechanism="layout drift",
+                intervention_type="section_schema",
+                direction_id="D2",
+                direction_summary="Direction D2",
+                risk_level="bold",
+                expected_primary_metric="vision_composition",
+            ),
+        ]
+
+        class FakeClient:
+            async def call_json(self, **kwargs):
+                raise RuntimeError("ranking validation failed after repair")
+
+        with caplog.at_level("WARNING"):
+            ranked = await rank_experiment_sketches(
+                sketches,
+                KnowledgeBase(),
+                None,
+                client=FakeClient(),  # type: ignore[arg-type]
+                model="fake-model",
+            )
+
+        assert ranked == sketches
+        assert "Ranking failed; falling back to brainstorm order" in caplog.text
