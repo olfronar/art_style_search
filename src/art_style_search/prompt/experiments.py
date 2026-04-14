@@ -594,7 +594,7 @@ async def rank_experiment_sketches(
             validator=lambda data: validate_ranking_payload(data, num_sketches=len(sketches)),
             response_name="ranking",
             schema_hint=schema_hint("ranking"),
-            max_tokens=1000,
+            max_tokens=10000,
             repair_retries=1,
             final_failure_log_level=logging.INFO,
         )

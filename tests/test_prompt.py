@@ -23,6 +23,7 @@ from art_style_search.prompt import (
     propose_experiments,
     propose_initial_templates,
     rank_experiment_sketches,
+    rank_initial_sketches,
     synthesize_templates,
     validate_template,
 )
@@ -1200,7 +1201,87 @@ class TestPromptSurfaceExamples:
         assert '"caption_sections": ["Art Style", "Subject"' in system
 
 
+class TestRankInitialSketches:
+    @pytest.mark.asyncio
+    async def test_uses_ten_thousand_token_budget_for_ranking(self) -> None:
+        sketches = [
+            contracts.InitialTemplateSketch(
+                approach_summary="First sketch",
+                emphasis="technique",
+                instruction_style="checklist",
+                caption_length_target=500,
+                caption_sections=["Art Style", "Subject", "Technique"],
+                distinguishing_feature="Forces subject fidelity first.",
+            ),
+            contracts.InitialTemplateSketch(
+                approach_summary="Second sketch",
+                emphasis="palette",
+                instruction_style="hybrid",
+                caption_length_target=700,
+                caption_sections=["Art Style", "Subject", "Color Palette"],
+                distinguishing_feature="Pushes explicit palette transfer.",
+            ),
+        ]
+        captured: dict[str, object] = {}
+
+        class FakeClient:
+            async def call_json(self, **kwargs):
+                captured.update(kwargs)
+                return [1, 0]
+
+        ranked = await rank_initial_sketches(
+            sketches,
+            client=FakeClient(),  # type: ignore[arg-type]
+            model="fake-model",
+        )
+
+        assert ranked == [sketches[1], sketches[0]]
+        assert captured["max_tokens"] == 10000
+
+
 class TestRankExperimentSketches:
+    @pytest.mark.asyncio
+    async def test_uses_ten_thousand_token_budget_for_ranking(self) -> None:
+        sketches = [
+            contracts.ExperimentSketch(
+                hypothesis="First sketch",
+                target_category="subject_anchor",
+                failure_mechanism="identity drift",
+                intervention_type="information_priority",
+                direction_id="D1",
+                direction_summary="Direction D1",
+                risk_level="targeted",
+                expected_primary_metric="vision_subject",
+            ),
+            contracts.ExperimentSketch(
+                hypothesis="Second sketch",
+                target_category="composition",
+                failure_mechanism="layout drift",
+                intervention_type="section_schema",
+                direction_id="D2",
+                direction_summary="Direction D2",
+                risk_level="bold",
+                expected_primary_metric="vision_composition",
+            ),
+        ]
+        captured: dict[str, object] = {}
+
+        class FakeClient:
+            async def call_json(self, **kwargs):
+                captured.update(kwargs)
+                return [1, 0]
+
+        ranked = await rank_experiment_sketches(
+            sketches,
+            KnowledgeBase(),
+            None,
+            client=FakeClient(),  # type: ignore[arg-type]
+            model="fake-model",
+        )
+
+        assert ranked == [sketches[1], sketches[0]]
+        assert captured["max_tokens"] == 10000
+
     @pytest.mark.asyncio
     async def test_falls_back_to_original_order_when_ranking_json_fails(self, caplog) -> None:
         sketches = [
