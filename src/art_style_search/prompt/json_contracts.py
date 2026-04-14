@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from art_style_search.contracts import ExperimentSketch, Lessons, RefinementResult
+from art_style_search.contracts import ExperimentSketch, InitialTemplateSketch, Lessons, RefinementResult
 from art_style_search.prompt._parse import validate_template
 from art_style_search.types import PromptSection, PromptTemplate, ReviewResult, StyleProfile
 from art_style_search.utils import CATEGORY_SYNONYMS
@@ -187,17 +187,36 @@ def _validate_template_or_raise(template: PromptTemplate, *, label: str) -> Prom
     return template
 
 
-def validate_initial_templates_payload(data: object, *, num_branches: int) -> list[PromptTemplate]:
-    obj = _require_dict(data, label="initial_templates_response")
-    templates = [
-        payload_to_template(item, label=f"templates[{i}]")
-        for i, item in enumerate(_require_list(obj.get("templates") or [], label="templates"))
+def _initial_sketch_from_payload(data: object, *, label: str) -> InitialTemplateSketch:
+    obj = _require_dict(data, label=label)
+    caption_sections = _as_str_list(obj.get("caption_sections") or [], label=f"{label}.caption_sections")
+    return InitialTemplateSketch(
+        approach_summary=_as_str(obj.get("approach_summary"), label=f"{label}.approach_summary"),
+        emphasis=_as_str(obj.get("emphasis"), label=f"{label}.emphasis"),
+        instruction_style=_as_str(obj.get("instruction_style"), label=f"{label}.instruction_style"),
+        caption_length_target=_as_int(
+            obj.get("caption_length_target"),
+            label=f"{label}.caption_length_target",
+            default=0,
+        ),
+        caption_sections=caption_sections,
+        distinguishing_feature=_as_str(obj.get("distinguishing_feature"), label=f"{label}.distinguishing_feature"),
+    )
+
+
+def validate_initial_brainstorm_payload(data: object, *, num_sketches: int) -> list[InitialTemplateSketch]:
+    obj = _require_dict(data, label="initial_brainstorm_response")
+    sketches_raw = _require_list(obj.get("sketches") or [], label="sketches")
+    sketches = [
+        _initial_sketch_from_payload(item, label=f"sketches[{i}]") for i, item in enumerate(sketches_raw[:num_sketches])
     ]
-    if not templates:
-        raise ValueError("templates must contain at least one template")
-    while len(templates) < num_branches:
-        templates.append(templates[-1])
-    return templates[:num_branches]
+    if not sketches:
+        raise ValueError("sketches must contain at least one entry")
+    return sketches
+
+
+def validate_initial_expansion_payload(data: object) -> PromptTemplate:
+    return _validate_template_or_raise(payload_to_template(data, label="initial_expansion_response"), label="template")
 
 
 def _refinement_result_from_payload(data: object, *, label: str) -> RefinementResult:
@@ -368,20 +387,28 @@ def validate_style_compilation_payload(
 
 
 _SCHEMA_HINTS = {
-    "initial_templates": {
-        "templates": [
+    "initial_brainstorm": {
+        "sketches": [
             {
-                "sections": [
-                    {"name": "style_foundation", "description": "core style rules", "value": "..."},
-                    {"name": "subject_anchor", "description": "subject fidelity instructions", "value": "..."},
-                    {"name": "color_palette", "description": "palette guidance", "value": "..."},
-                    {"name": "composition", "description": "layout guidance", "value": "..."},
-                ],
-                "negative_prompt": "...",
-                "caption_sections": ["Art Style", "Subject", "Color Palette"],
+                "approach_summary": "subject-first strict checklist",
+                "emphasis": "technique",
+                "instruction_style": "checklist",
                 "caption_length_target": 500,
+                "caption_sections": ["Art Style", "Subject", "Color Palette", "Composition"],
+                "distinguishing_feature": "Terse imperative checklists; compact sections; subject facets enumerated.",
             }
         ]
+    },
+    "initial_expansion": {
+        "sections": [
+            {"name": "style_foundation", "description": "core style rules", "value": "..."},
+            {"name": "subject_anchor", "description": "subject fidelity instructions", "value": "..."},
+            {"name": "color_palette", "description": "palette guidance", "value": "..."},
+            {"name": "composition", "description": "layout guidance", "value": "..."},
+        ],
+        "negative_prompt": "...",
+        "caption_sections": ["Art Style", "Subject", "Color Palette"],
+        "caption_length_target": 500,
     },
     "brainstorm": {
         "sketches": [

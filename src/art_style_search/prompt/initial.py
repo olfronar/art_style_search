@@ -1,15 +1,259 @@
-"""Zero-step: propose N diverse initial meta-prompt templates."""
+"""Zero-step: brainstorm initial-template sketches, rank them, then expand survivors in parallel."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
+from art_style_search.contracts import InitialTemplateSketch
 from art_style_search.prompt._format import _format_style_profile
-from art_style_search.prompt.json_contracts import schema_hint, validate_initial_templates_payload
+from art_style_search.prompt.json_contracts import (
+    schema_hint,
+    validate_initial_brainstorm_payload,
+    validate_initial_expansion_payload,
+    validate_ranking_payload,
+)
 from art_style_search.types import PromptTemplate, StyleProfile
 from art_style_search.utils import ReasoningClient
 
 logger = logging.getLogger(__name__)
+
+
+_BRAINSTORM_EXAMPLE = (
+    "## Example of a good sketch\n"
+    '{"approach_summary":"subject-first strict checklist",'
+    '"emphasis":"technique","instruction_style":"checklist","caption_length_target":500,'
+    '"caption_sections":["Art Style","Subject","Color Palette","Composition","Lighting","Texture"],'
+    '"distinguishing_feature":"Terse imperative bullets per section; subject facets enumerated '
+    '(species, clothing, pose, expression, props) to force identity specificity over style language."}\n\n'
+    "## Example of a bad sketch (too vague — avoid this)\n"
+    '{"approach_summary":"comprehensive","emphasis":"general","instruction_style":"detailed",'
+    '"caption_length_target":500,"caption_sections":["Art Style","Subject"],'
+    '"distinguishing_feature":"better than baseline"}'
+)
+
+
+_BASE_REQUIREMENTS = (
+    "## Goal\n"
+    "We are designing META-PROMPTS — instructions that tell Gemini Pro HOW to caption reference images. "
+    "Captions serve TWO purposes: (1) recreate the image faithfully, (2) embed REUSABLE art-style guidance "
+    "in labeled sections so the same style can be applied to new subjects.\n\n"
+    "Pipeline: meta-prompt + reference -> Gemini Pro caption -> Gemini Flash generation -> compare with original.\n\n"
+    "## NON-NEGOTIABLE structural rules (every expanded template must obey)\n"
+    "1. First section MUST be 'style_foundation' — produces the [Art Style] block (shared style DNA, "
+    "identical across captions, measured by style_consistency).\n"
+    "2. Second section MUST be 'subject_anchor' — produces the [Subject] block (identity, features, pose; "
+    "most important for reproduction).\n"
+    "3. caption_sections MUST start with ['Art Style', 'Subject', ...].\n"
+    "4. Total rendered template MUST be 1200-1800 words across 8-15 sections (4-8 sentences each).\n"
+)
+
+
+def _render_sketch(sketch: InitialTemplateSketch, idx: int) -> str:
+    return (
+        f"### Sketch {idx}\n"
+        f"- approach_summary: {sketch.approach_summary}\n"
+        f"- emphasis: {sketch.emphasis}\n"
+        f"- instruction_style: {sketch.instruction_style}\n"
+        f"- caption_length_target: {sketch.caption_length_target}\n"
+        f"- caption_sections: {', '.join(sketch.caption_sections)}\n"
+        f"- distinguishing_feature: {sketch.distinguishing_feature}\n"
+    )
+
+
+def _brainstorm_system(num_sketches: int) -> str:
+    return (
+        "You are an expert art director and prompt engineer designing diverse initial meta-prompts.\n\n"
+        f"{_BASE_REQUIREMENTS}\n"
+        "## Your task — BRAINSTORM ONLY\n"
+        f"Produce {num_sketches} short, lightweight sketches that describe DIFFERENT approaches to the meta-prompt. "
+        "Do NOT write the full template yet — that happens later. Each sketch is a one-paragraph design intent.\n\n"
+        "## Sketch fields (every sketch must have ALL of these)\n"
+        "- approach_summary: short phrase naming the variant (e.g. 'subject-first strict checklist')\n"
+        "- emphasis: what the variant optimizes for — one of {technique, spatial, mood, balanced, palette}\n"
+        "- instruction_style: how the captioner is addressed — one of {checklist, artistic_direction, "
+        "technical_analysis, hybrid}\n"
+        "- caption_length_target: integer word count target for captions (200-1200, vary across sketches)\n"
+        "- caption_sections: ordered list, MUST start with ['Art Style', 'Subject', ...] then 4-10 more "
+        "section names of your choosing (these become labeled blocks like [Color Palette] in captions)\n"
+        "- distinguishing_feature: 1-2 sentences explaining what makes THIS sketch's approach different from "
+        "the others; what mechanism is it betting on?\n\n"
+        "## Diversity requirements\n"
+        "- Vary caption_length_target meaningfully (some short ~300, some long ~900)\n"
+        "- Vary the caption_sections set/ordering after the two anchors\n"
+        "- Vary instruction_style — don't make every sketch a checklist\n"
+        "- Vary emphasis — at least 3 different emphasis values across the batch\n"
+        "- Each distinguishing_feature must articulate a SPECIFIC mechanism, not a generic 'better' claim\n\n"
+        f"{_BRAINSTORM_EXAMPLE}\n\n"
+        "## Output format\n"
+        f"Return EXACTLY one JSON object with a 'sketches' array of length {num_sketches}. "
+        "No markdown fences. No commentary."
+    )
+
+
+def _brainstorm_user(style_profile: StyleProfile, num_sketches: int) -> str:
+    return (
+        "Based on the following style profile of the reference images, brainstorm "
+        f"{num_sketches} diverse meta-prompt sketches.\n\n"
+        f"{_format_style_profile(style_profile)}"
+    )
+
+
+def _rank_system() -> str:
+    return (
+        "You rank initial meta-prompt sketches by expected quality after expansion.\n\n"
+        "Rank by these criteria in priority order:\n"
+        "1. **Mechanism specificity**: Does the distinguishing_feature articulate a concrete mechanism, "
+        "not a vague 'better' claim?\n"
+        "2. **Diversity contribution**: Does this sketch contribute approach diversity (instruction_style, "
+        "emphasis, caption_length) the others lack?\n"
+        "3. **Anchor compatibility**: caption_sections starts with ['Art Style', 'Subject', ...] and the "
+        "remaining sections are coherent.\n\n"
+        "Return JSON only. No markdown fences. No commentary.\n"
+        "Output zero-based indices in best-to-worst order. Include every sketch at most once.\n"
+        'Preferred exact wire shape: {"ranked_indices":[2,7,0,5]}'
+    )
+
+
+def _rank_user(sketches: list[InitialTemplateSketch]) -> str:
+    parts = ["## Candidate Sketches\n"]
+    parts.extend(_render_sketch(sketch, idx) for idx, sketch in enumerate(sketches))
+    parts.append(
+        f"\n\nValid indices are 0 through {len(sketches) - 1}.\n"
+        'Return JSON only in the exact shape {"ranked_indices":[...]}.'
+    )
+    return "".join(parts)
+
+
+def _expand_system() -> str:
+    return (
+        "You are an expert art director. Expand a single initial-template sketch into a complete meta-prompt.\n\n"
+        f"{_BASE_REQUIREMENTS}\n"
+        "## Your task — EXPAND ONE SKETCH\n"
+        "Produce ONE complete PromptTemplate that realizes the sketch's approach. Honor the sketch's "
+        "approach_summary, emphasis, instruction_style, caption_length_target, caption_sections, and "
+        "distinguishing_feature — these are your design contract.\n\n"
+        "## Section requirements\n"
+        "- 8-15 sections, each 4-8 sentences of instruction.\n"
+        "- First section MUST be 'style_foundation'; it instructs the captioner to open every caption "
+        "with a [Art Style] block containing FIXED, REUSABLE style rules copied verbatim from the Style Profile. "
+        "This block must be nearly IDENTICAL across all captions (shared style DNA).\n"
+        "- Second section MUST be 'subject_anchor'; it instructs the captioner to produce a [Subject] block "
+        "covering identity/species, distinguishing features, clothing/equipment, pose/action, expression, props.\n"
+        "- The remaining sections come from the sketch's caption_sections (after Art Style/Subject) — "
+        "create one template section per labeled caption section, plus any additional sections needed to "
+        "cover technique/medium, lighting, mood, textures, and a negative-instruction section.\n"
+        "- Each section embeds the relevant style rules from the Style Profile as literal text the captioner "
+        "should repeat verbatim, then layers per-image observations on top.\n"
+        "- Total rendered template MUST be 1200-1800 words.\n\n"
+        "## Output format\n"
+        "Return EXACTLY one JSON object — a single PromptTemplate. No markdown fences. No commentary.\n"
+        "Required keys: sections (list of {name,description,value}), negative_prompt (string), "
+        "caption_sections (list of strings starting with ['Art Style','Subject',...]), "
+        "caption_length_target (integer)."
+    )
+
+
+def _expand_user(sketch: InitialTemplateSketch, style_profile: StyleProfile) -> str:
+    return (
+        "Expand the following sketch into a complete meta-prompt. The sketch defines the approach; "
+        "you must realize it in a 1200-1800 word template that obeys all anchor rules.\n\n"
+        "## Sketch to Expand\n"
+        f"{_render_sketch(sketch, 0)}\n"
+        "## Style Profile\n"
+        f"{_format_style_profile(style_profile)}"
+    )
+
+
+async def brainstorm_initial_sketches(
+    style_profile: StyleProfile,
+    *,
+    client: ReasoningClient,
+    model: str,
+    num_sketches: int,
+) -> list[InitialTemplateSketch]:
+    """Brainstorm short sketches describing diverse meta-prompt approaches (one call)."""
+    system = _brainstorm_system(num_sketches)
+    user = _brainstorm_user(style_profile, num_sketches)
+    logger.info("Brainstorming %d initial-template sketches (%s)", num_sketches, model)
+    sketches = await client.call_json(
+        model=model,
+        system=system,
+        user=user,
+        validator=lambda data: validate_initial_brainstorm_payload(data, num_sketches=num_sketches),
+        response_name="initial_brainstorm",
+        schema_hint=schema_hint("initial_brainstorm"),
+        max_tokens=40000,
+        repair_retries=2,
+    )
+    if not sketches:
+        logger.warning("No valid sketches parsed from initial brainstorm response")
+    return sketches
+
+
+async def rank_initial_sketches(
+    sketches: list[InitialTemplateSketch],
+    *,
+    client: ReasoningClient,
+    model: str,
+) -> list[InitialTemplateSketch]:
+    """Reorder sketches by expected expansion quality. Falls back to original order on failure."""
+    if len(sketches) <= 1:
+        return list(sketches)
+    try:
+        ranked_indices = await client.call_json(
+            model=model,
+            system=_rank_system(),
+            user=_rank_user(sketches),
+            validator=lambda data: validate_ranking_payload(data, num_sketches=len(sketches)),
+            response_name="initial_ranking",
+            schema_hint=schema_hint("ranking"),
+            max_tokens=1000,
+            repair_retries=1,
+            final_failure_log_level=logging.INFO,
+        )
+    except Exception as exc:
+        logger.info("Initial ranking failed; falling back to brainstorm order: %s: %s", type(exc).__name__, exc)
+        return list(sketches)
+    return [sketches[idx] for idx in ranked_indices]
+
+
+async def expand_initial_sketches(
+    sketches: list[InitialTemplateSketch],
+    style_profile: StyleProfile,
+    *,
+    client: ReasoningClient,
+    model: str,
+) -> list[PromptTemplate | None]:
+    """Expand each sketch into a full template in parallel. Failed expansions return None."""
+    if not sketches:
+        return []
+    system = _expand_system()
+    tasks = [
+        client.call_json(
+            model=model,
+            system=system,
+            user=_expand_user(sketch, style_profile),
+            validator=validate_initial_expansion_payload,
+            response_name=f"initial_expansion_{idx}",
+            schema_hint=schema_hint("initial_expansion"),
+            max_tokens=16000,
+            repair_retries=1,
+        )
+        for idx, sketch in enumerate(sketches)
+    ]
+    raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+    results: list[PromptTemplate | None] = []
+    failures = 0
+    for raw in raw_results:
+        if isinstance(raw, BaseException):
+            failures += 1
+            logger.warning("Initial expansion failed: %s: %s", type(raw).__name__, raw)
+            results.append(None)
+            continue
+        results.append(raw)
+    logger.info("Initial expansion finished: %d/%d succeeded", len(sketches) - failures, len(sketches))
+    return results
 
 
 async def propose_initial_templates(
@@ -19,123 +263,35 @@ async def propose_initial_templates(
     client: ReasoningClient,
     model: str,
 ) -> list[PromptTemplate]:
-    """Generate diverse initial prompt templates for population branches."""
-
-    system = (
-        "You are an expert art director and prompt engineer. Your task is to create "
-        "diverse META-PROMPTS — instructions that tell an AI vision model (Gemini Pro) "
-        "HOW to describe/caption reference images.\n\n"
-        "## Goal\n"
-        "The captions produced must serve a DUAL purpose:\n"
-        "1. Contain enough detail to RECREATE the original image (we measure this with metrics).\n"
-        "2. Embed REUSABLE art-style guidance — labeled sections with style rules, color palette, "
-        "technique descriptions, etc. — that can later be applied to generate NEW art in the same style "
-        "with different subjects.\n\n"
-        "## How the system works\n"
-        "meta-prompt + reference image → Gemini Pro caption → Gemini Flash generation → compare with original.\n"
-        "The meta-prompt is the ONLY thing being optimized. It must instruct the captioner "
-        "to describe every detail needed for faithful recreation AND embed the art-style guidance "
-        "from the Style Profile into every caption as reusable style rules.\n\n"
-        "## Meta-prompt requirements\n"
-        "- 8-15 sections, each instructing the captioner WHAT to describe and HOW precisely.\n"
-        "- Must cover: technique/medium, colors, composition, characters/figures, "
-        "background/environment, textures/details, lighting, mood/atmosphere.\n"
-        "- Sections should EMBED the core style rules from the Style Profile as literal text — "
-        "the captioner should weave these rules into every caption as a shared style foundation, "
-        "then add per-image observations on top. "
-        "Why: embedding rules as literal text ensures the captioner repeats them verbatim.\n"
-        "- Each section should be 4-8 sentences of instruction.\n"
-        "- Total rendered meta-prompt should be 1200-1800 words.\n"
-        "- Include a negative section: what the captioner should tell the generator to AVOID. "
-        "Why: negative constraints prevent common AI generation artifacts.\n\n"
-        "## MANDATORY: Anchor sections\n"
-        "Every template MUST include a section named 'style_foundation' as the FIRST section. "
-        "This section instructs the captioner to open every caption with an [Art Style] block "
-        "containing FIXED, REUSABLE style rules copied verbatim from the Style Profile. "
-        "The [Art Style] block must be nearly IDENTICAL across all captions — it is the shared "
-        "style DNA that enables generating new art in the same style with different subjects. "
-        "Keep this section first and reusable, but you MAY refine its wording and specificity.\n"
-        "Every template MUST also include a section named 'subject_anchor' as the SECOND section. "
-        "It instructs the captioner to produce a [Subject] block immediately after [Art Style], covering "
-        "identity/species, distinguishing features, clothing/equipment, pose/action, expression, "
-        "and props/context with concrete detail. Keep this section second, but you MAY refine its wording.\n\n"
-        "## Caption output structure\n"
-        "The meta-prompt must instruct the captioner to produce captions with LABELED SECTIONS. "
-        "The FIRST section must always be [Art Style] (the shared style block). "
-        "The SECOND section must always be [Subject]. "
-        "You decide the remaining sections and their order — that is part of experimentation.\n"
-        '- Specify the caption output sections in the JSON key "caption_sections" (ordered list of strings). '
-        "The first two entries MUST be 'Art Style' and 'Subject'.\n"
-        '- Specify the target caption length in the JSON key "caption_length_target" (word count).\n'
-        "- The [Art Style] section should be IDENTICAL across captions (shared style rules). "
-        "The [Subject] section should be image-specific and rich enough for faithful subject reconstruction. "
-        "Target roughly 80-140 words for [Subject]. All remaining sections contain per-image specific observations.\n"
-        "- A style_consistency metric measures how similar the [Art Style] blocks are across "
-        "captions — higher consistency is rewarded in the composite score.\n\n"
-        "## Example of a good meta-prompt section\n"
-        '<section name="colors_and_palette" description="instruct captioner on color description '
-        'with embedded style rules">'
-        "This art style uses a warm earth-tone palette dominated by burnt sienna, raw umber, "
-        "and cadmium yellow, with cool accents of cerulean blue. Saturation is moderate — colors "
-        "feel muted and aged rather than vibrant. "
-        "When describing the image, note the EXACT colors visible using specific color names "
-        "(not just 'brown' or 'yellow'). Describe the overall color temperature, saturation levels, "
-        "and how colors relate to each other. Note any gradients, color transitions, or areas where "
-        "the palette deviates from the core warm-earth foundation. "
-        "In your [Color Palette] section, first state the core style palette rules, then describe "
-        "how this specific image applies or varies from them."
-        "</section>\n\n"
-        "## Diversity across meta-prompts\n"
-        "- Vary the set of caption output section names and their ordering.\n"
-        "- Vary caption length targets (e.g. 400, 600, 800 words).\n"
-        "- Vary emphasis: some focus on technique precision, others on spatial accuracy, "
-        "others on mood fidelity.\n"
-        "- Vary the balance between shared style guidance vs per-image detail.\n"
-        "- Vary instruction style: some give the captioner strict checklists, "
-        "others give artistic direction, others ask for technical analysis.\n"
-        "- All must be comprehensive — diversity is in approach, not coverage.\n\n"
-        "## EXECUTION CHECKLIST — verify before outputting\n"
-        "- [ ] Every template has 8-15 sections\n"
-        "- [ ] First section is 'style_foundation', second is 'subject_anchor' in every template\n"
-        "- [ ] Every template's caption_sections starts with ['Art Style', 'Subject', ...]\n"
-        "- [ ] Total rendered word count per template is 1200-1800\n"
-        "- [ ] Negative prompt is included in every template\n"
-        "- [ ] Templates are genuinely diverse (different section names, lengths, or emphasis)\n\n"
-        f"Produce exactly {num_branches} meta-prompts in one JSON object.\n\n"
-        "Return EXACTLY one JSON object with this shape:\n"
-        "{\n"
-        '  "templates": [\n'
-        "    {\n"
-        '      "sections": [{"name": "style_foundation", "description": "...", "value": "..."}, {"name": "subject_anchor", "description": "...", "value": "..."}, {"name": "color_palette", "description": "...", "value": "..."}, {"name": "composition", "description": "...", "value": "..."}],\n'
-        '      "negative_prompt": "...",\n'
-        '      "caption_sections": ["Art Style", "Subject", "Color Palette"],\n'
-        '      "caption_length_target": 500\n'
-        "    }\n"
-        "  ]\n"
-        "}\n"
-        "Return JSON only. No markdown fences, no commentary."
-    )
-
-    user = (
-        "Based on the following style profile of the reference images, create the initial "
-        "meta-prompts. Remember: these are INSTRUCTIONS for a captioner, not direct image prompts.\n\n"
-        f"{_format_style_profile(style_profile)}"
-    )
-
-    logger.info("Requesting %d initial templates (%s)", num_branches, model)
-
-    templates = await client.call_json(
+    """Generate diverse initial prompt templates via brainstorm -> rank -> expand."""
+    num_sketches = max(num_branches * 2, num_branches)
+    sketches = await brainstorm_initial_sketches(
+        style_profile,
+        client=client,
         model=model,
-        system=system,
-        user=user,
-        validator=lambda data: validate_initial_templates_payload(data, num_branches=num_branches),
-        response_name="initial_templates",
-        schema_hint=schema_hint("initial_templates"),
-        max_tokens=16000,
+        num_sketches=num_sketches,
     )
+    if not sketches:
+        # Empty placeholders — zero_step._sanitize_initial_templates swaps in the compiled fallback.
+        return [
+            PromptTemplate(sections=[], negative_prompt=None, caption_sections=[], caption_length_target=0)
+        ] * num_branches
 
-    for i, t in enumerate(templates):
-        if not t.sections:
-            logger.warning("Branch %d initial template has no sections — raw response may need review", i)
+    ranked = await rank_initial_sketches(sketches, client=client, model=model)
+    top = ranked[:num_branches]
+    expansions = await expand_initial_sketches(top, style_profile, client=client, model=model)
 
-    return templates
+    # Pad failed expansions and short batches with empty placeholders; sanitize fills them with the fallback.
+    placeholder = PromptTemplate(sections=[], negative_prompt=None, caption_sections=[], caption_length_target=0)
+    templates: list[PromptTemplate] = [t if t is not None else placeholder for t in expansions]
+    while len(templates) < num_branches:
+        templates.append(placeholder)
+    return templates[:num_branches]
+
+
+__all__ = [
+    "brainstorm_initial_sketches",
+    "expand_initial_sketches",
+    "propose_initial_templates",
+    "rank_initial_sketches",
+]

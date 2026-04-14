@@ -31,7 +31,8 @@ from art_style_search.prompt.json_contracts import (
     validate_brainstorm_payload,
     validate_expansion_payload,
     validate_experiment_batch_payload,
-    validate_initial_templates_payload,
+    validate_initial_brainstorm_payload,
+    validate_initial_expansion_payload,
     validate_ranking_payload,
     validate_review_payload,
     validate_style_compilation_payload,
@@ -768,25 +769,32 @@ class TestJsonContracts:
         assert result.changed_sections == ["subject_anchor"]
         assert result.expected_primary_metric == "vision_subject"
 
-    def test_initial_templates_payload_pads_to_requested_count(self) -> None:
+    def test_initial_brainstorm_payload_parses_sketches(self) -> None:
         payload = {
-            "templates": [
+            "sketches": [
                 {
-                    "sections": [
-                        {"name": section.name, "description": section.description, "value": section.value}
-                        for section in _make_valid_template().sections
-                    ],
-                    "negative_prompt": "avoid blur",
-                    "caption_sections": list(_make_valid_template().caption_sections),
+                    "approach_summary": "subject-first strict checklist",
+                    "emphasis": "technique",
+                    "instruction_style": "checklist",
                     "caption_length_target": 500,
-                }
+                    "caption_sections": ["Art Style", "Subject", "Color Palette"],
+                    "distinguishing_feature": "Numbered subject facets force identity specificity.",
+                },
+                {
+                    "approach_summary": "mood-led artistic direction",
+                    "emphasis": "mood",
+                    "instruction_style": "artistic_direction",
+                    "caption_length_target": 700,
+                    "caption_sections": ["Art Style", "Subject", "Mood", "Composition"],
+                    "distinguishing_feature": "Atmospheric language first; lets composition follow mood.",
+                },
             ]
         }
-        templates = validate_initial_templates_payload(payload, num_branches=3)
-        assert len(templates) == 3
-        assert templates[0].sections[0].name == "style_foundation"
-        assert templates[1] is templates[0]
-        assert templates[2] is templates[0]
+        sketches = validate_initial_brainstorm_payload(payload, num_sketches=2)
+        assert len(sketches) == 2
+        assert sketches[0].approach_summary == "subject-first strict checklist"
+        assert sketches[1].caption_length_target == 700
+        assert sketches[0].caption_sections[:2] == ["Art Style", "Subject"]
 
     def test_experiment_batch_payload_reads_converged_flag(self) -> None:
         payload = {
@@ -980,25 +988,37 @@ class TestJsonContracts:
                 reasoning_raw="reasoning analysis",
             )
 
-    def test_initial_templates_payload_allows_invalid_template_shape_for_zero_step_sanitization(self) -> None:
+    def test_initial_expansion_payload_validates_template_shape(self) -> None:
+        valid_template = _make_valid_template()
         payload = {
-            "templates": [
-                {
-                    "sections": [
-                        {"name": "style_foundation", "description": "rules", "value": "Shared rules"},
-                        {"name": "subject_anchor", "description": "subject", "value": "Subject guidance"},
-                    ],
-                    "negative_prompt": "avoid blur",
-                    "caption_sections": ["Art Style", "Subject"],
-                    "caption_length_target": 500,
-                }
-            ]
+            "sections": [
+                {"name": section.name, "description": section.description, "value": section.value}
+                for section in valid_template.sections
+            ],
+            "negative_prompt": "avoid blur",
+            "caption_sections": list(valid_template.caption_sections),
+            "caption_length_target": valid_template.caption_length_target,
         }
 
-        templates = validate_initial_templates_payload(payload, num_branches=1)
+        template = validate_initial_expansion_payload(payload)
 
-        assert len(templates) == 1
-        assert templates[0].sections[0].name == "style_foundation"
+        assert template.sections[0].name == "style_foundation"
+        assert template.sections[1].name == "subject_anchor"
+
+    def test_initial_expansion_payload_rejects_under_length_template(self) -> None:
+        # Two-section payload renders to far under 1200 words.
+        payload = {
+            "sections": [
+                {"name": "style_foundation", "description": "rules", "value": "Shared rules"},
+                {"name": "subject_anchor", "description": "subject", "value": "Subject guidance"},
+            ],
+            "negative_prompt": "avoid blur",
+            "caption_sections": ["Art Style", "Subject"],
+            "caption_length_target": 500,
+        }
+
+        with pytest.raises(ValueError, match="outside bounds"):
+            validate_initial_expansion_payload(payload)
 
     def test_expansion_payload_rejects_invalid_template_shape(self) -> None:
         payload = {
@@ -1059,12 +1079,15 @@ class TestJsonContracts:
             )
 
     def test_schema_hints_use_subject_in_synthesis_and_show_nontrivial_templates(self) -> None:
-        initial_hint = schema_hint("initial_templates")
+        initial_brainstorm_hint = schema_hint("initial_brainstorm")
+        initial_expansion_hint = schema_hint("initial_expansion")
         synthesis_hint = schema_hint("synthesis")
         expansion_hint = schema_hint("expansion")
 
         assert '"Subject"' in synthesis_hint
-        assert initial_hint.count('"name"') >= 4
+        assert '"Art Style"' in initial_brainstorm_hint
+        assert '"Subject"' in initial_brainstorm_hint
+        assert initial_expansion_hint.count('"name"') >= 4
         assert expansion_hint.count('"name"') >= 4
 
 
@@ -1098,24 +1121,45 @@ class TestProposeExperiments:
 
 class TestPromptSurfaceExamples:
     @pytest.mark.asyncio
-    async def test_initial_prompt_example_shows_nontrivial_template(self) -> None:
-        captured: dict[str, object] = {}
+    async def test_initial_prompt_exposes_expansion_schema(self) -> None:
+        expand_calls: list[dict[str, object]] = []
+
+        sketch = contracts.InitialTemplateSketch(
+            approach_summary="subject-first strict checklist",
+            emphasis="technique",
+            instruction_style="checklist",
+            caption_length_target=500,
+            caption_sections=["Art Style", "Subject", "Color Palette"],
+            distinguishing_feature="Numbered subject facets force identity specificity.",
+        )
 
         class FakeClient:
             async def call_json(self, **kwargs):
-                captured.update(kwargs)
-                return [_make_valid_template()]
+                response_name = kwargs.get("response_name", "")
+                if response_name == "initial_brainstorm":
+                    return [sketch, sketch]
+                if response_name == "initial_ranking":
+                    return [0, 1]
+                if isinstance(response_name, str) and response_name.startswith("initial_expansion"):
+                    expand_calls.append(kwargs)
+                    return _make_valid_template()
+                raise AssertionError(f"unexpected response_name: {response_name}")
 
-        await propose_initial_templates(
+        templates = await propose_initial_templates(
             make_style_profile(),
             1,
             client=FakeClient(),  # type: ignore[arg-type]
             model="fake-model",
         )
 
-        system = captured["system"]  # type: ignore[assignment]
-        assert system.count('"name":') >= 4
-        assert '"caption_sections": ["Art Style", "Subject"' in system
+        assert len(templates) == 1
+        assert len(expand_calls) == 1
+        expand_schema = expand_calls[0]["schema_hint"]
+        assert isinstance(expand_schema, str)
+        assert expand_schema.count('"name":') >= 4
+        assert '"caption_sections": [\n    "Art Style",\n    "Subject"' in expand_schema or (
+            '"caption_sections": ["Art Style", "Subject"' in expand_schema
+        )
 
     @pytest.mark.asyncio
     async def test_synthesis_prompt_example_keeps_subject_anchor_in_caption_sections(self) -> None:

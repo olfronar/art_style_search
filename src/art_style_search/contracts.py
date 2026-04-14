@@ -32,6 +32,18 @@ class ExperimentSketch:
 
 
 @dataclass
+class InitialTemplateSketch:
+    """Zero-step lightweight sketch — one variant of an initial meta-prompt before full expansion."""
+
+    approach_summary: str
+    emphasis: str
+    instruction_style: str
+    caption_length_target: int
+    caption_sections: list[str]
+    distinguishing_feature: str
+
+
+@dataclass
 class RefinementResult:
     """Complete result of a template refinement by the reasoning model."""
 

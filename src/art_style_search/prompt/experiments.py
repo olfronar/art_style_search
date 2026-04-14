@@ -567,7 +567,7 @@ async def brainstorm_experiment_sketches(
         validator=lambda data: validate_brainstorm_payload(data, num_sketches=num_sketches),
         response_name="brainstorm",
         schema_hint=schema_hint("brainstorm"),
-        max_tokens=16000,
+        max_tokens=40000,
         repair_retries=2,
     )
     if not sketches:
