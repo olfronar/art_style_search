@@ -24,6 +24,31 @@ _STREAM_BASE_DELAY = 5.0
 T = TypeVar("T")
 
 
+def _adapt_prompts_for_provider(system: str, user: str, provider: str) -> tuple[str, str]:
+    """Apply lightweight provider-specific prompt adaptations.
+
+    Returns (adapted_system, adapted_user).
+    """
+    if provider == "openai":
+        # GPT models sometimes under-weight system prompts.
+        # Append a brief reminder of the most critical rule to the user message.
+        if "NON-NEGOTIABLE" in system or "CRITICAL" in system:
+            user += (
+                "\n\n[Reminder: Return EXACTLY one JSON object. "
+                "First section must be 'style_foundation', second must be 'subject_anchor'. "
+                "No markdown fences, no commentary.]"
+            )
+    elif provider == "zai" and "json" in system.lower():
+        # GLM benefits from explicit formatting reinforcement for structured output.
+        system += (
+            "\n\nImportant: Respond with valid JSON only. "
+            "Do not include any text before or after the JSON object. "
+            "Do not wrap in markdown code blocks."
+        )
+    # For "anthropic", "local", "xai" — no adaptation needed (current format works well).
+    return system, user
+
+
 def extract_xml_tag(text: str, tag: str) -> str:
     """Extract text content between <tag> and </tag>, stripped. Returns '' if absent."""
     match = re.search(rf"<{tag}>(.*?)</{tag}>", text, re.DOTALL)
@@ -188,6 +213,7 @@ class ReasoningClient:
         max_tokens: int = 16000,
     ) -> str:
         """Send a reasoning request and return the text response."""
+        system, user = _adapt_prompts_for_provider(system, user, self.provider)
         if self.provider == "anthropic":
             return await self._call_anthropic(model=model, system=system, user=user, max_tokens=max_tokens)
         if self.provider == "openai":
@@ -213,6 +239,7 @@ class ReasoningClient:
     ) -> T:
         """Send a reasoning request, parse JSON, validate it, and optionally repair it."""
 
+        system, user = _adapt_prompts_for_provider(system, user, self.provider)
         current_text = await self.call(model=model, system=system, user=user, max_tokens=max_tokens)
         try:
             return validator(parse_json_response(current_text))

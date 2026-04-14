@@ -35,6 +35,19 @@ logger = logging.getLogger(__name__)
 
 _STRUCTURAL_CHANGE_TARGETS = ("caption_sections", "caption_length_target", "negative_prompt")
 
+_BRAINSTORM_EXAMPLE = (
+    "## Example of a good sketch\n"
+    '{"hypothesis":"Subject descriptions use generic terms (person, figure) instead of specific identity cues, '
+    'causing the generator to produce wrong subjects","target_category":"subject_anchor",'
+    '"failure_mechanism":"Identity cues buried behind style language — the generator attends to style tokens first and loses subject specificity",'
+    '"intervention_type":"information_priority","direction_id":"D1","direction_summary":"Subject identity lock",'
+    '"risk_level":"targeted","expected_primary_metric":"vision_subject","builds_on":"H3"}\n\n'
+    "## Example of a bad sketch (too vague — avoid this)\n"
+    '{"hypothesis":"Make captions better","target_category":"","failure_mechanism":"Captions are not good enough",'
+    '"intervention_type":"general_improvement","direction_id":"D1","direction_summary":"Improve things",'
+    '"risk_level":"targeted","expected_primary_metric":"all","builds_on":""}'
+)
+
 
 def _normalized_category_name(target_category: str, hypothesis: str, category_names: list[str]) -> str:
     return target_category if target_category else classify_hypothesis(hypothesis, category_names)
@@ -71,107 +84,88 @@ def _render_sketch(sketch: ExperimentSketch, idx: int) -> str:
     )
 
 
-def _experiment_system_prompt(*, current_template: PromptTemplate, response_format: str) -> str:
+def _experiment_system_prompt(
+    *, current_template: PromptTemplate, response_format: str, is_first_iteration: bool = False
+) -> str:
     section_name_list = ", ".join(section.name for section in current_template.sections)
     structural_change_targets = ", ".join(_STRUCTURAL_CHANGE_TARGETS)
-    return (
-        "You are an expert art director and prompt engineer optimizing a META-PROMPT.\n\n"
-        "## TIER 1: NON-NEGOTIABLE RULES (CRITICAL)\n\n"
+
+    # Base rules — always present
+    base = (
+        "You are an expert art director optimizing a META-PROMPT — instructions telling Gemini Pro how to caption reference images.\n\n"
+        "## NON-NEGOTIABLE RULES\n\n"
         "### Anchor sections (STRICT — never violate)\n"
-        "1. The template MUST include 'style_foundation' as the FIRST section.\n"
-        "   Why: this produces the [Art Style] block — shared style DNA that must be "
-        "nearly IDENTICAL across all captions. A style_consistency metric measures this.\n"
-        "2. The template MUST include 'subject_anchor' as the SECOND section.\n"
-        "   Why: this produces the [Subject] block covering identity, features, pose, expression, "
-        "and props — the single most important per-image block for reproduction fidelity.\n"
-        "3. <caption_sections> MUST start with ['Art Style', 'Subject', ...].\n"
-        "   Do not remove, rename, merge, or move these anchors. You MAY refine their content.\n\n"
-        "### Knowledge Base constraints (CRITICAL)\n"
-        "Read the KB Per-Category Status carefully.\n"
-        "- 'Last rejected' entries are TESTED-AND-FAILED ideas. Do NOT repeat them. "
-        "Why: repeating wastes a branch slot on a known failure.\n"
-        "- Build on confirmed insights. Reference hypothesis IDs (e.g. 'builds on H3').\n"
-        "- changed_section and changed_sections must use concrete template section names or "
-        "structural change targets only. Never put taxonomy aliases (e.g. 'caption_structure') "
-        "inside these fields. Why: these fields are diffed against the incumbent template to "
-        "determine what changed — they must be matchable section names.\n\n"
-        "### JSON format (STRICT)\n"
-        "Return EXACTLY one JSON object. No markdown fences. No commentary before or after.\n\n"
+        "1. First section MUST be 'style_foundation' — produces [Art Style] block (shared style DNA, measured by style_consistency).\n"
+        "2. Second section MUST be 'subject_anchor' — produces [Subject] block (identity, features, pose — most important for reproduction).\n"
+        "3. caption_sections MUST start with ['Art Style', 'Subject', ...]. Never remove/rename these anchors.\n\n"
+        "### Knowledge Base constraints\n"
+        "- 'Last rejected' entries are TESTED-AND-FAILED — do NOT repeat them.\n"
+        "- Build on confirmed insights (reference hypothesis IDs like 'builds on H3').\n"
+        "- changed_section/changed_sections must use concrete template section names, not taxonomy aliases.\n\n"
+        "### Output format\n"
+        "Return EXACTLY one JSON object. No markdown fences. No commentary.\n\n"
         "### Convergence\n"
-        "Only emit [CONVERGED] if ALL three hold: (1) deep plateau — multiple flat iterations, "
-        "(2) every KB category has been targeted at least once, "
-        "(3) you cannot name a concrete untried direction. "
-        "The loop may reject [CONVERGED] — prefer a bold exploration branch over stopping.\n\n"
-        "## TIER 2: HOW THE SYSTEM WORKS\n\n"
-        "You are NOT writing image generation prompts directly. You are writing a META-PROMPT — "
-        "instructions that tell Gemini Pro HOW to caption reference images. "
-        "Those captions feed Gemini Flash to generate images. "
-        "Pipeline: meta-prompt + reference -> caption -> generation -> compare with original.\n\n"
-        "### Dual-purpose captions\n"
-        "1. Recreate the reference image faithfully (measured by metrics).\n"
-        "2. Embed REUSABLE art-style guidance in labeled sections that can later generate "
-        "NEW art in the same style with different subjects.\n"
-        "Embed core style rules as literal text the captioner weaves into every caption, "
-        "plus per-image specific observations on top.\n\n"
-        "### Meta-prompt requirements\n"
-        "8-15 sections, each 4-8 sentences of instruction with embedded style rules. "
-        "Total rendered prompt: 1200-1800 words. Cover: colors, technique, characters, "
-        "background, composition, lighting, textures, mood, and what to AVOID.\n\n"
-        "### Caption output structure\n"
-        "Captions must have LABELED SECTIONS. First: [Art Style] (shared rules, identical across captions). "
-        "Second: [Subject] (image-specific, 80-140 words). Remaining sections: your choice — "
-        "that IS the optimization surface. Specify via <caption_sections> and <caption_length>.\n\n"
-        "### Metric definitions\n"
-        "Per-image metrics (generated vs paired original):\n"
-        "- DreamSim (higher=better): perceptual similarity. 0.4=somewhat, 0.6=good, 0.8+=very close.\n"
-        "- Color histogram (higher=better): palette match. 0.7=similar, 0.9+=very close.\n"
-        "- SSIM (higher=better): structural similarity. 0.5=moderate, 0.7=good, 0.9+=near-identical.\n"
-        "- HPS v2 (higher=better): caption-image alignment. Range 0.20-0.30.\n"
-        "- Aesthetics (higher=better, 1-10): visual quality. 5=mediocre, 7=good, 8+=excellent.\n"
-        "Vision scores (Gemini ternary: MATCH=1.0, PARTIAL=0.5, MISS=0.0):\n"
-        "- vision_style: technique reproduction. vision_subject: subject fidelity. vision_composition: layout.\n"
-        "Weights are ADAPTIVE — metrics with more variance across experiments get higher weight.\n\n"
-        "## TIER 3: ITERATION STRATEGY\n\n"
-        "Work in EXACTLY 3 directions (D1, D2, D3), ordered highest priority -> lowest.\n\n"
-        "### Direction structure\n"
-        "Each direction should include 1 targeted proposal + 1-3 bold proposals when brainstorming.\n"
-        "- Targeted: change EXACTLY 1 section.\n"
-        "- Bold: may change 1-3 related sections.\n"
-        "Why this mix: targeted proposals give clean attribution; bold proposals test larger "
-        "mechanisms that can leapfrog local optima.\n\n"
-        "### What constitutes a bold proposal\n"
-        "Must change information priority, scene-type policy, section schema, or a small cluster "
-        "of related sections. Do NOT spend a bold slot on sentence counts or tiny wording polish.\n\n"
-        "### Valid section names for this iteration\n"
+        "Only emit [CONVERGED] if ALL three hold: (1) deep plateau, (2) every KB category targeted, (3) no untried direction. "
+        "Prefer a bold exploration branch over stopping.\n\n"
+    )
+
+    if is_first_iteration:
+        context = (
+            "## SYSTEM CONTEXT\n\n"
+            "Pipeline: meta-prompt + reference -> Gemini Pro caption -> Gemini Flash generation -> compare with original.\n"
+            "Captions serve TWO purposes: (1) recreate the image faithfully, (2) embed REUSABLE art-style guidance in labeled sections.\n"
+            "Embed core style rules as literal text the captioner repeats verbatim, plus per-image observations.\n\n"
+            "### Meta-prompt structure\n"
+            "8-15 sections, each 4-8 sentences, 1200-1800 words total. Cover: colors, technique, characters, background, composition, lighting, textures, mood, and what to AVOID.\n\n"
+            "### Caption output structure\n"
+            "First: [Art Style] (shared rules, identical across captions). Second: [Subject] (image-specific, 80-140 words). Remaining: your choice — the optimization surface.\n\n"
+            "### Metrics\n"
+            "| Metric | Range | Good | Description |\n"
+            "|--------|-------|------|-------------|\n"
+            "| DreamSim | 0-1 | 0.6+ | Perceptual similarity |\n"
+            "| Color histogram | 0-1 | 0.7+ | Palette match |\n"
+            "| SSIM | 0-1 | 0.7+ | Structural similarity |\n"
+            "| HPS v2 | 0.2-0.3 | >0.25 | Caption-image alignment |\n"
+            "| Aesthetics | 1-10 | 7+ | Visual quality |\n"
+            "| vision_style/subject/composition | 0-1 | MATCH=1.0, PARTIAL=0.5, MISS=0.0 | Gemini ternary |\n"
+            "Weights are ADAPTIVE — metrics with more variance across experiments get higher weight.\n\n"
+        )
+    else:
+        context = (
+            "## Metrics reminder\n"
+            "Same pipeline and metrics as before: DreamSim, Color histogram, SSIM, HPS v2, Aesthetics, Vision (style/subject/composition).\n\n"
+        )
+
+    strategy = (
+        "## ITERATION STRATEGY\n\n"
+        "Work in EXACTLY 3 directions (D1 > D2 > D3 by priority).\n"
+        "Each direction: 1 targeted (change 1 section) + 1-3 bold (change 1-3 related sections).\n"
+        "Bold proposals must change information priority, scene-type policy, section schema, or a cluster of related sections — not wording polish.\n\n"
+        "### Valid section names\n"
         f"Concrete: {section_name_list}\n"
         f"Structural: {structural_change_targets}\n"
-        "target_category may use taxonomy labels (e.g. 'caption_structure'). "
-        "Multiple directions may touch the same category if they test DIFFERENT mechanisms.\n\n"
-        "### Optimization dynamics\n"
-        "**Momentum**: Double down on confirmed KB insights — explore if the same principle "
-        "applies to other sections. Do not undo confirmed improvements unless metrics regressed.\n"
-        "**Boldness**: Assume the incumbent is locally polished but conceptually wrong in at "
-        "least one important way. Every direction must have at least one genuine bold variant.\n"
-        "**Search depth**: Vary intervention type within a direction. Good types: information "
-        "priority, negative constraints, scene-type split, schema change, multi-section rewrites.\n"
-        "**Diversity**: Defined by (category, failure_mechanism, intervention_type). "
-        "Do not emit two proposals sharing all three.\n\n"
-        "## TIER 4: DIAGNOSTIC TIPS (use when relevant)\n\n"
-        "- DreamSim weak -> captions miss structural/color/semantic details; make captioner more specific.\n"
-        "- Per-image scores vary widely -> consider conditional captioning "
-        "('for character images describe X; for backgrounds describe Y').\n"
-        "- Use vision comparison and roundtrip feedback to identify what captions consistently miss.\n"
-        "- Target the weakest KB category or build on partially confirmed hypotheses.\n"
-        "- Use Open Problems to focus on highest-priority gaps.\n"
-        "- Update <open_problems>: add new, remove solved, re-rank.\n\n"
+        "target_category may use taxonomy labels. Multiple directions may touch the same category with DIFFERENT mechanisms.\n\n"
+        "### Search principles\n"
+        "- **Momentum**: Double down on confirmed KB insights. Do not undo confirmed improvements.\n"
+        "- **Boldness**: Assume the incumbent is conceptually wrong in at least one way. Every direction needs a bold variant.\n"
+        "- **Diversity**: No two proposals may share (category, failure_mechanism, intervention_type).\n\n"
+        "## DIAGNOSTIC TIPS\n"
+        "- DreamSim weak -> captions miss structural/semantic details.\n"
+        "- Per-image scores vary -> consider conditional captioning.\n"
+        "- Use vision/roundtrip feedback to find what captions miss.\n"
+        "- Target weakest KB category or build on partially confirmed hypotheses.\n\n"
         f"{response_format}"
     )
 
+    return base + context + strategy
 
-def _brainstorm_system(current_template: PromptTemplate, *, num_sketches: int) -> str:
+
+def _brainstorm_system(current_template: PromptTemplate, *, num_sketches: int, is_first_iteration: bool = False) -> str:
     return _experiment_system_prompt(
         current_template=current_template,
+        is_first_iteration=is_first_iteration,
         response_format=(
+            f"{_BRAINSTORM_EXAMPLE}\n\n"
             "## EXECUTION CHECKLIST — verify before outputting\n"
             "- [ ] Every sketch has hypothesis, target_category, failure_mechanism, intervention_type, "
             "direction_id, direction_summary, risk_level, expected_primary_metric, and builds_on\n"
@@ -179,16 +173,17 @@ def _brainstorm_system(current_template: PromptTemplate, *, num_sketches: int) -
             "- [ ] 3 distinct direction_ids (D1, D2, D3) are present\n"
             "- [ ] The batch explores around two ideas per final branch slot\n\n"
             "Field types:\n"
-            '- hypothesis, target_category, failure_mechanism, intervention_type, direction_id, direction_summary, risk_level, expected_primary_metric, builds_on: strings\n'
+            "- hypothesis, target_category, failure_mechanism, intervention_type, direction_id, direction_summary, risk_level, expected_primary_metric, builds_on: strings\n"
             f"Response format — one JSON object with 'sketches' array of length {num_sketches} "
             "and boolean 'converged'. Return JSON only. No markdown fences, no commentary."
         ),
     )
 
 
-def _expand_system(current_template: PromptTemplate) -> str:
+def _expand_system(current_template: PromptTemplate, *, is_first_iteration: bool = False) -> str:
     return _experiment_system_prompt(
         current_template=current_template,
+        is_first_iteration=is_first_iteration,
         response_format=(
             "## EXECUTION CHECKLIST — verify before outputting\n"
             "- [ ] The experiment has ALL required fields (analysis, lessons, hypothesis, builds_on, "
@@ -200,7 +195,7 @@ def _expand_system(current_template: PromptTemplate) -> str:
             "- [ ] caption_sections starts with ['Art Style', 'Subject']\n"
             "- [ ] Total rendered template is 1200-1800 words\n\n"
             "Critical field types:\n"
-            '- analysis: one string field, never an array\n'
+            "- analysis: one string field, never an array\n"
             '- lessons: one JSON object with keys {"confirmed","rejected","new_insight"}, each a string\n'
             "- builds_on: a string like 'H3' or 'H3, H5', or an empty string\n\n"
             "Minimal wire-shape example:\n"
@@ -214,9 +209,13 @@ def _expand_system(current_template: PromptTemplate) -> str:
 def _rank_system() -> str:
     return (
         "You rank experiment sketches for expected impact on the art-style prompt search.\n\n"
+        "Rank by these criteria in priority order:\n"
+        "1. **Evidence fit** (primary): Does the sketch directly address observed failures from vision/roundtrip feedback?\n"
+        "2. **Risk-reward balance** (secondary): Targeted sketches that address real failures beat bold but ungrounded ones.\n"
+        "3. **Novelty** (tertiary): Prefer exploring new mechanisms over repeating similar ones.\n\n"
+        "A sketch is 'executable' when its failure_mechanism is specific enough to map to a concrete template change.\n"
+        "Prefer sketches that look both meaningful and executable.\n\n"
         "Return JSON only. No markdown fences. No commentary.\n"
-        "Rank sketches by expected improvement potential, novelty versus prior work, evidence fit with current "
-        "feedback, and risk-reward balance. Prefer sketches that look both meaningful and executable.\n"
         "Output zero-based indices in best-to-worst order. Include every sketch at most once.\n"
         'Preferred exact wire shape: {"ranked_indices":[2,7,0,5]}'
     )
@@ -235,15 +234,24 @@ def _build_shared_proposal_user(
     vision_feedback_word_limit: int = 300,
     roundtrip_feedback_word_limit: int = 400,
     include_roundtrip_feedback: bool = True,
+    iteration: int = 0,
+    plateau_counter: int = 0,
 ) -> str:
     has_history = knowledge_base.hypotheses
-    user_parts: list[str] = [
-        "## Style Profile\n",
-        _format_style_profile(style_profile, compact=bool(has_history)),
-        "\n\n## Current Template\n",
-        _format_template(current_template),
-        f"\nRendered prompt: {current_template.render()}",
-    ]
+    user_parts: list[str] = []
+
+    # Skip Style Profile after iteration 1 — it never changes
+    if iteration < 2:
+        user_parts.append("## Style Profile\n")
+        user_parts.append(_format_style_profile(style_profile, compact=bool(has_history)))
+
+    # Current Template: after iteration 1, show rendered text only (drop XML format)
+    user_parts.append("\n\n## Current Template\n")
+    if iteration < 2:
+        user_parts.append(_format_template(current_template))
+        user_parts.append(f"\nRendered prompt: {current_template.render()}")
+    else:
+        user_parts.append(current_template.render())
 
     if best_metrics:
         user_parts.append("\n\n## Best Metrics So Far\n")
@@ -285,7 +293,9 @@ def _build_shared_proposal_user(
                 worst_parts.append(f"Experiment: {worst.experiment}\n")
             worst_parts.append(f"Metrics:\n{_format_metrics(worst.aggregated)}\n")
             if worst.per_image_scores and worst.iteration_captions:
-                idx = min(range(len(worst.per_image_scores)), key=lambda i: worst.per_image_scores[i].dreamsim_similarity)
+                idx = min(
+                    range(len(worst.per_image_scores)), key=lambda i: worst.per_image_scores[i].dreamsim_similarity
+                )
                 if idx < len(worst.iteration_captions):
                     cap = worst.iteration_captions[idx]
                     cap_text = _truncate_words(cap.text, 100)
@@ -298,15 +308,18 @@ def _build_shared_proposal_user(
                 worst_parts.append(f"Vision feedback: {_truncate_words(worst.vision_feedback, 100)}\n")
             user_parts.append("".join(worst_parts))
 
+    # Adaptive vision feedback word limit based on plateau depth
+    effective_vision_limit = vision_feedback_word_limit
+    if plateau_counter > 3:
+        effective_vision_limit = 500
+
     if vision_feedback:
         user_parts.append("\n\n## Vision Comparison (Gemini analysis of generated vs reference images)\n")
-        user_parts.append(_truncate_words(vision_feedback, vision_feedback_word_limit, suffix="\n[...truncated]"))
+        user_parts.append(_truncate_words(vision_feedback, effective_vision_limit, suffix="\n[...truncated]"))
 
     if roundtrip_feedback and include_roundtrip_feedback:
         user_parts.append("\n\n## Per-Image Results (sorted worst -> best by DreamSim)\n")
-        user_parts.append(
-            _truncate_words(roundtrip_feedback, roundtrip_feedback_word_limit, suffix="\n[...truncated]")
-        )
+        user_parts.append(_truncate_words(roundtrip_feedback, roundtrip_feedback_word_limit, suffix="\n[...truncated]"))
 
     if caption_diffs:
         user_parts.append(f"\n\n{caption_diffs}")
@@ -378,6 +391,32 @@ def _stop_result(current_template: PromptTemplate) -> RefinementResult:
         builds_on=None,
         open_problems=[],
     )
+
+
+def _validate_expanded_template(result: RefinementResult, incumbent: PromptTemplate) -> list[str]:
+    """Programmatic post-expand verification. Returns list of violation descriptions."""
+    issues: list[str] = []
+    tmpl = result.template
+
+    # Check anchor positions
+    if tmpl.sections and tmpl.sections[0].name != "style_foundation":
+        issues.append(f"First section is '{tmpl.sections[0].name}', expected 'style_foundation'")
+    if len(tmpl.sections) > 1 and tmpl.sections[1].name != "subject_anchor":
+        issues.append(f"Second section is '{tmpl.sections[1].name}', expected 'subject_anchor'")
+
+    # Check word count
+    rendered = tmpl.render()
+    word_count = len(rendered.split())
+    if word_count < 1200 or word_count > 1800:
+        issues.append(f"Rendered template is {word_count} words (target: 1200-1800)")
+
+    # Check changed_sections consistency
+    if result.changed_sections and result.changed_section and result.changed_sections[0] != result.changed_section:
+        issues.append(
+            f"changed_sections[0]='{result.changed_sections[0]}' != changed_section='{result.changed_section}'"
+        )
+
+    return issues
 
 
 def _dedupe_sketches(sketches: list[ExperimentSketch], template: PromptTemplate) -> list[ExperimentSketch]:
@@ -496,6 +535,9 @@ async def brainstorm_experiment_sketches(
     vision_feedback: str = "",
     roundtrip_feedback: str = "",
     caption_diffs: str = "",
+    is_first_iteration: bool = False,
+    iteration: int = 0,
+    plateau_counter: int = 0,
 ) -> tuple[list[ExperimentSketch], bool]:
     shared_user = _build_shared_proposal_user(
         style_profile,
@@ -509,12 +551,18 @@ async def brainstorm_experiment_sketches(
         vision_feedback_word_limit=300,
         roundtrip_feedback_word_limit=400,
         include_roundtrip_feedback=True,
+        iteration=iteration,
+        plateau_counter=plateau_counter,
     )
-    user = _brainstorm_user(shared_user, num_sketches=num_sketches, has_feedback=bool(vision_feedback or roundtrip_feedback))
-    logger.info("Brainstorming %d experiment sketches (%s) — context: ~%d words", num_sketches, model, len(user.split()))
+    user = _brainstorm_user(
+        shared_user, num_sketches=num_sketches, has_feedback=bool(vision_feedback or roundtrip_feedback)
+    )
+    logger.info(
+        "Brainstorming %d experiment sketches (%s) — context: ~%d words", num_sketches, model, len(user.split())
+    )
     sketches, converged = await client.call_json(
         model=model,
-        system=_brainstorm_system(current_template, num_sketches=num_sketches),
+        system=_brainstorm_system(current_template, num_sketches=num_sketches, is_first_iteration=is_first_iteration),
         user=user,
         validator=lambda data: validate_brainstorm_payload(data, num_sketches=num_sketches),
         response_name="brainstorm",
@@ -568,6 +616,9 @@ async def expand_experiment_sketches(
     vision_feedback: str = "",
     roundtrip_feedback: str = "",
     caption_diffs: str = "",
+    is_first_iteration: bool = False,
+    iteration: int = 0,
+    plateau_counter: int = 0,
 ) -> list[RefinementResult]:
     if not sketches:
         return []
@@ -584,8 +635,10 @@ async def expand_experiment_sketches(
         vision_feedback_word_limit=300,
         roundtrip_feedback_word_limit=400,
         include_roundtrip_feedback=not bool(vision_feedback),
+        iteration=iteration,
+        plateau_counter=plateau_counter,
     )
-    system = _expand_system(current_template)
+    system = _expand_system(current_template, is_first_iteration=is_first_iteration)
     tasks = [
         client.call_json(
             model=model,
@@ -607,6 +660,14 @@ async def expand_experiment_sketches(
             failures += 1
             logger.warning("Expansion failed: %s: %s", type(raw).__name__, raw)
             continue
+        # Programmatic post-expand verification
+        issues = _validate_expanded_template(raw, current_template)
+        if issues:
+            logger.warning(
+                "Post-expand validation issues for '%s': %s",
+                raw.hypothesis[:60],
+                "; ".join(issues),
+            )
         results.append(raw)
     logger.info("Expansion finished: %d/%d succeeded", len(results), len(sketches))
     if failures and not results:
@@ -627,6 +688,9 @@ async def propose_experiments(
     vision_feedback: str = "",
     roundtrip_feedback: str = "",
     caption_diffs: str = "",
+    is_first_iteration: bool = False,
+    iteration: int = 0,
+    plateau_counter: int = 0,
 ) -> list[RefinementResult]:
     """Compatibility wrapper: brainstorm more ideas, rank them, then expand survivors."""
 
@@ -643,6 +707,9 @@ async def propose_experiments(
         vision_feedback=vision_feedback,
         roundtrip_feedback=roundtrip_feedback,
         caption_diffs=caption_diffs,
+        is_first_iteration=is_first_iteration,
+        iteration=iteration,
+        plateau_counter=plateau_counter,
     )
     if not sketches:
         return [_stop_result(current_template)] if converged else []
@@ -667,6 +734,9 @@ async def propose_experiments(
         vision_feedback=vision_feedback,
         roundtrip_feedback=roundtrip_feedback,
         caption_diffs=caption_diffs,
+        is_first_iteration=is_first_iteration,
+        iteration=iteration,
+        plateau_counter=plateau_counter,
     )
 
     if converged:

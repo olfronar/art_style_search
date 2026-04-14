@@ -207,7 +207,9 @@ async def _confirmatory_validation(
         exp.aggregated = evaluation.median_aggregated
 
     updated_agg = [result.aggregated for result in ranking.exp_results]
-    ranking.adaptive_scores = {id(result): adaptive_composite_score(result.aggregated, updated_agg) for result in ranking.exp_results}
+    ranking.adaptive_scores = {
+        id(result): adaptive_composite_score(result.aggregated, updated_agg) for result in ranking.exp_results
+    }
 
     best_candidate_exp, best_candidate_eval = max(
         candidate_evals,
@@ -246,6 +248,7 @@ async def _synthesize_reasoning(
         state.style_profile,
         client=ctx.reasoning_client,
         model=ctx.config.reasoning_model,
+        baseline_metrics=state.best_metrics,
     )
 
 
@@ -284,7 +287,9 @@ async def _run_synthesis_experiment(
     ranking.exp_results.append(synth_result)
     ranking.synth_result = synth_result
     updated_agg = [result.aggregated for result in ranking.exp_results]
-    ranking.adaptive_scores = {id(result): adaptive_composite_score(result.aggregated, updated_agg) for result in ranking.exp_results}
+    ranking.adaptive_scores = {
+        id(result): adaptive_composite_score(result.aggregated, updated_agg) for result in ranking.exp_results
+    }
     if merged_score > ranking.best_score:
         ranking.best_exp = synth_result
         ranking.best_score = merged_score

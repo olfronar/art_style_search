@@ -125,7 +125,9 @@ class TestXAIComparison:
         assert "TAIL_MARKER" in content[-1]["text"]
 
     @pytest.mark.asyncio
-    async def test_compare_vision_per_image_can_swap_generated_before_original(self, tmp_path: Path, monkeypatch) -> None:
+    async def test_compare_vision_per_image_can_swap_generated_before_original(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
         ref_path = tmp_path / "ref.png"
         gen_path = tmp_path / "gen.png"
         _write_image(ref_path, (10, 20, 30))

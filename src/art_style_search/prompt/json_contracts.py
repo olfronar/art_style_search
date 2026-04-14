@@ -319,7 +319,9 @@ def validate_expansion_payload(data: object) -> RefinementResult:
 
 def validate_synthesis_payload(data: object) -> tuple[PromptTemplate, str]:
     obj = _require_dict(data, label="synthesis_response")
-    template = _validate_template_or_raise(payload_to_template(obj.get("template") or {}, label="template"), label="template")
+    template = _validate_template_or_raise(
+        payload_to_template(obj.get("template") or {}, label="template"), label="template"
+    )
     rationale = _as_str(obj.get("rationale"), label="rationale")
     return template, rationale
 

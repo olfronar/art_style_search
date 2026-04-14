@@ -128,7 +128,11 @@ def _make_refinement(direction_id: str, idx: int, *, risk_level: str, changed_se
         open_problems=[],
         changed_section=changed_sections[0],
         changed_sections=changed_sections,
-        target_category="subject_anchor" if direction_id == "D1" else "composition" if direction_id == "D2" else "lighting",
+        target_category="subject_anchor"
+        if direction_id == "D1"
+        else "composition"
+        if direction_id == "D2"
+        else "lighting",
         direction_id=direction_id,
         direction_summary=f"Direction {direction_id}",
         failure_mechanism=f"{direction_id} failure mechanism",
@@ -139,10 +143,16 @@ def _make_refinement(direction_id: str, idx: int, *, risk_level: str, changed_se
     )
 
 
-def _make_sketch(direction_id: str, idx: int, *, mechanism: str, intervention_type: str = "information_priority") -> ExperimentSketch:
+def _make_sketch(
+    direction_id: str, idx: int, *, mechanism: str, intervention_type: str = "information_priority"
+) -> ExperimentSketch:
     return ExperimentSketch(
         hypothesis=f"{direction_id} sketch {idx}",
-        target_category="subject_anchor" if direction_id == "D1" else "composition" if direction_id == "D2" else "lighting",
+        target_category="subject_anchor"
+        if direction_id == "D1"
+        else "composition"
+        if direction_id == "D2"
+        else "lighting",
         failure_mechanism=mechanism,
         intervention_type=intervention_type,
         direction_id=direction_id,
@@ -154,7 +164,9 @@ def _make_sketch(direction_id: str, idx: int, *, mechanism: str, intervention_ty
 
 
 @pytest.mark.asyncio
-async def test_propose_iteration_experiments_requests_raw_batch_and_selects_portfolio(monkeypatch, tmp_path: Path) -> None:
+async def test_propose_iteration_experiments_requests_raw_batch_and_selects_portfolio(
+    monkeypatch, tmp_path: Path
+) -> None:
     state = _make_state()
     ctx = RunContext(
         config=_make_config(tmp_path),
@@ -168,20 +180,22 @@ async def test_propose_iteration_experiments_requests_raw_batch_and_selects_port
     seen_num_sketches: list[int] = []
 
     refinements = [
-            _make_refinement("D1", 0, risk_level="targeted", changed_sections=["subject_anchor"]),
-            _make_refinement("D1", 1, risk_level="bold", changed_sections=["subject_anchor", "composition_blueprint"]),
-            _make_refinement("D1", 2, risk_level="bold", changed_sections=["subject_anchor", "environment_staging"]),
-            _make_refinement("D2", 0, risk_level="targeted", changed_sections=["composition_blueprint"]),
-            _make_refinement("D2", 1, risk_level="bold", changed_sections=["composition_blueprint", "environment_staging"]),
-            _make_refinement("D2", 2, risk_level="bold", changed_sections=["composition_blueprint", "lighting_rendering"]),
-            _make_refinement("D3", 0, risk_level="targeted", changed_sections=["lighting_rendering"]),
-            _make_refinement("D3", 1, risk_level="bold", changed_sections=["lighting_rendering", "environment_staging"]),
-            _make_refinement("D3", 2, risk_level="bold", changed_sections=["lighting_rendering", "subject_anchor"]),
+        _make_refinement("D1", 0, risk_level="targeted", changed_sections=["subject_anchor"]),
+        _make_refinement("D1", 1, risk_level="bold", changed_sections=["subject_anchor", "composition_blueprint"]),
+        _make_refinement("D1", 2, risk_level="bold", changed_sections=["subject_anchor", "environment_staging"]),
+        _make_refinement("D2", 0, risk_level="targeted", changed_sections=["composition_blueprint"]),
+        _make_refinement("D2", 1, risk_level="bold", changed_sections=["composition_blueprint", "environment_staging"]),
+        _make_refinement("D2", 2, risk_level="bold", changed_sections=["composition_blueprint", "lighting_rendering"]),
+        _make_refinement("D3", 0, risk_level="targeted", changed_sections=["lighting_rendering"]),
+        _make_refinement("D3", 1, risk_level="bold", changed_sections=["lighting_rendering", "environment_staging"]),
+        _make_refinement("D3", 2, risk_level="bold", changed_sections=["lighting_rendering", "subject_anchor"]),
     ]
 
     async def fake_brainstorm(*args, **kwargs):
         seen_num_sketches.append(kwargs["num_sketches"])
-        return [_make_sketch(ref.direction_id, idx, mechanism=ref.failure_mechanism) for idx, ref in enumerate(refinements)], False
+        return [
+            _make_sketch(ref.direction_id, idx, mechanism=ref.failure_mechanism) for idx, ref in enumerate(refinements)
+        ], False
 
     async def fake_rank(*args, **kwargs):
         return kwargs.get("sketches", args[0])
@@ -256,7 +270,11 @@ async def test_propose_iteration_experiments_keeps_proposal_with_removed_incumbe
     )
 
     async def fake_brainstorm(*args, **kwargs):
-        return [_make_sketch("D1", 0, mechanism=refinement.failure_mechanism, intervention_type=refinement.intervention_type)], False
+        return [
+            _make_sketch(
+                "D1", 0, mechanism=refinement.failure_mechanism, intervention_type=refinement.intervention_type
+            )
+        ], False
 
     async def fake_rank(*args, **kwargs):
         return kwargs.get("sketches", args[0])
@@ -325,7 +343,11 @@ async def test_propose_iteration_experiments_recovers_caption_structure_alias_fr
     )
 
     async def fake_brainstorm(*args, **kwargs):
-        return [_make_sketch("D1", 0, mechanism=refinement.failure_mechanism, intervention_type=refinement.intervention_type)], False
+        return [
+            _make_sketch(
+                "D1", 0, mechanism=refinement.failure_mechanism, intervention_type=refinement.intervention_type
+            )
+        ], False
 
     async def fake_rank(*args, **kwargs):
         return kwargs.get("sketches", args[0])
@@ -416,8 +438,12 @@ async def test_propose_iteration_experiments_logs_recovery_summary(monkeypatch, 
 
     async def fake_brainstorm(*args, **kwargs):
         return [
-            _make_sketch("D1", 0, mechanism=refinements[0].failure_mechanism, intervention_type=refinements[0].intervention_type),
-            _make_sketch("D2", 1, mechanism=refinements[1].failure_mechanism, intervention_type=refinements[1].intervention_type),
+            _make_sketch(
+                "D1", 0, mechanism=refinements[0].failure_mechanism, intervention_type=refinements[0].intervention_type
+            ),
+            _make_sketch(
+                "D2", 1, mechanism=refinements[1].failure_mechanism, intervention_type=refinements[1].intervention_type
+            ),
         ], False
 
     async def fake_rank(*args, **kwargs):
@@ -487,7 +513,9 @@ async def test_propose_iteration_experiments_honors_brainstorm_stop_before_ranki
         "art_style_search.workflow.iteration_proposals.expand_experiment_sketches",
         fake_expand,
     )
-    monkeypatch.setattr("art_style_search.workflow.iteration_proposals._should_honor_stop", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        "art_style_search.workflow.iteration_proposals._should_honor_stop", lambda *args, **kwargs: True
+    )
 
     proposals, should_stop = await _propose_iteration_experiments(state, ctx, "", "", "")
 

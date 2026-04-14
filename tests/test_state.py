@@ -171,7 +171,9 @@ class TestRoundTrip:
         original = make_iteration_result(branch_id=2, iteration=4)
         original.direction_id = "D2"
         original.direction_summary = "Subject archetype disambiguation"
-        original.failure_mechanism = "The generator swaps in a nearby archetype because the caption lacks contrastive cues."
+        original.failure_mechanism = (
+            "The generator swaps in a nearby archetype because the caption lacks contrastive cues."
+        )
         original.intervention_type = "negative_constraints"
         original.risk_level = "bold"
         original.expected_primary_metric = "vision_subject"

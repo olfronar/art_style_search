@@ -147,7 +147,9 @@ async def _zero_step(ctx: RunContext, all_ref_paths: list[Path]) -> LoopState:
             )
             for i, template in enumerate(initial_templates)
         ]
-        init_results = collect_experiment_results(await asyncio.gather(*init_tasks, return_exceptions=True), "Initial experiment")
+        init_results = collect_experiment_results(
+            await asyncio.gather(*init_tasks, return_exceptions=True), "Initial experiment"
+        )
     except Exception:
         logger.exception("Zero-step evaluation failed — partial state saved for resume")
         raise

@@ -105,7 +105,9 @@ def _recover_proposal_change_metadata(
     if category_alias_targets:
         used_alias = True
         recovered_targets.extend(
-            name for name in category_alias_targets if name in inferred_structural_targets and name not in recovered_targets
+            name
+            for name in category_alias_targets
+            if name in inferred_structural_targets and name not in recovered_targets
         )
 
     if not recovered_targets:
@@ -270,7 +272,9 @@ async def _propose_iteration_experiments(
     rejection_counts: Counter[str] = Counter()
     recovered_count = 0
     for proposal in proposals:
-        changed_section, changed_sections, was_recovered = _recover_proposal_change_metadata(proposal, state.current_template)
+        changed_section, changed_sections, was_recovered = _recover_proposal_change_metadata(
+            proposal, state.current_template
+        )
         proposal.changed_section = changed_section
         proposal.changed_sections = changed_sections
         if was_recovered:

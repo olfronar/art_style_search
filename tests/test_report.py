@@ -121,7 +121,9 @@ class TestReportDataSelection:
         kept = make_iteration_result(branch_id=1, iteration=1)
         kept.hypothesis = "kept branch"
         kept.kept = True
-        kept.aggregated = replace(kept.aggregated, dreamsim_similarity_mean=0.55, color_histogram_mean=0.45, ssim_mean=0.45)
+        kept.aggregated = replace(
+            kept.aggregated, dreamsim_similarity_mean=0.55, color_histogram_mean=0.45, ssim_mean=0.45
+        )
 
         top_raw = make_iteration_result(branch_id=0, iteration=1)
         top_raw.hypothesis = "top raw branch"

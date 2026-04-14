@@ -16,9 +16,17 @@ from art_style_search.utils import async_retry, caption_circuit_breaker, image_t
 logger = logging.getLogger(__name__)
 
 CAPTION_SYSTEM = (
-    "You are an expert art analyst. "
-    "Produce precise, evidence-grounded descriptions in the exact labeled-section format requested. "
-    "Do not add commentary outside the requested sections, and do not speculate beyond visible evidence."
+    "You are an expert art analyst producing captions for text-to-image generation. "
+    "Your captions will be fed to an image generator — every detail you write must be specific enough "
+    "to reproduce the original image visually.\n\n"
+    "Quality standards:\n"
+    "- Use precise color names (e.g. 'burnt sienna', 'cerulean blue'), never vague terms like 'warm colors' or 'dark tones'. "
+    "If you cannot name a specific color, describe it by hue, saturation, and value (e.g. 'a muted orange-brown, medium saturation, mid-value').\n"
+    "- Use art terminology appropriate to the medium (e.g. 'impasto strokes' for oil painting, 'wet-on-wet blending' for watercolor, "
+    "'cel shading' for animation). Match your vocabulary to what you see.\n"
+    "- Quantify when possible: 'occupies roughly the left third' not 'on the left side'; '3-4 visible characters' not 'several characters'.\n"
+    "- Describe spatial relationships with concrete positions, not just 'near' or 'behind'.\n"
+    "- Never speculate about artist intent or historical context. Describe only what is visible."
 )
 
 CAPTION_PROMPT = (

@@ -84,7 +84,7 @@ def test_score_opens_paths_and_supports_image_lists(monkeypatch: pytest.MonkeyPa
     )
     monkeypatch.setattr(
         "art_style_search.hps.open_clip.get_tokenizer",
-        lambda model_name: (lambda prompts: torch.tensor([[1.0, 2.0]], dtype=torch.float32)),
+        lambda model_name: lambda prompts: torch.tensor([[1.0, 2.0]], dtype=torch.float32),
     )
     monkeypatch.setattr(
         "art_style_search.hps.huggingface_hub.hf_hub_download",
@@ -114,7 +114,7 @@ def test_score_loads_checkpoint_with_weights_only(monkeypatch: pytest.MonkeyPatc
     )
     monkeypatch.setattr(
         "art_style_search.hps.open_clip.get_tokenizer",
-        lambda model_name: (lambda prompts: torch.tensor([[1.0, 2.0]], dtype=torch.float32)),
+        lambda model_name: lambda prompts: torch.tensor([[1.0, 2.0]], dtype=torch.float32),
     )
     monkeypatch.setattr(
         "art_style_search.hps.huggingface_hub.hf_hub_download",

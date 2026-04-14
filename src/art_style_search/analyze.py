@@ -106,6 +106,12 @@ _COMPILATION_PROMPT = (
     "pose or action, expression, and props or context, targeting roughly 80-140 words. "
     "Each section should have a short name, a description of what it controls, "
     "and detailed prompt text with embedded style rules as its value. Include a thorough negative prompt.\n\n"
+    "## Example (different art style — for format reference only, do NOT copy its content)\n"
+    "This example shows the expected structure for a watercolor landscape style. "
+    "Your output should match this structure but contain content specific to the analyzed style.\n\n"
+    "```json\n"
+    '{{"style_profile":{{"color_palette":"Cool blues and greens with occasional warm sienna accents, high transparency, water bloom effects","composition":"Rule-of-thirds landscape format with atmospheric perspective, soft horizon lines","technique":"Transparent watercolor on cold-pressed paper, wet-on-wet for skies, dry brush for texture","mood_atmosphere":"Serene, contemplative, misty morning light","subject_matter":"Natural landscapes with occasional architectural elements","influences":"English watercolor tradition, Turner atmospheric effects"}},"initial_template":{{"sections":[{{"name":"style_foundation","description":"core style rules","value":"..."}},{{"name":"subject_anchor","description":"subject fidelity","value":"..."}}],"negative_prompt":"...","caption_sections":["Art Style","Subject","Color Palette","Technique","Composition","Lighting & Atmosphere","Textures"],"caption_length_target":500}}}}\n'
+    "```\n\n"
     "## EXECUTION CHECKLIST — verify before outputting\n"
     "- [ ] style_profile has all 6 fields (color_palette, composition, technique, mood_atmosphere, subject_matter, influences)\n"
     "- [ ] Template first section is 'style_foundation', second is 'subject_anchor'\n"

@@ -36,7 +36,9 @@ _VERDICT_TAG_RE = __import__("re").compile(
     __import__("re").DOTALL,
 )
 _IMAGE_HEADER_RE = __import__("re").compile(r"^\*\*(.+?)\*\*\s*\[([^\]]+)\]:\s*", __import__("re").MULTILINE)
-_RAW_TAG_CLEAN_RE = __import__("re").compile(r"</?(style|subject|composition|key_gap)\b[^>]*>", __import__("re").IGNORECASE)
+_RAW_TAG_CLEAN_RE = __import__("re").compile(
+    r"</?(style|subject|composition|key_gap)\b[^>]*>", __import__("re").IGNORECASE
+)
 
 _VERDICT_CSS = {"MATCH": "verdict-match", "PARTIAL": "verdict-partial", "MISS": "verdict-miss"}
 _VERDICT_LABEL = {"MATCH": "Match", "PARTIAL": "Partial", "MISS": "Miss"}

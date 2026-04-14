@@ -20,6 +20,17 @@ if TYPE_CHECKING:
     from art_style_search.contracts import ExperimentProposal
 
 
+_REVIEW_EXAMPLE = (
+    "## Example of a good assessment\n"
+    "[EXP 1] MIXED — DreamSim improved +0.03 (above noise floor of ±0.01), confirming the subject-anchor "
+    "change helped perceptual similarity. But color_histogram declined -0.05, suggesting the revised "
+    "color section lost palette specificity. HPS and Aesthetics were flat (within noise). "
+    "The hypothesis was specific and falsifiable — partial confirmation.\n\n"
+    "## Example of a bad assessment (too generous — avoid this)\n"
+    "[EXP 2] SIGNAL — Metrics improved! — This is not specific enough. Which metrics? By how much? "
+    "Were they above noise floor? Was the hypothesis supported or just coincidental?"
+)
+
 _REVIEW_SYSTEM = (
     "You are a critical scientific reviewer evaluating prompt optimization experiments.\n"
     "Your role is INDEPENDENT from the proposer — be skeptical and evidence-based.\n\n"
@@ -41,7 +52,12 @@ _REVIEW_SYSTEM = (
     "- Which categories have the most room for improvement based on metric gaps?\n"
     "- What is the single most impactful thing the next iteration should try?\n"
     "- Recommend specific target categories for the next batch.\n\n"
-    "Be brutally honest throughout. Look for consistent patterns across multiple metrics.\n\n"
+    "## Calibration standards\n"
+    "- If fewer than half the experiments show consistent multi-metric improvement, classify most as NOISE or MIXED.\n"
+    "- A single metric improvement < 0.01 is within noise range even without formal noise floors.\n"
+    "- If no experiment clearly beats baseline, say so explicitly — do not grade on a curve.\n"
+    "- 'SIGNAL' requires improvement in at least 2 independent metrics, not just one.\n"
+    "- If vision scores improve but DreamSim/SSIM decline, that is MIXED at best (perceptual metrics take priority).\n\n"
     "Respond with:\n"
     "{\n"
     '  "experiment_assessments": ["[EXP_ID] SIGNAL|NOISE|MIXED - explanation"],\n'
@@ -116,6 +132,7 @@ async def review_iteration(
     """Independent review of iteration results — skeptical assessment of improvements."""
 
     user_parts: list[str] = []
+    user_parts.append(f"{_REVIEW_EXAMPLE}\n\n")
     user_parts.append("## Experiments to Review\n")
     noise_floor_block = _noise_floor_summary(experiments)
     if noise_floor_block:

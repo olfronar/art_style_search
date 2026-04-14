@@ -28,6 +28,7 @@ class TestCallJson:
     @pytest.mark.asyncio
     async def test_repairs_invalid_json_once_logs_attempt_at_info(self, caplog) -> None:
         client = ReasoningClient.__new__(ReasoningClient)
+        client.provider = "anthropic"
         responses = iter(["not json", '{"status": "fixed"}'])
 
         async def fake_call(*, model, system, user, max_tokens):
@@ -54,6 +55,7 @@ class TestCallJson:
     @pytest.mark.asyncio
     async def test_retries_validation_after_repair_with_followup_feedback(self) -> None:
         client = ReasoningClient.__new__(ReasoningClient)
+        client.provider = "anthropic"
         responses = iter(
             [
                 '{"status": 1}',
@@ -89,6 +91,7 @@ class TestCallJson:
     @pytest.mark.asyncio
     async def test_logs_final_failure_at_warning_by_default(self, caplog) -> None:
         client = ReasoningClient.__new__(ReasoningClient)
+        client.provider = "anthropic"
         responses = iter(["not json", "still not json"])
 
         async def fake_call(*, model, system, user, max_tokens):
@@ -113,6 +116,7 @@ class TestCallJson:
     @pytest.mark.asyncio
     async def test_supports_info_level_for_noncritical_final_failure(self, caplog) -> None:
         client = ReasoningClient.__new__(ReasoningClient)
+        client.provider = "anthropic"
         responses = iter(["not json", "still not json"])
 
         async def fake_call(*, model, system, user, max_tokens):

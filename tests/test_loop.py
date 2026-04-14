@@ -700,9 +700,7 @@ async def test_confirmatory_validation_overwrites_selected_result_with_replicate
 
 
 @pytest.mark.asyncio
-async def test_confirmatory_validation_seeds_candidates_with_existing_result(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_confirmatory_validation_seeds_candidates_with_existing_result(tmp_path: Path, monkeypatch) -> None:
     state = make_loop_state()
     config = _make_config(tmp_path, protocol="rigorous")
     ctx = RunContext(

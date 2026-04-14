@@ -138,7 +138,13 @@ def _build_per_metric_trajectories(data: ReportData) -> str:
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 
-    fig = make_subplots(rows=3, cols=3, subplot_titles=[title for _, title in _METRIC_SPECS], vertical_spacing=0.14, horizontal_spacing=0.09)
+    fig = make_subplots(
+        rows=3,
+        cols=3,
+        subplot_titles=[title for _, title in _METRIC_SPECS],
+        vertical_spacing=0.14,
+        horizontal_spacing=0.09,
+    )
     for idx, (attr, _title) in enumerate(_METRIC_SPECS):
         row = idx // 3 + 1
         col = idx % 3 + 1

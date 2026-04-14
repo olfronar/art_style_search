@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-_SCHEMA_VERSION = 4  # v1: dino_similarity era, v2: vision+KB+rigorous, v3: changed_section+target_category, v4: direction metadata
+_SCHEMA_VERSION = (
+    4  # v1: dino_similarity era, v2: vision+KB+rigorous, v3: changed_section+target_category, v4: direction metadata
+)
 _ITERATION_LOG_SCHEMA_VERSION = 1
 _MANIFEST_SCHEMA_VERSION = 3
 _PROMOTION_LOG_SCHEMA_VERSION = 1
@@ -76,9 +78,7 @@ def _migrate_knowledge_base_payload(data: dict[str, Any]) -> dict[str, Any]:
         }
     hypotheses = data.get("hypotheses", [])
     if isinstance(hypotheses, list):
-        data["hypotheses"] = [
-            _migrate_hypothesis_payload(dict(h)) if isinstance(h, dict) else h for h in hypotheses
-        ]
+        data["hypotheses"] = [_migrate_hypothesis_payload(dict(h)) if isinstance(h, dict) else h for h in hypotheses]
     return data
 
 

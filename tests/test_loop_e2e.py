@@ -414,7 +414,7 @@ def _apply_all_patches(monkeypatch, tmp_path: Path, ref_paths: list[Path]):
     monkeypatch.setattr("art_style_search.workflow.iteration_proposals.validate_template", fake_validate_template)
 
     # 8. Mock synthesize_templates (returns merged template)
-    async def fake_synthesize_templates(experiments, style_profile, *, client, model):
+    async def fake_synthesize_templates(experiments, style_profile, *, client, model, baseline_metrics=None):
         return _valid_template(), "Synthesis hypothesis: merge best aspects"
 
     monkeypatch.setattr(

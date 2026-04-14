@@ -52,7 +52,17 @@ _VISION_SINGLE_PROMPT = (
 )
 _VISION_SYSTEM = (
     "You are a careful visual judge comparing a reference image to a generated reproduction. "
-    "Use the rubric exactly as given and return only the requested pseudo-XML tags."
+    "Use the rubric exactly as given and return only the requested pseudo-XML tags.\n\n"
+    "Calibration examples:\n"
+    "- MATCH (style): 'Oil painting with visible impasto strokes matching the reference's thick paint application and muted earth-tone palette.'\n"
+    "- PARTIAL (style): 'Correct oil medium but smoother blending than reference, missing the rough brushwork texture.'\n"
+    "- MISS (style): 'Watercolor wash technique where the reference uses dense oil impasto — fundamentally different medium.'\n"
+    "- MATCH (subject): 'Same fox character with identical orange fur, white chest markings, and alert ear position as the reference.'\n"
+    "- PARTIAL (subject): 'Correct fox species but different pose (sitting vs reference's standing) and missing the satchel prop.'\n"
+    "- MISS (subject): 'A deer where the reference shows a fox — different species entirely.'\n"
+    "- MATCH (composition): 'Same three-quarter view with subject centered and forest background extending to both edges.'\n"
+    "- PARTIAL (composition): 'Subject correctly centered but cropped tighter, cutting off the lower background detail.'\n"
+    "- MISS (composition): 'Close-up portrait where reference shows a wide establishing shot with extensive landscape.'"
 )
 _VISION_CAPTION_CHAR_LIMIT = 3500
 
@@ -389,14 +399,13 @@ _PAIRWISE_COMPARE_PROMPT = (
     "2. Then compare: which set is consistently closer to the original across the image trios?\n"
     "3. Do NOT let the order (A-first or B-first) influence your judgment.\n"
     "4. Focus on concrete visual differences, not overall impressions.\n\n"
-    "## Aspects to compare\n"
-    "- Art style and technique (brushwork, rendering, visual treatment)\n"
-    "- Color palette and mood (dominant colors, temperature, atmosphere)\n"
-    "- Subject matter and composition (identity, pose, spatial layout)\n"
-    "- Overall fidelity to the original\n\n"
     "Respond with:\n"
+    "<style_verdict>A or B or TIE</style_verdict>\n"
+    "<color_verdict>A or B or TIE</color_verdict>\n"
+    "<subject_verdict>A or B or TIE</subject_verdict>\n"
+    "<composition_verdict>A or B or TIE</composition_verdict>\n"
     "<winner>A</winner> or <winner>B</winner> or <winner>TIE</winner>\n"
-    "<rationale>1-3 sentences explaining your overall judgment across all image trios</rationale>"
+    "<rationale>2-3 sentences explaining your overall judgment across all image trios, referencing specific visual differences</rationale>"
 )
 _PAIRWISE_SYSTEM = (
     "You are a careful visual judge comparing two reproduction sets against the same references. "
@@ -465,6 +474,14 @@ async def pairwise_compare_experiments(
             text = response.text or ""
             winner = (extract_xml_tag(text, "winner") or "TIE").upper()
             rationale = extract_xml_tag(text, "rationale") or text[:300]
+            style_v = extract_xml_tag(text, "style_verdict") or ""
+            color_v = extract_xml_tag(text, "color_verdict") or ""
+            subject_v = extract_xml_tag(text, "subject_verdict") or ""
+            comp_v = extract_xml_tag(text, "composition_verdict") or ""
+            if style_v or color_v or subject_v or comp_v:
+                logger.info(
+                    "Pairwise per-aspect: style=%s color=%s subject=%s comp=%s", style_v, color_v, subject_v, comp_v
+                )
             score = {"A": 1.0, "B": 0.0, "TIE": 0.5}.get(winner, 0.5)
             return (rationale, score)
     elif provider == "xai":
@@ -505,6 +522,14 @@ async def pairwise_compare_experiments(
             text = response.output_text or ""
             winner = (extract_xml_tag(text, "winner") or "TIE").upper()
             rationale = extract_xml_tag(text, "rationale") or text[:300]
+            style_v = extract_xml_tag(text, "style_verdict") or ""
+            color_v = extract_xml_tag(text, "color_verdict") or ""
+            subject_v = extract_xml_tag(text, "subject_verdict") or ""
+            comp_v = extract_xml_tag(text, "composition_verdict") or ""
+            if style_v or color_v or subject_v or comp_v:
+                logger.info(
+                    "Pairwise per-aspect: style=%s color=%s subject=%s comp=%s", style_v, color_v, subject_v, comp_v
+                )
             score = {"A": 1.0, "B": 0.0, "TIE": 0.5}.get(winner, 0.5)
             return (rationale, score)
     else:
