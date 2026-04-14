@@ -33,6 +33,7 @@ state.json
 runs/
 .plans/
 .worktrees/
+docs/
 
 # Vendored model repos
 models/
