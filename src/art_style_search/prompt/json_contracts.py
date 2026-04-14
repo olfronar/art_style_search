@@ -8,6 +8,7 @@ from typing import Any
 from art_style_search.contracts import ExperimentSketch, Lessons, RefinementResult
 from art_style_search.prompt._parse import validate_template
 from art_style_search.types import PromptSection, PromptTemplate, ReviewResult, StyleProfile
+from art_style_search.utils import CATEGORY_SYNONYMS
 
 
 def _require_dict(data: object, *, label: str) -> dict[str, Any]:
@@ -178,10 +179,18 @@ def payload_to_template(data: object, *, label: str = "template") -> PromptTempl
     )
 
 
+def _validate_template_or_raise(template: PromptTemplate, *, label: str) -> PromptTemplate:
+    errors = validate_template(template)
+    if errors:
+        msg = "; ".join(errors)
+        raise ValueError(msg)
+    return template
+
+
 def validate_initial_templates_payload(data: object, *, num_branches: int) -> list[PromptTemplate]:
     obj = _require_dict(data, label="initial_templates_response")
     templates = [
-        payload_to_template(item, label=f"templates[{i}]")
+        _validate_template_or_raise(payload_to_template(item, label=f"templates[{i}]"), label=f"templates[{i}]")
         for i, item in enumerate(_require_list(obj.get("templates") or [], label="templates"))
     ]
     if not templates:
@@ -303,23 +312,30 @@ def validate_experiment_batch_payload(data: object, *, num_experiments: int) -> 
 
 
 def validate_expansion_payload(data: object) -> RefinementResult:
-    return _refinement_result_from_payload(data, label="expansion_response")
+    result = _refinement_result_from_payload(data, label="expansion_response")
+    _validate_template_or_raise(result.template, label="expansion_response.template")
+    return result
 
 
 def validate_synthesis_payload(data: object) -> tuple[PromptTemplate, str]:
     obj = _require_dict(data, label="synthesis_response")
-    template = payload_to_template(obj.get("template") or {}, label="template")
+    template = _validate_template_or_raise(payload_to_template(obj.get("template") or {}, label="template"), label="template")
     rationale = _as_str(obj.get("rationale"), label="rationale")
     return template, rationale
 
 
 def validate_review_payload(data: object) -> ReviewResult:
     obj = _require_dict(data, label="review_response")
+    valid_categories = set(CATEGORY_SYNONYMS)
     return ReviewResult(
         experiment_assessments=_as_str_list(obj.get("experiment_assessments") or [], label="experiment_assessments"),
         noise_vs_signal=_as_str(obj.get("noise_vs_signal"), label="noise_vs_signal"),
         strategic_guidance=_as_str(obj.get("strategic_guidance"), label="strategic_guidance"),
-        recommended_categories=_as_str_list(obj.get("recommended_categories") or [], label="recommended_categories"),
+        recommended_categories=[
+            category
+            for category in _as_str_list(obj.get("recommended_categories") or [], label="recommended_categories")
+            if category in valid_categories
+        ],
     )
 
 
@@ -356,45 +372,14 @@ _SCHEMA_HINTS = {
                 "sections": [
                     {"name": "style_foundation", "description": "core style rules", "value": "..."},
                     {"name": "subject_anchor", "description": "subject fidelity instructions", "value": "..."},
+                    {"name": "color_palette", "description": "palette guidance", "value": "..."},
+                    {"name": "composition", "description": "layout guidance", "value": "..."},
                 ],
                 "negative_prompt": "...",
                 "caption_sections": ["Art Style", "Subject", "Color Palette"],
                 "caption_length_target": 500,
             }
         ]
-    },
-    "experiment_batch": {
-        "experiments": [
-            {
-                "analysis": "...",
-                "lessons": {"confirmed": "...", "rejected": "...", "new_insight": "..."},
-                "hypothesis": "...",
-                "builds_on": "H3",
-                "experiment": "...",
-                "changed_section": "color_palette",
-                "changed_sections": ["color_palette"],
-                "target_category": "color_palette",
-                "direction_id": "D1",
-                "direction_summary": "Palette localization",
-                "failure_mechanism": "Large frame regions and tiny accents are described with the same priority.",
-                "intervention_type": "information_priority",
-                "risk_level": "targeted",
-                "expected_primary_metric": "color_histogram",
-                "expected_tradeoff": "May make captions read more schematically.",
-                "open_problems": ["..."],
-                "template_changes": "...",
-                "template": {
-                    "sections": [
-                        {"name": "style_foundation", "description": "core style rules", "value": "..."},
-                        {"name": "subject_anchor", "description": "subject fidelity instructions", "value": "..."},
-                    ],
-                    "negative_prompt": "...",
-                    "caption_sections": ["Art Style", "Subject"],
-                    "caption_length_target": 500,
-                },
-            }
-        ],
-        "converged": False,
     },
     "brainstorm": {
         "sketches": [
@@ -437,6 +422,8 @@ _SCHEMA_HINTS = {
             "sections": [
                 {"name": "style_foundation", "description": "core style rules", "value": "..."},
                 {"name": "subject_anchor", "description": "subject fidelity instructions", "value": "..."},
+                {"name": "color_palette", "description": "palette guidance", "value": "..."},
+                {"name": "composition", "description": "layout guidance", "value": "..."},
             ],
             "negative_prompt": "...",
             "caption_sections": ["Art Style", "Subject"],
@@ -449,9 +436,11 @@ _SCHEMA_HINTS = {
             "sections": [
                 {"name": "style_foundation", "description": "core style rules", "value": "..."},
                 {"name": "subject_anchor", "description": "subject fidelity instructions", "value": "..."},
+                {"name": "color_palette", "description": "palette guidance", "value": "..."},
+                {"name": "composition", "description": "layout guidance", "value": "..."},
             ],
             "negative_prompt": "...",
-            "caption_sections": ["Art Style", "Subject"],
+            "caption_sections": ["Art Style", "Subject", "Color Palette"],
             "caption_length_target": 500,
         },
     },
@@ -474,6 +463,8 @@ _SCHEMA_HINTS = {
             "sections": [
                 {"name": "style_foundation", "description": "core style rules", "value": "..."},
                 {"name": "subject_anchor", "description": "subject fidelity instructions", "value": "..."},
+                {"name": "color_palette", "description": "palette guidance", "value": "..."},
+                {"name": "composition", "description": "layout guidance", "value": "..."},
             ],
             "negative_prompt": "...",
             "caption_sections": ["Art Style", "Subject"],

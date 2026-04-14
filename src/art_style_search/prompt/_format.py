@@ -118,7 +118,7 @@ def format_knowledge_base(kb: KnowledgeBase, max_words: int = 1500) -> str:
         if cat.confirmed_insights:
             cat_lines.append(f"  Latest: {cat.confirmed_insights[-1][:120]}")
         if cat.rejected_approaches:
-            cat_lines.append(f"  Last rejected: {cat.rejected_approaches[-1][:150]}")
+            cat_lines.append(f"  Last rejected: {cat.rejected_approaches[-1][:280]}")
     cat_text = "\n".join(cat_lines)
 
     # --- Section 3: Hypothesis Chain (last 5 full, rest collapsed) ---
@@ -128,7 +128,7 @@ def format_knowledge_base(kb: KnowledgeBase, max_words: int = 1500) -> str:
         prefix = "  " * indent + ("\u2514\u2500 " if indent > 0 else "")
         builds = f", builds on {h.parent_id}" if h.parent_id else ""
         if full:
-            stmt = h.statement[:80] + ("..." if len(h.statement) > 80 else "")
+            stmt = h.statement[:160] + ("..." if len(h.statement) > 160 else "")
             return f'{prefix}{h.id} (iter {h.iteration}, {h.category}{builds}) \u2192 {h.outcome.upper()}: "{stmt}"'
         return f"{prefix}{h.id} (iter {h.iteration}, {h.category}) \u2192 {h.outcome.upper()}"
 

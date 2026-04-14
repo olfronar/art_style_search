@@ -80,6 +80,7 @@ class GenerationService:
         *,
         index: int,
         output_path: Path,
+        negative_prompt: str | None = None,
     ) -> Path:
         return await generate_single(
             prompt,
@@ -89,6 +90,7 @@ class GenerationService:
             client=self.client,
             model=self.model,
             semaphore=self.semaphore,
+            negative_prompt=negative_prompt,
         )
 
 

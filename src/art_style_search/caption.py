@@ -8,31 +8,41 @@ import logging
 from pathlib import Path
 
 from google import genai  # type: ignore[attr-defined]
+from google.genai import types as genai_types  # type: ignore[attr-defined]
 
 from art_style_search.types import Caption
 from art_style_search.utils import async_retry, caption_circuit_breaker, image_to_gemini_part
 
 logger = logging.getLogger(__name__)
 
+CAPTION_SYSTEM = (
+    "You are an expert art analyst. "
+    "Produce precise, evidence-grounded descriptions in the exact labeled-section format requested. "
+    "Do not add commentary outside the requested sections, and do not speculate beyond visible evidence."
+)
+
 CAPTION_PROMPT = (
-    "You are an expert art analyst. Describe this image in comprehensive detail for someone who cannot see it. "
+    "Describe this image in comprehensive detail for someone who cannot see it. "
     "These descriptions will be used to understand and reproduce the art style.\n\n"
     "## Output format\n"
     "Use these labeled sections in this exact order. Each section: 2-4 sentences with specific details.\n\n"
-    "**Subjects** (MOST IMPORTANT): What is depicted — identity, species, poses, expressions, "
-    "clothing, relationships between figures. Be specific about distinguishing features.\n"
-    "**Colors**: Dominant palette (name specific colors like 'burnt sienna', not just 'brown'), "
+    "[Art Style]: Shared style DNA visible in the image — recurring rendering rules, medium cues, "
+    "and reusable technique language that would help recreate another image in the same style.\n"
+    "[Subject] (MOST IMPORTANT): What is depicted — identity, species, poses, expressions, "
+    "clothing or equipment, relationships between figures, props, and distinguishing features.\n"
+    "[Color Palette]: Dominant palette (name specific colors like 'burnt sienna', not just 'brown'), "
     "color relationships, saturation, temperature, gradients.\n"
-    "**Technique**: Medium (oil, watercolor, digital, etc.), brushwork or rendering style, line quality, "
+    "[Technique]: Medium (oil, watercolor, digital, etc.), brushwork or rendering style, line quality, "
     "level of detail, abstraction vs realism.\n"
-    "**Composition**: Layout, focal points, balance, use of space, perspective, framing.\n"
-    "**Lighting & Atmosphere**: Light direction, shadow treatment, emotional tone, sense of time or place.\n"
-    "**Textures**: Surface qualities, patterns, tactile impressions.\n\n"
+    "[Composition]: Layout, focal points, balance, use of space, perspective, framing.\n"
+    "[Lighting & Atmosphere]: Light direction, shadow treatment, emotional tone, sense of time or place.\n"
+    "[Textures]: Surface qualities, patterns, tactile impressions.\n\n"
     "## Constraints\n"
     "- Be precise. Use art terminology and specific color names.\n"
-    "- Target 200-400 words total.\n"
+    "- Target 400-600 words total.\n"
     "- Do not speculate about the artist's intent; describe only what is visible.\n"
-    "- Subjects section must be the most detailed (aim for 50-100 words)."
+    "- [Subject] must be the most detailed section (aim for 80-140 words).\n"
+    "- Keep the labels exactly as written above."
 )
 
 
@@ -77,6 +87,7 @@ async def caption_single(
                         image_to_gemini_part(image_path),
                         prompt,
                     ],
+                    config=genai_types.GenerateContentConfig(system_instruction=CAPTION_SYSTEM),
                 ),
                 timeout=90,
             )
@@ -87,7 +98,7 @@ async def caption_single(
     )
 
     # Validate caption quality — empty or very short captions waste downstream cycles
-    min_caption_length = 150
+    min_caption_length = 900 if prompt == CAPTION_PROMPT else 150
     if not caption_text or len(caption_text.strip()) < min_caption_length:
         msg = (
             f"Captioning {image_path.name} produced empty or too-short caption "

@@ -232,6 +232,9 @@ def _build_shared_proposal_user(
     vision_feedback: str,
     roundtrip_feedback: str,
     caption_diffs: str,
+    vision_feedback_word_limit: int = 300,
+    roundtrip_feedback_word_limit: int = 400,
+    include_roundtrip_feedback: bool = True,
 ) -> str:
     has_history = knowledge_base.hypotheses
     user_parts: list[str] = [
@@ -285,7 +288,7 @@ def _build_shared_proposal_user(
                 idx = min(range(len(worst.per_image_scores)), key=lambda i: worst.per_image_scores[i].dreamsim_similarity)
                 if idx < len(worst.iteration_captions):
                     cap = worst.iteration_captions[idx]
-                    cap_text = _truncate_words(cap.text, 150)
+                    cap_text = _truncate_words(cap.text, 100)
                     worst_parts.append(
                         f"Worst image ({cap.image_path.name}): "
                         f"DS={worst.per_image_scores[idx].dreamsim_similarity:.3f}\n"
@@ -297,11 +300,13 @@ def _build_shared_proposal_user(
 
     if vision_feedback:
         user_parts.append("\n\n## Vision Comparison (Gemini analysis of generated vs reference images)\n")
-        user_parts.append(_truncate_words(vision_feedback, 500, suffix="\n[...truncated]"))
+        user_parts.append(_truncate_words(vision_feedback, vision_feedback_word_limit, suffix="\n[...truncated]"))
 
-    if roundtrip_feedback:
+    if roundtrip_feedback and include_roundtrip_feedback:
         user_parts.append("\n\n## Per-Image Results (sorted worst -> best by DreamSim)\n")
-        user_parts.append(_truncate_words(roundtrip_feedback, 800, suffix="\n[...truncated]"))
+        user_parts.append(
+            _truncate_words(roundtrip_feedback, roundtrip_feedback_word_limit, suffix="\n[...truncated]")
+        )
 
     if caption_diffs:
         user_parts.append(f"\n\n{caption_diffs}")
@@ -318,7 +323,8 @@ def _brainstorm_user(
     instruction = (
         f"\n\nBrainstorm {num_sketches} lightweight experiment sketches in one JSON object. "
         "First diagnose likely failure mechanisms. Then produce sketches grouped into directions D1-D3, "
-        "keeping each sketch lightweight and mechanism-specific. Do not emit full templates yet."
+        "keeping each sketch lightweight and mechanism-specific. Use the failure_mechanism field to record that diagnosis. "
+        "Do not emit full templates yet."
     )
     if has_feedback:
         instruction += " Use the vision comparison and per-image results to ground the sketches in concrete evidence."
@@ -500,6 +506,9 @@ async def brainstorm_experiment_sketches(
         vision_feedback=vision_feedback,
         roundtrip_feedback=roundtrip_feedback,
         caption_diffs=caption_diffs,
+        vision_feedback_word_limit=300,
+        roundtrip_feedback_word_limit=400,
+        include_roundtrip_feedback=True,
     )
     user = _brainstorm_user(shared_user, num_sketches=num_sketches, has_feedback=bool(vision_feedback or roundtrip_feedback))
     logger.info("Brainstorming %d experiment sketches (%s) — context: ~%d words", num_sketches, model, len(user.split()))
@@ -572,6 +581,9 @@ async def expand_experiment_sketches(
         vision_feedback=vision_feedback,
         roundtrip_feedback=roundtrip_feedback,
         caption_diffs=caption_diffs,
+        vision_feedback_word_limit=300,
+        roundtrip_feedback_word_limit=400,
+        include_roundtrip_feedback=not bool(vision_feedback),
     )
     system = _expand_system(current_template)
     tasks = [

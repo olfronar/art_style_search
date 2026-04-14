@@ -4,8 +4,20 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
-from art_style_search.analyze import _load_cache, _save_cache
+import pytest
+from PIL import Image
+
+from art_style_search.analyze import (
+    _ANALYSIS_SYSTEM,
+    _COMPILATION_PROMPT,
+    _GEMINI_ANALYSIS_PROMPT,
+    _REASONING_ANALYSIS_PROMPT,
+    _gemini_analyze,
+    _load_cache,
+    _save_cache,
+)
 from art_style_search.types import PromptSection, PromptTemplate
 from art_style_search.utils import extract_xml_tag
 from tests.conftest import make_style_profile
@@ -59,14 +71,17 @@ class TestStyleCache:
     def _make_valid_template() -> PromptTemplate:
         return PromptTemplate(
             sections=[
-                PromptSection(name="style_foundation", description="rules", value="Shared rules"),
-                PromptSection(name="subject_anchor", description="subject rules", value="Subject guidance"),
-                PromptSection(name="color_palette", description="colors", value="Palette guidance"),
-                PromptSection(name="composition", description="layout", value="Composition guidance"),
-                PromptSection(name="technique", description="medium", value="Technique guidance"),
+                PromptSection(name="style_foundation", description="rules", value="Shared rules. " * 80),
+                PromptSection(name="subject_anchor", description="subject rules", value="Subject guidance. " * 80),
+                PromptSection(name="color_palette", description="colors", value="Palette guidance. " * 80),
+                PromptSection(name="composition", description="layout", value="Composition guidance. " * 80),
+                PromptSection(name="technique", description="medium", value="Technique guidance. " * 80),
+                PromptSection(name="lighting", description="light", value="Lighting guidance. " * 80),
+                PromptSection(name="environment", description="environment", value="Environment guidance. " * 80),
+                PromptSection(name="textures", description="textures", value="Texture guidance. " * 80),
             ],
             negative_prompt="avoid blur",
-            caption_sections=["Art Style", "Subject", "Color Palette", "Composition"],
+            caption_sections=["Art Style", "Subject", "Color Palette", "Composition", "Technique"],
             caption_length_target=500,
         )
 
@@ -142,3 +157,32 @@ class TestStyleCache:
         nested = tmp_path / "a" / "b" / "c" / "cache.json"
         _save_cache(make_style_profile(), self._make_valid_template(), nested)
         assert nested.exists()
+
+
+class TestAnalyzePrompts:
+    def test_reasoning_prompt_drops_generic_format_disclaimer(self) -> None:
+        assert "generic section format" not in _REASONING_ANALYSIS_PROMPT
+
+    def test_compilation_prompt_uses_json_key_language_not_xml_tags(self) -> None:
+        assert "<caption_sections>" not in _COMPILATION_PROMPT
+        assert "<caption_length>" not in _COMPILATION_PROMPT
+        assert '"caption_sections"' in _COMPILATION_PROMPT
+        assert '"caption_length_target"' in _COMPILATION_PROMPT
+
+    @pytest.mark.asyncio
+    async def test_gemini_analyze_uses_system_instruction(self, tmp_path: Path) -> None:
+        image_path = tmp_path / "ref.png"
+        Image.new("RGB", (8, 8), color="blue").save(image_path)
+        captured: dict[str, object] = {}
+
+        async def fake_generate_content(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(text="analysis")
+
+        client = SimpleNamespace(aio=SimpleNamespace(models=SimpleNamespace(generate_content=fake_generate_content)))
+
+        result = await _gemini_analyze([image_path], client=client, model="fake-model")  # type: ignore[arg-type]
+
+        assert result == "analysis"
+        assert captured["config"].system_instruction == _ANALYSIS_SYSTEM
+        assert _GEMINI_ANALYSIS_PROMPT in captured["contents"]

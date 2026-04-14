@@ -126,6 +126,7 @@ async def _caption_and_generate(
     ref_paths: list[Path],
     meta_prompt: str,
     *,
+    negative_prompt: str | None,
     config: Config,
     services: RunServices,
     iteration: int,
@@ -157,6 +158,7 @@ async def _caption_and_generate(
             build_generation_prompt(caption.text),
             index=i,
             output_path=gen_dir / f"{i:02d}.png",
+            negative_prompt=negative_prompt,
         )
         return caption, gen_path
 
@@ -211,6 +213,7 @@ async def run_experiment(
     captions, generated_paths, pairs = await _caption_and_generate(
         fixed_refs,
         meta_prompt,
+        negative_prompt=template.negative_prompt,
         config=config,
         services=services,
         iteration=iteration,

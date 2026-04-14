@@ -16,6 +16,11 @@ from art_style_search.utils import async_retry, generation_circuit_breaker
 logger = logging.getLogger(__name__)
 
 _REQUEST_TIMEOUT = 180  # seconds — per-request timeout to release semaphore on hang
+_GENERATION_SYSTEM = (
+    "You generate a single image from the supplied prompt. "
+    "Do not add watermarks, signatures, borders, captions, or other text overlays. "
+    "Match the described subject, style, and composition as faithfully as possible."
+)
 
 
 def _atomic_write(data: bytes, target: Path) -> None:
@@ -42,6 +47,7 @@ async def generate_single(
     client: genai.Client,
     model: str,
     semaphore: asyncio.Semaphore,
+    negative_prompt: str | None = None,
 ) -> Path:
     """Generate a single image with semaphore gating and exponential backoff."""
     # Disk cache: skip API call if image already exists (e.g. crash+resume)
@@ -54,11 +60,15 @@ async def generate_single(
 
     async def _call() -> Path:
         async with semaphore:
+            system_instruction = _GENERATION_SYSTEM
+            if negative_prompt:
+                system_instruction += f"\nAvoid: {negative_prompt}"
             response = await asyncio.wait_for(
                 client.aio.models.generate_content(
                     model=model,
                     contents=prompt,
                     config=genai_types.GenerateContentConfig(
+                        system_instruction=system_instruction,
                         response_modalities=["IMAGE"],
                         thinking_config=genai_types.ThinkingConfig(thinking_level="MINIMAL"),
                         image_config=genai_types.ImageConfig(

@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 _VISION_SINGLE_PROMPT = (
     "Compare the ORIGINAL reference image with the GENERATED reproduction.\n"
     "The caption used to generate was:\n{caption}\n\n"
-    "Be BRUTALLY HONEST. Focus on what is WRONG.\n\n"
+    "Assess each dimension independently and neutrally.\n\n"
     "For each dimension, judge as:\n"
     "- MATCH: reproduction captures this aspect well. Concrete standard: a viewer would "
     "recognize it as the same image in this dimension without hesitation.\n"
@@ -49,8 +49,12 @@ _VISION_SINGLE_PROMPT = (
     '<style verdict="MATCH|PARTIAL|MISS">1-sentence explanation</style>\n'
     '<subject verdict="MATCH|PARTIAL|MISS">1-sentence explanation about character/subject fidelity</subject>\n'
     '<composition verdict="MATCH|PARTIAL|MISS">1-sentence explanation about spatial layout</composition>\n'
-    "<key_gap>The single most critical thing the caption missed or the generator failed on</key_gap>"
 )
+_VISION_SYSTEM = (
+    "You are a careful visual judge comparing a reference image to a generated reproduction. "
+    "Use the rubric exactly as given and return only the requested pseudo-XML tags."
+)
+_VISION_CAPTION_CHAR_LIMIT = 3500
 
 _VERDICT_RE = re.compile(
     r'<(\w+)\s+verdict="(\w+)">(.*?)</\1>',
@@ -240,18 +244,27 @@ async def _compare_vision_single_gemini(
 
     Returns (qualitative_feedback, vision_scores) for this one image.
     """
+    swapped = random.random() < 0.5
+    first_label = "### GENERATED reproduction:" if swapped else "### ORIGINAL reference:"
+    second_label = "### ORIGINAL reference:" if swapped else "### GENERATED reproduction:"
+    first_image = gen_path if swapped else ref_path
+    second_image = ref_path if swapped else gen_path
     contents: list[object] = [
-        "### ORIGINAL:",
-        image_to_gemini_part(ref_path),
-        "### GENERATED (from caption):",
-        image_to_gemini_part(gen_path),
-        _VISION_SINGLE_PROMPT.format(caption=caption[:600]),
+        first_label,
+        image_to_gemini_part(first_image),
+        second_label,
+        image_to_gemini_part(second_image),
+        _VISION_SINGLE_PROMPT.format(caption=caption[:_VISION_CAPTION_CHAR_LIMIT]),
     ]
 
     async def _call() -> tuple[str, VisionScores]:
         async with semaphore:
             response = await asyncio.wait_for(
-                client.aio.models.generate_content(model=model, contents=contents),
+                client.aio.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=genai.types.GenerateContentConfig(system_instruction=_VISION_SYSTEM),
+                ),
                 timeout=90,
             )
         text = response.text or ""
@@ -274,12 +287,17 @@ async def _compare_vision_single_xai(
     semaphore: asyncio.Semaphore,
 ) -> tuple[str, VisionScores]:
     """Compare a single (original, generated) pair via xAI multimodal responses."""
+    swapped = random.random() < 0.5
+    first_label = "### GENERATED reproduction:" if swapped else "### ORIGINAL reference:"
+    second_label = "### ORIGINAL reference:" if swapped else "### GENERATED reproduction:"
+    first_image = gen_path if swapped else ref_path
+    second_image = ref_path if swapped else gen_path
     contents = [
-        {"type": "input_text", "text": "### ORIGINAL:"},
-        {"type": "input_image", "image_url": image_to_xai_data_url(ref_path), "detail": "high"},
-        {"type": "input_text", "text": "### GENERATED (from caption):"},
-        {"type": "input_image", "image_url": image_to_xai_data_url(gen_path), "detail": "high"},
-        {"type": "input_text", "text": _VISION_SINGLE_PROMPT.format(caption=caption[:600])},
+        {"type": "input_text", "text": first_label},
+        {"type": "input_image", "image_url": image_to_xai_data_url(first_image), "detail": "high"},
+        {"type": "input_text", "text": second_label},
+        {"type": "input_image", "image_url": image_to_xai_data_url(second_image), "detail": "high"},
+        {"type": "input_text", "text": _VISION_SINGLE_PROMPT.format(caption=caption[:_VISION_CAPTION_CHAR_LIMIT])},
     ]
 
     async def _call() -> tuple[str, VisionScores]:
@@ -287,7 +305,10 @@ async def _compare_vision_single_xai(
             response = await asyncio.wait_for(
                 client.responses.create(
                     model=model,
-                    input=[{"role": "user", "content": contents}],
+                    input=[
+                        {"role": "system", "content": _VISION_SYSTEM},
+                        {"role": "user", "content": contents},
+                    ],
                     max_output_tokens=1000,
                     store=False,
                 ),
@@ -377,6 +398,10 @@ _PAIRWISE_COMPARE_PROMPT = (
     "<winner>A</winner> or <winner>B</winner> or <winner>TIE</winner>\n"
     "<rationale>1-3 sentences explaining your overall judgment across all image trios</rationale>"
 )
+_PAIRWISE_SYSTEM = (
+    "You are a careful visual judge comparing two reproduction sets against the same references. "
+    "Evaluate the trios independently, ignore ordering bias, and return only the requested tags."
+)
 
 
 async def pairwise_compare_experiments(
@@ -430,7 +455,11 @@ async def pairwise_compare_experiments(
         async def _call() -> tuple[str, float]:
             async with semaphore:
                 response = await asyncio.wait_for(
-                    client.aio.models.generate_content(model=model, contents=contents),
+                    client.aio.models.generate_content(
+                        model=model,
+                        contents=contents,
+                        config=genai.types.GenerateContentConfig(system_instruction=_PAIRWISE_SYSTEM),
+                    ),
                     timeout=120,
                 )
             text = response.text or ""
@@ -464,7 +493,10 @@ async def pairwise_compare_experiments(
                 response = await asyncio.wait_for(
                     xai_client.responses.create(
                         model=model,
-                        input=[{"role": "user", "content": contents}],
+                        input=[
+                            {"role": "system", "content": _PAIRWISE_SYSTEM},
+                            {"role": "user", "content": contents},
+                        ],
                         max_output_tokens=1000,
                         store=False,
                     ),

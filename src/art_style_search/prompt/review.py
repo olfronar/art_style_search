@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import statistics
 from typing import TYPE_CHECKING
 
 from art_style_search.prompt._format import _format_metrics, format_knowledge_base
 from art_style_search.prompt.json_contracts import schema_hint, validate_review_payload
-from art_style_search.types import AggregatedMetrics, IterationResult, KnowledgeBase, ReviewResult
+from art_style_search.types import (
+    AggregatedMetrics,
+    IterationResult,
+    KnowledgeBase,
+    ReviewResult,
+    compliance_components_mean,
+)
 from art_style_search.utils import ReasoningClient
 
 if TYPE_CHECKING:
@@ -22,7 +29,8 @@ _REVIEW_SYSTEM = (
     "- Was the hypothesis specific enough to be falsifiable?\n"
     "- Did the changed section actually cause the observed effects, or could it be coincidence?\n"
     "- Are there confounding factors (e.g., caption length changed alongside content)?\n"
-    "Calibration: +0.005 on one metric while others stayed flat is likely noise, not real improvement.\n"
+    "Noise floors are provided below when enough experiments exist. "
+    "Changes below the provided noise floor should usually be treated as noise.\n"
     "Classify each as SIGNAL (consistent multi-metric improvement), NOISE (random fluctuation), "
     "or MIXED (some real, some spurious).\n\n"
     "## PHASE 2: SYNTHESIZE across experiments\n"
@@ -45,6 +53,57 @@ _REVIEW_SYSTEM = (
 )
 
 
+def _compliance_mean(metrics: AggregatedMetrics) -> float:
+    return compliance_components_mean(
+        metrics.compliance_topic_coverage,
+        metrics.compliance_marker_coverage,
+        metrics.section_ordering_rate,
+        metrics.section_balance_rate,
+        metrics.subject_specificity_rate,
+    )
+
+
+def _delta_summary(metrics: AggregatedMetrics, baseline: AggregatedMetrics) -> str:
+    return (
+        "Deltas vs baseline: "
+        f"DS={metrics.dreamsim_similarity_mean - baseline.dreamsim_similarity_mean:+.4f} "
+        f"Color={metrics.color_histogram_mean - baseline.color_histogram_mean:+.4f} "
+        f"HPS={metrics.hps_score_mean - baseline.hps_score_mean:+.4f} "
+        f"SSIM={metrics.ssim_mean - baseline.ssim_mean:+.4f} "
+        f"Aes={metrics.aesthetics_score_mean - baseline.aesthetics_score_mean:+.4f} "
+        f"vision_style={metrics.vision_style - baseline.vision_style:+.4f} "
+        f"vision_subject={metrics.vision_subject - baseline.vision_subject:+.4f} "
+        f"vision_composition={metrics.vision_composition - baseline.vision_composition:+.4f} "
+        f"style_consistency={metrics.style_consistency - baseline.style_consistency:+.4f} "
+        f"completion_rate={metrics.completion_rate - baseline.completion_rate:+.4f} "
+        f"compliance={_compliance_mean(metrics) - _compliance_mean(baseline):+.4f}\n"
+    )
+
+
+def _noise_floor_summary(experiments: list[IterationResult]) -> str:
+    if len(experiments) < 2:
+        return ""
+
+    def _std(values: list[float]) -> float:
+        return statistics.pstdev(values) if len(values) >= 2 else 0.0
+
+    metrics = [exp.aggregated for exp in experiments]
+    return (
+        "## Noise floors for this run\n"
+        f"DS=±{_std([m.dreamsim_similarity_mean for m in metrics]):.4f} "
+        f"Color=±{_std([m.color_histogram_mean for m in metrics]):.4f} "
+        f"HPS=±{_std([m.hps_score_mean for m in metrics]):.4f} "
+        f"SSIM=±{_std([m.ssim_mean for m in metrics]):.4f} "
+        f"Aes=±{_std([m.aesthetics_score_mean for m in metrics]):.4f} "
+        f"vision_style=±{_std([m.vision_style for m in metrics]):.4f} "
+        f"vision_subject=±{_std([m.vision_subject for m in metrics]):.4f} "
+        f"vision_composition=±{_std([m.vision_composition for m in metrics]):.4f} "
+        f"style_consistency=±{_std([m.style_consistency for m in metrics]):.4f} "
+        f"completion_rate=±{_std([m.completion_rate for m in metrics]):.4f} "
+        f"compliance=±{_std([_compliance_mean(m) for m in metrics]):.4f}\n"
+    )
+
+
 async def review_iteration(
     experiments: list[IterationResult],
     proposals: list[ExperimentProposal],
@@ -58,6 +117,9 @@ async def review_iteration(
 
     user_parts: list[str] = []
     user_parts.append("## Experiments to Review\n")
+    noise_floor_block = _noise_floor_summary(experiments)
+    if noise_floor_block:
+        user_parts.append(noise_floor_block + "\n")
 
     for exp, prop in zip(experiments, proposals, strict=False):
         m = exp.aggregated
@@ -69,10 +131,7 @@ async def review_iteration(
             f"Metrics: {_format_metrics(m)}\n"
         )
         if baseline_metrics:
-            delta_ds = m.dreamsim_similarity_mean - baseline_metrics.dreamsim_similarity_mean
-            delta_color = m.color_histogram_mean - baseline_metrics.color_histogram_mean
-            delta_hps = m.hps_score_mean - baseline_metrics.hps_score_mean
-            user_parts.append(f"Deltas vs baseline: DS={delta_ds:+.4f} Color={delta_color:+.4f} HPS={delta_hps:+.4f}\n")
+            user_parts.append(_delta_summary(m, baseline_metrics))
 
     if baseline_metrics:
         user_parts.append(f"\n## Baseline Metrics\n{_format_metrics(baseline_metrics)}\n")

@@ -58,9 +58,9 @@ async def synthesize_templates(
         "{\n"
         '  "rationale": "...",\n'
         '  "template": {\n'
-        '    "sections": [{"name": "...", "description": "...", "value": "..."}],\n'
+        '    "sections": [{"name": "style_foundation", "description": "...", "value": "..."}, {"name": "subject_anchor", "description": "...", "value": "..."}, {"name": "color_palette", "description": "...", "value": "..."}, {"name": "composition", "description": "...", "value": "..."}],\n'
         '    "negative_prompt": "...",\n'
-        '    "caption_sections": ["Art Style", "Color Palette"],\n'
+        '    "caption_sections": ["Art Style", "Subject", "Color Palette"],\n'
         '    "caption_length_target": 500\n'
         "  }\n"
         "}\n"

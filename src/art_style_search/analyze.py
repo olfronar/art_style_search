@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 
 from google import genai  # type: ignore[attr-defined]
+from google.genai import types as genai_types  # type: ignore[attr-defined]
 
 from art_style_search.prompt._parse import validate_template
 from art_style_search.prompt.json_contracts import schema_hint, validate_style_compilation_payload
@@ -23,13 +24,10 @@ from art_style_search.utils import (
 logger = logging.getLogger(__name__)
 
 _ANALYSIS_SYSTEM = (
-    "You are an expert art analyst and prompt engineer. "
-    "Your goal is to deeply understand an art style from reference images so it can be reproduced "
-    "via text-to-image generation. Your analysis will directly feed into crafting generation prompts, "
-    "so prioritize elements that are controllable via text prompts (color descriptions, technique keywords, "
-    "mood descriptors) over elements that are hard to specify textually (exact spatial layouts, precise proportions).\n"
-    "Why: text-to-image models respond well to named colors, technique terms, and mood descriptors "
-    "but struggle with exact coordinates or proportions."
+    "You are an expert art analyst and prompt engineer with strong art-historical vocabulary. "
+    "Ground every claim in visible evidence, prefer concrete colors and technique terms over metaphor, "
+    "and avoid speculating about artist intent or invisible process. "
+    "Your analysis feeds prompt construction for text-to-image generation, so prioritize details that can be controlled with text."
 )
 
 _GEMINI_ANALYSIS_PROMPT = (
@@ -52,9 +50,7 @@ _GEMINI_ANALYSIS_PROMPT = (
 )
 
 _REASONING_ANALYSIS_PROMPT = (
-    "Below are detailed text descriptions of reference images that share a common art style. "
-    "These descriptions use a generic section format (Colors, Composition, Technique, etc.) — "
-    "NOT the final optimized caption format. Extract insights regardless of section labels.\n\n"
+    "Below are detailed text descriptions of reference images that share a common art style.\n\n"
     "You are the REASONING specialist — focus on abstract patterns, underlying principles, and stylistic rules.\n\n"
     "{captions}\n\n"
     "Analyze the descriptions to identify:\n"
@@ -76,8 +72,7 @@ _REASONING_ANALYSIS_PROMPT = (
 
 _COMPILATION_PROMPT = (
     "You received two independent analyses of the same set of reference images.\n"
-    "Note: the bootstrap captions used a generic section format (Colors, Composition, etc.). "
-    "Your template will define its OWN section names and structure — do not copy the bootstrap format.\n\n"
+    "Your template will define its OWN section names and structure based on the strongest cross-image patterns.\n\n"
     "## Analysis from visual model (Gemini — saw the actual images):\n{gemini_analysis}\n\n"
     "## Analysis from reasoning model (read detailed captions):\n{reasoning_analysis}\n\n"
     "Synthesize BOTH analyses into:\n"
@@ -100,9 +95,9 @@ _COMPILATION_PROMPT = (
     "Why: embedding rules as literal text ensures the captioner repeats them verbatim rather than interpreting them.\n"
     "- Total rendered meta-prompt should be 1200-1800 words.\n"
     "- The negative prompt should target common failure modes the reasoning model identified.\n"
-    "- Include <caption_sections>: an ordered comma-separated list of labeled sections "
-    "the captioner should produce in its output (e.g. Art Style, Color Palette, Composition, etc.).\n"
-    "- Include <caption_length>: target word count for produced captions (e.g. 500).\n\n"
+    '- Include the JSON key "caption_sections": an ordered list of labeled sections '
+    'the captioner should produce in its output (e.g. ["Art Style", "Subject", "Color Palette"]).\n'
+    '- Include the JSON key "caption_length_target": target word count for produced captions (e.g. 500).\n\n'
     "The prompt template should have 8-15 sections covering: technique/medium, color palette, composition, "
     "character/figure treatment, background/environment, details/textures, lighting, mood/atmosphere, "
     "and subject rendering. The FIRST section must be 'style_foundation' and the SECOND section must be "
@@ -128,7 +123,7 @@ _COMPILATION_PROMPT = (
     '    "influences": "..."\n'
     "  }},\n"
     '  "initial_template": {{\n'
-    '    "sections": [{{"name": "style_foundation", "description": "core art style identity and rules", "value": "..."}}, {{"name": "subject_anchor", "description": "subject fidelity instructions", "value": "..."}}],\n'
+    '    "sections": [{{"name": "style_foundation", "description": "core art style identity and rules", "value": "..."}}, {{"name": "subject_anchor", "description": "subject fidelity instructions", "value": "..."}}, {{"name": "color_palette", "description": "palette guidance", "value": "..."}}, {{"name": "composition", "description": "layout guidance", "value": "..."}}],\n'
     '    "negative_prompt": "...",\n'
     '    "caption_sections": ["Art Style", "Subject", "Color Palette", "Technique", "Composition"],\n'
     '    "caption_length_target": 500\n'
@@ -160,7 +155,11 @@ async def _gemini_analyze(
 
     async def _call() -> str:
         response = await asyncio.wait_for(
-            client.aio.models.generate_content(model=model, contents=contents),
+            client.aio.models.generate_content(
+                model=model,
+                contents=contents,
+                config=genai_types.GenerateContentConfig(system_instruction=_ANALYSIS_SYSTEM),
+            ),
             timeout=120,
         )
         return response.text

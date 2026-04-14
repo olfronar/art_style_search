@@ -169,6 +169,7 @@ class TestCaptionAndGenerate:
         ref_path = tmp_path / "ref.png"
         ref_path.touch()
         captured: dict[str, str] = {}
+        captured_negative: dict[str, str | None] = {}
 
         class FakeCaptioning:
             async def caption_single(self, image_path, *, prompt, cache_dir, cache_key=""):
@@ -183,8 +184,9 @@ class TestCaptionAndGenerate:
                 )
 
         class FakeGeneration:
-            async def generate_single(self, prompt, *, index, output_path):
+            async def generate_single(self, prompt, *, index, output_path, negative_prompt=None):
                 captured["prompt"] = prompt
+                captured_negative["negative_prompt"] = negative_prompt
                 output_path.touch()
                 return output_path
 
@@ -223,6 +225,7 @@ class TestCaptionAndGenerate:
         captions, generated, pairs = await _caption_and_generate(
             [ref_path],
             "meta prompt",
+            negative_prompt="Avoid watermarks and signatures.",
             config=config,
             services=services,
             iteration=1,
@@ -234,3 +237,4 @@ class TestCaptionAndGenerate:
         assert pairs[0] == (ref_path, generated[0])
         assert captured["prompt"].startswith("[Subject]\nA red fox")
         assert "Render in this style:\n[Art Style]\nShared watercolor rules with soft edges." in captured["prompt"]
+        assert captured_negative["negative_prompt"] == "Avoid watermarks and signatures."

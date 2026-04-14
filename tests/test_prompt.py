@@ -21,10 +21,13 @@ from art_style_search.prompt import (
     _parse_template,
     _parse_template_changes,
     propose_experiments,
+    propose_initial_templates,
     rank_experiment_sketches,
+    synthesize_templates,
     validate_template,
 )
 from art_style_search.prompt.json_contracts import (
+    schema_hint,
     validate_brainstorm_payload,
     validate_expansion_payload,
     validate_experiment_batch_payload,
@@ -424,15 +427,18 @@ class TestParseChangedSection:
 def _make_valid_template() -> PromptTemplate:
     """Build a minimal valid template for validation tests."""
     sections = [
-        PromptSection(name="style_foundation", description="Style rules", value="Foundation rules."),
-        PromptSection(name="subject_anchor", description="Subject rules", value="Subject rules."),
-        PromptSection(name="color_palette", description="Colors", value="Color rules."),
-        PromptSection(name="composition", description="Layout", value="Comp rules."),
-        PromptSection(name="technique", description="Technique", value="Tech rules."),
+        PromptSection(name="style_foundation", description="Style rules", value="Foundation rules. " * 80),
+        PromptSection(name="subject_anchor", description="Subject rules", value="Subject rules. " * 80),
+        PromptSection(name="color_palette", description="Colors", value="Color rules. " * 80),
+        PromptSection(name="composition", description="Layout", value="Comp rules. " * 80),
+        PromptSection(name="technique", description="Technique", value="Tech rules. " * 80),
+        PromptSection(name="lighting", description="Lighting", value="Lighting rules. " * 80),
+        PromptSection(name="environment", description="Environment", value="Environment rules. " * 80),
+        PromptSection(name="textures", description="Textures", value="Texture rules. " * 80),
     ]
     return PromptTemplate(
         sections=sections,
-        caption_sections=["Art Style", "Subject", "Color Palette", "Composition"],
+        caption_sections=["Art Style", "Subject", "Color Palette", "Composition", "Technique"],
         caption_length_target=500,
     )
 
@@ -469,15 +475,22 @@ class TestValidateTemplate:
 
     def test_too_few_sections(self) -> None:
         t = _make_valid_template()
-        t.sections = t.sections[:2]
+        t.sections = t.sections[:7]
         errors = validate_template(t)
         assert any("Section count" in e for e in errors)
 
     def test_caption_length_out_of_bounds(self) -> None:
         t = _make_valid_template()
-        t.caption_length_target = 50
+        t.caption_length_target = 150
         errors = validate_template(t)
         assert any("Caption length" in e for e in errors)
+
+    def test_rendered_prompt_word_count_out_of_bounds(self) -> None:
+        t = _make_valid_template()
+        for section in t.sections:
+            section.value = "tiny"
+        errors = validate_template(t)
+        assert any("Rendered prompt word count" in e for e in errors)
 
     def test_changed_section_not_in_template(self) -> None:
         t = _make_valid_template()
@@ -502,13 +515,13 @@ class TestValidateTemplate:
 
     def test_changed_sections_allow_removed_incumbent_section_when_reference_template_provided(self) -> None:
         current = _make_valid_template()
-        current.sections[2] = PromptSection(name="face_hands_pose", description="anatomy", value="Pose rules.")
+        current.sections[2] = PromptSection(name="face_hands_pose", description="anatomy", value="Pose rules. " * 80)
 
         proposed = _make_valid_template()
         proposed.sections[2] = PromptSection(
             name="scene_type_and_asset_class",
             description="scene taxonomy",
-            value="Scene taxonomy rules.",
+            value="Scene taxonomy rules. " * 80,
         )
 
         assert (
@@ -647,6 +660,7 @@ class TestJsonContracts:
         assert [sketch.builds_on for sketch in sketches] == ["", "", "H3, H5"]
 
     def test_expansion_payload_normalizes_nullable_lessons_and_list_analysis(self) -> None:
+        valid_template = _make_valid_template()
         payload = {
             "analysis": ["Line 1", "Line 2"],
             "lessons": None,
@@ -667,13 +681,11 @@ class TestJsonContracts:
             "template_changes": "Reinforce the subject block with required identity facets.",
             "template": {
                 "sections": [
-                    {"name": "style_foundation", "description": "rules", "value": "Shared rules"},
-                    {"name": "subject_anchor", "description": "subject rules", "value": "Subject guidance"},
-                    {"name": "composition", "description": "layout", "value": "Layout guidance"},
-                    {"name": "technique", "description": "medium", "value": "Technique guidance"},
+                    {"name": section.name, "description": section.description, "value": section.value}
+                    for section in valid_template.sections
                 ],
                 "negative_prompt": "avoid blur",
-                "caption_sections": ["Art Style", "Subject", "Composition"],
+                "caption_sections": list(valid_template.caption_sections),
                 "caption_length_target": 500,
             },
         }
@@ -684,6 +696,7 @@ class TestJsonContracts:
         assert result.lessons == Lessons()
 
     def test_expansion_payload_normalizes_string_or_list_lessons_into_new_insight(self) -> None:
+        valid_template = _make_valid_template()
         payload = {
             "analysis": "Need a stronger subject block.",
             "lessons": ["Identity details drift.", "Props disappear."],
@@ -704,13 +717,11 @@ class TestJsonContracts:
             "template_changes": "Reinforce the subject block with required identity facets.",
             "template": {
                 "sections": [
-                    {"name": "style_foundation", "description": "rules", "value": "Shared rules"},
-                    {"name": "subject_anchor", "description": "subject rules", "value": "Subject guidance"},
-                    {"name": "composition", "description": "layout", "value": "Layout guidance"},
-                    {"name": "technique", "description": "medium", "value": "Technique guidance"},
+                    {"name": section.name, "description": section.description, "value": section.value}
+                    for section in valid_template.sections
                 ],
                 "negative_prompt": "avoid blur",
-                "caption_sections": ["Art Style", "Subject", "Composition"],
+                "caption_sections": list(valid_template.caption_sections),
                 "caption_length_target": 500,
             },
         }
@@ -721,6 +732,7 @@ class TestJsonContracts:
         assert result.lessons.new_insight == "Identity details drift.\nProps disappear."
 
     def test_expansion_payload_reads_single_refinement_result(self) -> None:
+        valid_template = _make_valid_template()
         payload = {
             "analysis": "Need a stronger subject block.",
             "lessons": {"confirmed": "", "rejected": "", "new_insight": "Identity details drift."},
@@ -741,13 +753,11 @@ class TestJsonContracts:
             "template_changes": "Reinforce the subject block with required identity facets.",
             "template": {
                 "sections": [
-                    {"name": "style_foundation", "description": "rules", "value": "Shared rules"},
-                    {"name": "subject_anchor", "description": "subject rules", "value": "Subject guidance"},
-                    {"name": "composition", "description": "layout", "value": "Layout guidance"},
-                    {"name": "technique", "description": "medium", "value": "Technique guidance"},
+                    {"name": section.name, "description": section.description, "value": section.value}
+                    for section in valid_template.sections
                 ],
                 "negative_prompt": "avoid blur",
-                "caption_sections": ["Art Style", "Subject", "Composition"],
+                "caption_sections": list(valid_template.caption_sections),
                 "caption_length_target": 500,
             },
         }
@@ -762,9 +772,12 @@ class TestJsonContracts:
         payload = {
             "templates": [
                 {
-                    "sections": [{"name": "style_foundation", "description": "rules", "value": "Shared rules"}],
+                    "sections": [
+                        {"name": section.name, "description": section.description, "value": section.value}
+                        for section in _make_valid_template().sections
+                    ],
                     "negative_prompt": "avoid blur",
-                    "caption_sections": ["Art Style"],
+                    "caption_sections": list(_make_valid_template().caption_sections),
                     "caption_length_target": 500,
                 }
             ]
@@ -901,13 +914,11 @@ class TestJsonContracts:
                 "rationale": "Take the color section from experiment 1",
                 "template": {
                     "sections": [
-                        {"name": "style_foundation", "description": "rules", "value": "Shared rules"},
-                        {"name": "color_palette", "description": "colors", "value": "Palette rules"},
-                        {"name": "composition", "description": "layout", "value": "Layout rules"},
-                        {"name": "technique", "description": "medium", "value": "Technique rules"},
+                        {"name": section.name, "description": section.description, "value": section.value}
+                        for section in _make_valid_template().sections
                     ],
                     "negative_prompt": "avoid blur",
-                    "caption_sections": ["Art Style", "Color Palette"],
+                    "caption_sections": list(_make_valid_template().caption_sections),
                     "caption_length_target": 500,
                 },
             }
@@ -926,6 +937,18 @@ class TestJsonContracts:
         )
         assert review.experiment_assessments == ["[EXP 0] SIGNAL - palette improved"]
         assert review.recommended_categories == ["color_palette", "composition"]
+
+    def test_review_payload_filters_unknown_recommended_categories(self) -> None:
+        review = validate_review_payload(
+            {
+                "experiment_assessments": ["[EXP 0] SIGNAL - palette improved"],
+                "noise_vs_signal": "DreamSim and color moved together.",
+                "strategic_guidance": "Keep pushing palette precision.",
+                "recommended_categories": ["color_palette", "made_up_category"],
+            }
+        )
+
+        assert review.recommended_categories == ["color_palette"]
 
     def test_style_compilation_payload_rejects_invalid_caption_sections(self) -> None:
         payload = {
@@ -957,6 +980,91 @@ class TestJsonContracts:
                 reasoning_raw="reasoning analysis",
             )
 
+    def test_initial_templates_payload_rejects_invalid_template_shape(self) -> None:
+        payload = {
+            "templates": [
+                {
+                    "sections": [
+                        {"name": "style_foundation", "description": "rules", "value": "Shared rules"},
+                        {"name": "subject_anchor", "description": "subject", "value": "Subject guidance"},
+                    ],
+                    "negative_prompt": "avoid blur",
+                    "caption_sections": ["Art Style", "Subject"],
+                    "caption_length_target": 500,
+                }
+            ]
+        }
+
+        with pytest.raises(ValueError, match="Section count"):
+            validate_initial_templates_payload(payload, num_branches=1)
+
+    def test_expansion_payload_rejects_invalid_template_shape(self) -> None:
+        payload = {
+            "analysis": "Need a stronger subject block.",
+            "lessons": {"confirmed": "", "rejected": "", "new_insight": "Identity details drift."},
+            "hypothesis": "Strengthen subject identity anchors.",
+            "builds_on": "H2",
+            "experiment": "Rewrite the subject section to prioritize identity anchors.",
+            "changed_section": "subject_anchor",
+            "changed_sections": ["subject_anchor"],
+            "target_category": "subject_anchor",
+            "direction_id": "D1",
+            "direction_summary": "Subject identity lock",
+            "failure_mechanism": "Identity traits are underspecified.",
+            "intervention_type": "information_priority",
+            "risk_level": "targeted",
+            "expected_primary_metric": "vision_subject",
+            "expected_tradeoff": "May over-constrain stylization language.",
+            "open_problems": ["Identity drift on crowded scenes"],
+            "template_changes": "Reinforce the subject block with required identity facets.",
+            "template": {
+                "sections": [
+                    {"name": "style_foundation", "description": "rules", "value": "Shared rules"},
+                    {"name": "subject_anchor", "description": "subject rules", "value": "Subject guidance"},
+                    {"name": "composition", "description": "layout", "value": "Layout guidance"},
+                    {"name": "technique", "description": "medium", "value": "Technique guidance"},
+                ],
+                "negative_prompt": "avoid blur",
+                "caption_sections": ["Art Style", "Subject", "Composition"],
+                "caption_length_target": 500,
+            },
+        }
+
+        with pytest.raises(ValueError, match="Section count"):
+            validate_expansion_payload(payload)
+
+    def test_synthesis_payload_rejects_invalid_template_shape(self) -> None:
+        with pytest.raises(ValueError, match="Second section must be 'subject_anchor'"):
+            validate_synthesis_payload(
+                {
+                    "rationale": "Take the color section from experiment 1",
+                    "template": {
+                        "sections": [
+                            {"name": "style_foundation", "description": "rules", "value": "Shared rules"},
+                            {"name": "color_palette", "description": "colors", "value": "Palette rules"},
+                            {"name": "composition", "description": "layout", "value": "Layout rules"},
+                            {"name": "technique", "description": "medium", "value": "Technique rules"},
+                            {"name": "lighting", "description": "light", "value": "Lighting rules"},
+                            {"name": "environment", "description": "env", "value": "Environment rules"},
+                            {"name": "texture", "description": "texture", "value": "Texture rules"},
+                            {"name": "mood", "description": "mood", "value": "Mood rules"},
+                        ],
+                        "negative_prompt": "avoid blur",
+                        "caption_sections": ["Art Style", "Color Palette"],
+                        "caption_length_target": 500,
+                    },
+                }
+            )
+
+    def test_schema_hints_use_subject_in_synthesis_and_show_nontrivial_templates(self) -> None:
+        initial_hint = schema_hint("initial_templates")
+        synthesis_hint = schema_hint("synthesis")
+        expansion_hint = schema_hint("expansion")
+
+        assert '"Subject"' in synthesis_hint
+        assert initial_hint.count('"name"') >= 4
+        assert expansion_hint.count('"name"') >= 4
+
 
 class TestProposeExperiments:
     @pytest.mark.asyncio
@@ -984,6 +1092,66 @@ class TestProposeExperiments:
         assert "changed_sections must use concrete template section names" in system
         assert "caption_sections" in system
         assert "caption_length_target" in system
+
+
+class TestPromptSurfaceExamples:
+    @pytest.mark.asyncio
+    async def test_initial_prompt_example_shows_nontrivial_template(self) -> None:
+        captured: dict[str, object] = {}
+
+        class FakeClient:
+            async def call_json(self, **kwargs):
+                captured.update(kwargs)
+                return [_make_valid_template()]
+
+        await propose_initial_templates(
+            make_style_profile(),
+            1,
+            client=FakeClient(),  # type: ignore[arg-type]
+            model="fake-model",
+        )
+
+        system = captured["system"]  # type: ignore[assignment]
+        assert system.count('"name":') >= 4
+        assert '"caption_sections": ["Art Style", "Subject"' in system
+
+    @pytest.mark.asyncio
+    async def test_synthesis_prompt_example_keeps_subject_anchor_in_caption_sections(self) -> None:
+        captured: dict[str, object] = {}
+
+        class FakeClient:
+            async def call_json(self, **kwargs):
+                captured.update(kwargs)
+                return _make_valid_template(), "because"
+
+        exp = type(
+            "Result",
+            (),
+            {
+                "branch_id": 0,
+                "kept": True,
+                "hypothesis": "test",
+                "aggregated": AggregatedMetrics(
+                    dreamsim_similarity_mean=0.7,
+                    dreamsim_similarity_std=0.01,
+                    hps_score_mean=0.25,
+                    hps_score_std=0.01,
+                    aesthetics_score_mean=6.0,
+                    aesthetics_score_std=0.2,
+                ),
+                "template": _make_valid_template(),
+            },
+        )()
+
+        await synthesize_templates(
+            [exp],  # type: ignore[list-item]
+            make_style_profile(),
+            client=FakeClient(),  # type: ignore[arg-type]
+            model="fake-model",
+        )
+
+        system = captured["system"]  # type: ignore[assignment]
+        assert '"caption_sections": ["Art Style", "Subject"' in system
 
 
 class TestRankExperimentSketches:

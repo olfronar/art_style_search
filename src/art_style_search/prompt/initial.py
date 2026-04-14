@@ -64,9 +64,9 @@ async def propose_initial_templates(
         "The FIRST section must always be [Art Style] (the shared style block). "
         "The SECOND section must always be [Subject]. "
         "You decide the remaining sections and their order — that is part of experimentation.\n"
-        "- Specify the caption output sections as a <caption_sections> tag (comma-separated list). "
+        '- Specify the caption output sections in the JSON key "caption_sections" (ordered list of strings). '
         "The first two entries MUST be 'Art Style' and 'Subject'.\n"
-        "- Specify the target caption length as a <caption_length> tag (word count).\n"
+        '- Specify the target caption length in the JSON key "caption_length_target" (word count).\n'
         "- The [Art Style] section should be IDENTICAL across captions (shared style rules). "
         "The [Subject] section should be image-specific and rich enough for faithful subject reconstruction. "
         "Target roughly 80-140 words for [Subject]. All remaining sections contain per-image specific observations.\n"
@@ -106,7 +106,7 @@ async def propose_initial_templates(
         "{\n"
         '  "templates": [\n'
         "    {\n"
-        '      "sections": [{"name": "style_foundation", "description": "...", "value": "..."}, {"name": "subject_anchor", "description": "...", "value": "..."}],\n'
+        '      "sections": [{"name": "style_foundation", "description": "...", "value": "..."}, {"name": "subject_anchor", "description": "...", "value": "..."}, {"name": "color_palette", "description": "...", "value": "..."}, {"name": "composition", "description": "...", "value": "..."}],\n'
         '      "negative_prompt": "...",\n'
         '      "caption_sections": ["Art Style", "Subject", "Color Palette"],\n'
         '      "caption_length_target": 500\n'

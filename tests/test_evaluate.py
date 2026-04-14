@@ -98,9 +98,11 @@ class TestXAIComparison:
 
         xai_client = SimpleNamespace(responses=SimpleNamespace(create=fake_create))
 
+        long_caption = "caption start " + ("detail " * 200) + "TAIL_MARKER"
+
         feedbacks, scores = await compare_vision_per_image(
             [(ref_path, gen_path)],
-            ["caption text"],
+            [long_caption],
             provider="xai",
             client=None,
             xai_client=xai_client,
@@ -114,11 +116,49 @@ class TestXAIComparison:
         assert scores[0].composition.score == 0.0
         assert captured["model"] == "grok-4.20-reasoning-latest"
         assert captured["store"] is False
-        content = captured["input"][0]["content"]  # type: ignore[index]
+        assert captured["input"][0]["role"] == "system"  # type: ignore[index]
+        content = captured["input"][1]["content"]  # type: ignore[index]
         assert content[0]["type"] == "input_text"
         assert content[1]["type"] == "input_image"
         assert content[2]["type"] == "input_text"
         assert content[3]["type"] == "input_image"
+        assert "TAIL_MARKER" in content[-1]["text"]
+
+    @pytest.mark.asyncio
+    async def test_compare_vision_per_image_can_swap_generated_before_original(self, tmp_path: Path, monkeypatch) -> None:
+        ref_path = tmp_path / "ref.png"
+        gen_path = tmp_path / "gen.png"
+        _write_image(ref_path, (10, 20, 30))
+        _write_image(gen_path, (30, 20, 10))
+
+        monkeypatch.setattr("art_style_search.evaluate.random.random", lambda: 0.1)
+
+        captured: dict[str, object] = {}
+        response_text = (
+            '<style verdict="MATCH">Style matches closely.</style>\n'
+            '<subject verdict="PARTIAL">Subject differs slightly.</subject>\n'
+            '<composition verdict="MISS">Composition is off.</composition>'
+        )
+
+        async def fake_create(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(output_text=response_text)
+
+        xai_client = SimpleNamespace(responses=SimpleNamespace(create=fake_create))
+
+        await compare_vision_per_image(
+            [(ref_path, gen_path)],
+            ["caption text"],
+            provider="xai",
+            client=None,
+            xai_client=xai_client,
+            model="grok-4.20-reasoning-latest",
+            semaphore=asyncio.Semaphore(1),
+        )
+
+        content = captured["input"][1]["content"]  # type: ignore[index]
+        assert content[0]["text"].endswith("GENERATED reproduction:")  # type: ignore[index]
+        assert content[2]["text"].endswith("ORIGINAL reference:")  # type: ignore[index]
 
     @pytest.mark.asyncio
     async def test_pairwise_compare_experiments_uses_xai_and_parses_winner(self, tmp_path: Path, monkeypatch) -> None:
@@ -153,3 +193,4 @@ class TestXAIComparison:
         assert rationale == "Set A is closer overall."
         assert score == 1.0
         assert captured["store"] is False
+        assert captured["input"][0]["role"] == "system"  # type: ignore[index]

@@ -202,11 +202,13 @@ def _parse_refinement_branches(text: str, num_experiments: int) -> list[Refineme
 # Template validation
 # ---------------------------------------------------------------------------
 
-# Relaxed bounds — tighter than the prompt instructions (8-15) to allow edge cases
-_MIN_SECTIONS = 4
-_MAX_SECTIONS = 20
-_MIN_CAPTION_LENGTH = 100
-_MAX_CAPTION_LENGTH = 2000
+# Align validation bounds with the prompt contract for model-produced templates.
+_MIN_SECTIONS = 8
+_MAX_SECTIONS = 15
+_MIN_CAPTION_LENGTH = 200
+_MAX_CAPTION_LENGTH = 1200
+_MIN_RENDERED_WORDS = 1200
+_MAX_RENDERED_WORDS = 1800
 
 # Ordered anchor requirements for sections and caption sections.  Adding a third
 # required anchor means one-line edits here — the validator iterates both tables.
@@ -258,6 +260,12 @@ def validate_template(
     clt = template.caption_length_target
     if clt != 0 and (clt < _MIN_CAPTION_LENGTH or clt > _MAX_CAPTION_LENGTH):
         errors.append(f"Caption length target {clt} outside bounds [{_MIN_CAPTION_LENGTH}, {_MAX_CAPTION_LENGTH}]")
+
+    rendered_words = len(template.render().split())
+    if rendered_words < _MIN_RENDERED_WORDS or rendered_words > _MAX_RENDERED_WORDS:
+        errors.append(
+            f"Rendered prompt word count {rendered_words} outside bounds [{_MIN_RENDERED_WORDS}, {_MAX_RENDERED_WORDS}]"
+        )
 
     normalized_changed_sections = list(changed_sections or [])
     if not normalized_changed_sections and changed_section:
