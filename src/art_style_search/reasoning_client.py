@@ -209,6 +209,7 @@ class ReasoningClient:
         schema_hint: str = "",
         max_tokens: int = 16000,
         repair_retries: int = 1,
+        final_failure_log_level: int = logging.WARNING,
     ) -> T:
         """Send a reasoning request, parse JSON, validate it, and optionally repair it."""
 
@@ -218,6 +219,7 @@ class ReasoningClient:
         except Exception as exc:
             if repair_retries <= 0:
                 msg = f"{response_name} validation failed"
+                logger.log(final_failure_log_level, "%s validation failed: %s", response_name, exc)
                 raise RuntimeError(msg) from exc
 
             current_exc = exc
@@ -228,7 +230,7 @@ class ReasoningClient:
         )
         hint_block = f"\nExpected schema:\n{schema_hint}\n" if schema_hint else ""
         for attempt in range(repair_retries):
-            logger.warning(
+            logger.info(
                 "%s validation failed: %s — attempting JSON repair (%d/%d)",
                 response_name,
                 current_exc,
@@ -253,6 +255,13 @@ class ReasoningClient:
                 current_exc = repair_exc
 
         msg = f"{response_name} validation failed after repair"
+        logger.log(
+            final_failure_log_level,
+            "%s validation failed after %d repair attempt(s): %s",
+            response_name,
+            repair_retries,
+            current_exc,
+        )
         raise RuntimeError(msg) from current_exc
 
     async def _call_anthropic(self, *, model: str, system: str, user: str, max_tokens: int) -> str:

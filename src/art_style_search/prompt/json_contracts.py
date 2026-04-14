@@ -33,6 +33,18 @@ def _as_str(data: object, *, label: str, default: str = "") -> str:
     return data.strip()
 
 
+def _as_prose_str(data: object, *, label: str, default: str = "") -> str:
+    if data is None:
+        return default
+    if isinstance(data, str):
+        return data.strip()
+    if isinstance(data, list):
+        parts = [_as_str(item, label=f"{label}[{i}]") for i, item in enumerate(data)]
+        return "\n".join(part for part in parts if part)
+    msg = f"{label} must be a string"
+    raise ValueError(msg)
+
+
 def _as_int(data: object, *, label: str, default: int = 0) -> int:
     if data is None:
         return default
@@ -55,6 +67,38 @@ def _as_str_list(data: object, *, label: str) -> list[str]:
         if value:
             result.append(value)
     return result
+
+
+def _normalize_builds_on(data: object, *, label: str, default: str = "") -> str:
+    if data is None:
+        return default
+    if isinstance(data, str):
+        value = data.strip()
+        return "" if value.lower() == "none" else value
+    if isinstance(data, list):
+        parts = [_as_str(item, label=f"{label}[{i}]") for i, item in enumerate(data)]
+        normalized = [part for part in parts if part and part.lower() != "none"]
+        return ", ".join(normalized)
+    msg = f"{label} must be a string"
+    raise ValueError(msg)
+
+
+def _lessons_from_payload(data: object, *, label: str) -> Lessons:
+    if data is None:
+        return Lessons()
+    if isinstance(data, str):
+        value = data.strip()
+        return Lessons() if not value or value.lower() == "none" else Lessons(new_insight=value)
+    if isinstance(data, list):
+        combined = _as_prose_str(data, label=label)
+        return Lessons() if not combined else Lessons(new_insight=combined)
+
+    lessons_obj = _require_dict(data, label=label)
+    return Lessons(
+        confirmed=_as_prose_str(lessons_obj.get("confirmed"), label=f"{label}.confirmed"),
+        rejected=_as_prose_str(lessons_obj.get("rejected"), label=f"{label}.rejected"),
+        new_insight=_as_prose_str(lessons_obj.get("new_insight"), label=f"{label}.new_insight"),
+    )
 
 
 def _normalize_changed_sections(exp: dict[str, Any], *, label: str) -> tuple[str, list[str]]:
@@ -149,29 +193,21 @@ def validate_initial_templates_payload(data: object, *, num_branches: int) -> li
 
 def _refinement_result_from_payload(data: object, *, label: str) -> RefinementResult:
     exp = _require_dict(data, label=label)
-    lessons_obj = _require_dict(exp.get("lessons") or {}, label=f"{label}.lessons")
     template = payload_to_template(exp.get("template") or {}, label=f"{label}.template")
     changed_section, changed_sections = _normalize_changed_sections(exp, label=label)
     return RefinementResult(
         template=template,
-        analysis=_as_str(exp.get("analysis"), label=f"{label}.analysis"),
-        template_changes=_as_str(
+        analysis=_as_prose_str(exp.get("analysis"), label=f"{label}.analysis"),
+        template_changes=_as_prose_str(
             exp.get("template_changes"),
             label=f"{label}.template_changes",
             default="none",
         ),
         should_stop=False,
-        hypothesis=_as_str(exp.get("hypothesis"), label=f"{label}.hypothesis"),
-        experiment=_as_str(exp.get("experiment"), label=f"{label}.experiment"),
-        lessons=Lessons(
-            confirmed=_as_str(lessons_obj.get("confirmed"), label=f"{label}.lessons.confirmed"),
-            rejected=_as_str(lessons_obj.get("rejected"), label=f"{label}.lessons.rejected"),
-            new_insight=_as_str(
-                lessons_obj.get("new_insight"),
-                label=f"{label}.lessons.new_insight",
-            ),
-        ),
-        builds_on=_as_str(exp.get("builds_on"), label=f"{label}.builds_on", default="") or None,
+        hypothesis=_as_prose_str(exp.get("hypothesis"), label=f"{label}.hypothesis"),
+        experiment=_as_prose_str(exp.get("experiment"), label=f"{label}.experiment"),
+        lessons=_lessons_from_payload(exp.get("lessons"), label=f"{label}.lessons"),
+        builds_on=_normalize_builds_on(exp.get("builds_on"), label=f"{label}.builds_on", default="") or None,
         open_problems=_as_str_list(exp.get("open_problems") or [], label=f"{label}.open_problems"),
         changed_section=changed_section,
         changed_sections=changed_sections,
@@ -180,8 +216,8 @@ def _refinement_result_from_payload(data: object, *, label: str) -> RefinementRe
             label=f"{label}.target_category",
         ),
         direction_id=_as_str(exp.get("direction_id"), label=f"{label}.direction_id"),
-        direction_summary=_as_str(exp.get("direction_summary"), label=f"{label}.direction_summary"),
-        failure_mechanism=_as_str(
+        direction_summary=_as_prose_str(exp.get("direction_summary"), label=f"{label}.direction_summary"),
+        failure_mechanism=_as_prose_str(
             exp.get("failure_mechanism"),
             label=f"{label}.failure_mechanism",
         ),
@@ -194,7 +230,7 @@ def _refinement_result_from_payload(data: object, *, label: str) -> RefinementRe
             exp.get("expected_primary_metric"),
             label=f"{label}.expected_primary_metric",
         ),
-        expected_tradeoff=_as_str(
+        expected_tradeoff=_as_prose_str(
             exp.get("expected_tradeoff"),
             label=f"{label}.expected_tradeoff",
         ),
@@ -230,15 +266,18 @@ def validate_brainstorm_payload(data: object, *, num_sketches: int) -> tuple[lis
                     sketch.get("expected_primary_metric"),
                     label=f"sketches[{i}].expected_primary_metric",
                 ),
-                builds_on=_as_str(sketch.get("builds_on"), label=f"sketches[{i}].builds_on", default=""),
+                builds_on=_normalize_builds_on(sketch.get("builds_on"), label=f"sketches[{i}].builds_on", default=""),
             )
         )
     return sketches, bool(obj.get("converged", False))
 
 
 def validate_ranking_payload(data: object, *, num_sketches: int) -> list[int]:
-    obj = _require_dict(data, label="ranking_response")
-    ranked_raw = _require_list(obj.get("ranked_indices") or [], label="ranked_indices")
+    if isinstance(data, list):
+        ranked_raw = _require_list(data, label="ranking_response")
+    else:
+        obj = _require_dict(data, label="ranking_response")
+        ranked_raw = _require_list(obj.get("ranked_indices") or [], label="ranked_indices")
     ranked: list[int] = []
     seen: set[int] = set()
     for i, item in enumerate(ranked_raw):

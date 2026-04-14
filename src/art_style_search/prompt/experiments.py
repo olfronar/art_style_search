@@ -175,8 +175,11 @@ def _brainstorm_system(current_template: PromptTemplate, *, num_sketches: int) -
             "## EXECUTION CHECKLIST — verify before outputting\n"
             "- [ ] Every sketch has hypothesis, target_category, failure_mechanism, intervention_type, "
             "direction_id, direction_summary, risk_level, expected_primary_metric, and builds_on\n"
+            "- [ ] builds_on is a single string (e.g. 'H3' or 'H3, H5') or an empty string, never null/array/object\n"
             "- [ ] 3 distinct direction_ids (D1, D2, D3) are present\n"
             "- [ ] The batch explores around two ideas per final branch slot\n\n"
+            "Field types:\n"
+            '- hypothesis, target_category, failure_mechanism, intervention_type, direction_id, direction_summary, risk_level, expected_primary_metric, builds_on: strings\n'
             f"Response format — one JSON object with 'sketches' array of length {num_sketches} "
             "and boolean 'converged'. Return JSON only. No markdown fences, no commentary."
         ),
@@ -196,6 +199,12 @@ def _expand_system(current_template: PromptTemplate) -> str:
             "- [ ] First template section is 'style_foundation', second is 'subject_anchor'\n"
             "- [ ] caption_sections starts with ['Art Style', 'Subject']\n"
             "- [ ] Total rendered template is 1200-1800 words\n\n"
+            "Critical field types:\n"
+            '- analysis: one string field, never an array\n'
+            '- lessons: one JSON object with keys {"confirmed","rejected","new_insight"}, each a string\n'
+            "- builds_on: a string like 'H3' or 'H3, H5', or an empty string\n\n"
+            "Minimal wire-shape example:\n"
+            '{"analysis":"...","lessons":{"confirmed":"","rejected":"","new_insight":"..."},"builds_on":"","hypothesis":"..."}\n\n'
             "Response format — one JSON object describing a single fully expanded experiment proposal. "
             "Return JSON only. No markdown fences, no commentary."
         ),
@@ -205,10 +214,11 @@ def _expand_system(current_template: PromptTemplate) -> str:
 def _rank_system() -> str:
     return (
         "You rank experiment sketches for expected impact on the art-style prompt search.\n\n"
-        "Return EXACTLY one JSON object. No markdown fences. No commentary.\n"
+        "Return JSON only. No markdown fences. No commentary.\n"
         "Rank sketches by expected improvement potential, novelty versus prior work, evidence fit with current "
         "feedback, and risk-reward balance. Prefer sketches that look both meaningful and executable.\n"
-        "Output zero-based indices in best-to-worst order. Include every sketch at most once."
+        "Output zero-based indices in best-to-worst order. Include every sketch at most once.\n"
+        'Preferred exact wire shape: {"ranked_indices":[2,7,0,5]}'
     )
 
 
@@ -334,7 +344,9 @@ def _rank_user(
             ]
         )
     parts.append(
-        "\n\nReturn ranked zero-based indices for the sketches above. Favor likely winners without wasting slots on repeats."
+        f"\n\nValid indices are 0 through {len(sketches) - 1}.\n"
+        'Return JSON only in the exact shape {"ranked_indices":[...]}.\n'
+        "Favor likely winners without wasting slots on repeats."
     )
     return "".join(parts)
 
@@ -526,9 +538,10 @@ async def rank_experiment_sketches(
             schema_hint=schema_hint("ranking"),
             max_tokens=1000,
             repair_retries=1,
+            final_failure_log_level=logging.INFO,
         )
     except Exception as exc:
-        logger.warning("Ranking failed; falling back to brainstorm order: %s: %s", type(exc).__name__, exc)
+        logger.info("Ranking failed; falling back to brainstorm order: %s: %s", type(exc).__name__, exc)
         return list(sketches)
     return [sketches[idx] for idx in ranked_indices]
 

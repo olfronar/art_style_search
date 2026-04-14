@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
@@ -177,6 +178,7 @@ class ReasoningService:
         schema_hint: str = "",
         max_tokens: int = 16000,
         repair_retries: int = 1,
+        final_failure_log_level: int = logging.WARNING,
     ):
         return await self.client.call_json(
             model=self.model,
@@ -187,6 +189,7 @@ class ReasoningService:
             schema_hint=schema_hint,
             max_tokens=max_tokens,
             repair_retries=repair_retries,
+            final_failure_log_level=final_failure_log_level,
         )
 
 

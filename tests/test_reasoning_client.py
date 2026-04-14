@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -25,7 +26,7 @@ class TestParseJsonResponse:
 
 class TestCallJson:
     @pytest.mark.asyncio
-    async def test_repairs_invalid_json_once(self) -> None:
+    async def test_repairs_invalid_json_once_logs_attempt_at_info(self, caplog) -> None:
         client = ReasoningClient.__new__(ReasoningClient)
         responses = iter(["not json", '{"status": "fixed"}'])
 
@@ -34,18 +35,21 @@ class TestCallJson:
 
         client.call = fake_call  # type: ignore[method-assign]
 
-        result = await ReasoningClient.call_json(
-            client,
-            model="fake-model",
-            system="system",
-            user="user",
-            validator=lambda data: data["status"],  # type: ignore[index]
-            response_name="test_payload",
-            schema_hint='{"status": "..."}',
-            repair_retries=1,
-        )
+        with caplog.at_level("INFO"):
+            result = await ReasoningClient.call_json(
+                client,
+                model="fake-model",
+                system="system",
+                user="user",
+                validator=lambda data: data["status"],  # type: ignore[index]
+                response_name="test_payload",
+                schema_hint='{"status": "..."}',
+                repair_retries=1,
+            )
 
         assert result == "fixed"
+        assert "attempting JSON repair" in caplog.text
+        assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
 
     @pytest.mark.asyncio
     async def test_retries_validation_after_repair_with_followup_feedback(self) -> None:
@@ -81,6 +85,56 @@ class TestCallJson:
         )
 
         assert result == "fixed"
+
+    @pytest.mark.asyncio
+    async def test_logs_final_failure_at_warning_by_default(self, caplog) -> None:
+        client = ReasoningClient.__new__(ReasoningClient)
+        responses = iter(["not json", "still not json"])
+
+        async def fake_call(*, model, system, user, max_tokens):
+            return next(responses)
+
+        client.call = fake_call  # type: ignore[method-assign]
+
+        with caplog.at_level("INFO"), pytest.raises(RuntimeError, match="test_payload validation failed after repair"):
+            await ReasoningClient.call_json(
+                client,
+                model="fake-model",
+                system="system",
+                user="user",
+                validator=lambda data: data["status"],  # type: ignore[index]
+                response_name="test_payload",
+                schema_hint='{"status": "..."}',
+                repair_retries=1,
+            )
+
+        assert any(record.levelno == logging.WARNING for record in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_supports_info_level_for_noncritical_final_failure(self, caplog) -> None:
+        client = ReasoningClient.__new__(ReasoningClient)
+        responses = iter(["not json", "still not json"])
+
+        async def fake_call(*, model, system, user, max_tokens):
+            return next(responses)
+
+        client.call = fake_call  # type: ignore[method-assign]
+
+        with caplog.at_level("INFO"), pytest.raises(RuntimeError, match="test_payload validation failed after repair"):
+            await ReasoningClient.call_json(
+                client,
+                model="fake-model",
+                system="system",
+                user="user",
+                validator=lambda data: data["status"],  # type: ignore[index]
+                response_name="test_payload",
+                schema_hint='{"status": "..."}',
+                repair_retries=1,
+                final_failure_log_level=logging.INFO,
+            )
+
+        assert "validation failed after 1 repair attempt" in caplog.text
+        assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
 
 
 class TestCallText:

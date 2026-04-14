@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from art_style_search import contracts
@@ -595,6 +597,129 @@ class TestJsonContracts:
 
         assert ranked == [2, 0, 1, 3]
 
+    def test_ranking_payload_accepts_top_level_array(self) -> None:
+        ranked = validate_ranking_payload([1, 3, 1], num_sketches=4)
+
+        assert ranked == [1, 3, 0, 2]
+
+    def test_brainstorm_payload_normalizes_nullable_and_list_builds_on(self) -> None:
+        payload = {
+            "sketches": [
+                {
+                    "hypothesis": "First",
+                    "target_category": "subject_anchor",
+                    "failure_mechanism": "Identity details are buried.",
+                    "intervention_type": "information_priority",
+                    "direction_id": "D1",
+                    "direction_summary": "Subject identity lock",
+                    "risk_level": "targeted",
+                    "expected_primary_metric": "vision_subject",
+                    "builds_on": None,
+                },
+                {
+                    "hypothesis": "Second",
+                    "target_category": "composition",
+                    "failure_mechanism": "Layout cues are too diffuse.",
+                    "intervention_type": "section_schema",
+                    "direction_id": "D2",
+                    "direction_summary": "Composition lock",
+                    "risk_level": "bold",
+                    "expected_primary_metric": "vision_composition",
+                    "builds_on": "none",
+                },
+                {
+                    "hypothesis": "Third",
+                    "target_category": "lighting",
+                    "failure_mechanism": "Lighting cues drift.",
+                    "intervention_type": "negative_constraints",
+                    "direction_id": "D3",
+                    "direction_summary": "Lighting lock",
+                    "risk_level": "targeted",
+                    "expected_primary_metric": "vision_style",
+                    "builds_on": ["H3", "H5"],
+                },
+            ]
+        }
+
+        sketches, converged = validate_brainstorm_payload(payload, num_sketches=3)
+
+        assert converged is False
+        assert [sketch.builds_on for sketch in sketches] == ["", "", "H3, H5"]
+
+    def test_expansion_payload_normalizes_nullable_lessons_and_list_analysis(self) -> None:
+        payload = {
+            "analysis": ["Line 1", "Line 2"],
+            "lessons": None,
+            "hypothesis": "Strengthen subject identity anchors.",
+            "builds_on": None,
+            "experiment": "Rewrite the subject section to prioritize identity anchors.",
+            "changed_section": "subject_anchor",
+            "changed_sections": ["subject_anchor"],
+            "target_category": "subject_anchor",
+            "direction_id": "D1",
+            "direction_summary": "Subject identity lock",
+            "failure_mechanism": "Identity traits are underspecified.",
+            "intervention_type": "information_priority",
+            "risk_level": "targeted",
+            "expected_primary_metric": "vision_subject",
+            "expected_tradeoff": "May over-constrain stylization language.",
+            "open_problems": ["Identity drift on crowded scenes"],
+            "template_changes": "Reinforce the subject block with required identity facets.",
+            "template": {
+                "sections": [
+                    {"name": "style_foundation", "description": "rules", "value": "Shared rules"},
+                    {"name": "subject_anchor", "description": "subject rules", "value": "Subject guidance"},
+                    {"name": "composition", "description": "layout", "value": "Layout guidance"},
+                    {"name": "technique", "description": "medium", "value": "Technique guidance"},
+                ],
+                "negative_prompt": "avoid blur",
+                "caption_sections": ["Art Style", "Subject", "Composition"],
+                "caption_length_target": 500,
+            },
+        }
+
+        result = validate_expansion_payload(payload)
+
+        assert result.analysis == "Line 1\nLine 2"
+        assert result.lessons == Lessons()
+
+    def test_expansion_payload_normalizes_string_or_list_lessons_into_new_insight(self) -> None:
+        payload = {
+            "analysis": "Need a stronger subject block.",
+            "lessons": ["Identity details drift.", "Props disappear."],
+            "hypothesis": "Strengthen subject identity anchors.",
+            "builds_on": "none",
+            "experiment": "Rewrite the subject section to prioritize identity anchors.",
+            "changed_section": "subject_anchor",
+            "changed_sections": ["subject_anchor"],
+            "target_category": "subject_anchor",
+            "direction_id": "D1",
+            "direction_summary": "Subject identity lock",
+            "failure_mechanism": "Identity traits are underspecified.",
+            "intervention_type": "information_priority",
+            "risk_level": "targeted",
+            "expected_primary_metric": "vision_subject",
+            "expected_tradeoff": "May over-constrain stylization language.",
+            "open_problems": ["Identity drift on crowded scenes"],
+            "template_changes": "Reinforce the subject block with required identity facets.",
+            "template": {
+                "sections": [
+                    {"name": "style_foundation", "description": "rules", "value": "Shared rules"},
+                    {"name": "subject_anchor", "description": "subject rules", "value": "Subject guidance"},
+                    {"name": "composition", "description": "layout", "value": "Layout guidance"},
+                    {"name": "technique", "description": "medium", "value": "Technique guidance"},
+                ],
+                "negative_prompt": "avoid blur",
+                "caption_sections": ["Art Style", "Subject", "Composition"],
+                "caption_length_target": 500,
+            },
+        }
+
+        result = validate_expansion_payload(payload)
+
+        assert result.builds_on is None
+        assert result.lessons.new_insight == "Identity details drift.\nProps disappear."
+
     def test_expansion_payload_reads_single_refinement_result(self) -> None:
         payload = {
             "analysis": "Need a stronger subject block.",
@@ -891,7 +1016,7 @@ class TestRankExperimentSketches:
             async def call_json(self, **kwargs):
                 raise RuntimeError("ranking validation failed after repair")
 
-        with caplog.at_level("WARNING"):
+        with caplog.at_level("INFO"):
             ranked = await rank_experiment_sketches(
                 sketches,
                 KnowledgeBase(),
@@ -902,3 +1027,4 @@ class TestRankExperimentSketches:
 
         assert ranked == sketches
         assert "Ranking failed; falling back to brainstorm order" in caplog.text
+        assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
