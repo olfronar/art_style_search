@@ -190,7 +190,7 @@ def _validate_template_or_raise(template: PromptTemplate, *, label: str) -> Prom
 def validate_initial_templates_payload(data: object, *, num_branches: int) -> list[PromptTemplate]:
     obj = _require_dict(data, label="initial_templates_response")
     templates = [
-        _validate_template_or_raise(payload_to_template(item, label=f"templates[{i}]"), label=f"templates[{i}]")
+        payload_to_template(item, label=f"templates[{i}]")
         for i, item in enumerate(_require_list(obj.get("templates") or [], label="templates"))
     ]
     if not templates:

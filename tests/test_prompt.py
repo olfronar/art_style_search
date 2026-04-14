@@ -980,7 +980,7 @@ class TestJsonContracts:
                 reasoning_raw="reasoning analysis",
             )
 
-    def test_initial_templates_payload_rejects_invalid_template_shape(self) -> None:
+    def test_initial_templates_payload_allows_invalid_template_shape_for_zero_step_sanitization(self) -> None:
         payload = {
             "templates": [
                 {
@@ -995,8 +995,10 @@ class TestJsonContracts:
             ]
         }
 
-        with pytest.raises(ValueError, match="Section count"):
-            validate_initial_templates_payload(payload, num_branches=1)
+        templates = validate_initial_templates_payload(payload, num_branches=1)
+
+        assert len(templates) == 1
+        assert templates[0].sections[0].name == "style_foundation"
 
     def test_expansion_payload_rejects_invalid_template_shape(self) -> None:
         payload = {
