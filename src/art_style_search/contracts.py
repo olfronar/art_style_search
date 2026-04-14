@@ -17,6 +17,21 @@ class Lessons:
 
 
 @dataclass
+class ExperimentSketch:
+    """Lightweight proposal idea used before full expansion."""
+
+    hypothesis: str
+    target_category: str
+    failure_mechanism: str
+    intervention_type: str
+    direction_id: str
+    direction_summary: str
+    risk_level: str
+    expected_primary_metric: str
+    builds_on: str = ""
+
+
+@dataclass
 class RefinementResult:
     """Complete result of a template refinement by the reasoning model."""
 

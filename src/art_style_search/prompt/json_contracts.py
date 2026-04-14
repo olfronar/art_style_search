@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from art_style_search.contracts import Lessons, RefinementResult
+from art_style_search.contracts import ExperimentSketch, Lessons, RefinementResult
 from art_style_search.prompt._parse import validate_template
 from art_style_search.types import PromptSection, PromptTemplate, ReviewResult, StyleProfile
 
@@ -147,71 +147,124 @@ def validate_initial_templates_payload(data: object, *, num_branches: int) -> li
     return templates[:num_branches]
 
 
+def _refinement_result_from_payload(data: object, *, label: str) -> RefinementResult:
+    exp = _require_dict(data, label=label)
+    lessons_obj = _require_dict(exp.get("lessons") or {}, label=f"{label}.lessons")
+    template = payload_to_template(exp.get("template") or {}, label=f"{label}.template")
+    changed_section, changed_sections = _normalize_changed_sections(exp, label=label)
+    return RefinementResult(
+        template=template,
+        analysis=_as_str(exp.get("analysis"), label=f"{label}.analysis"),
+        template_changes=_as_str(
+            exp.get("template_changes"),
+            label=f"{label}.template_changes",
+            default="none",
+        ),
+        should_stop=False,
+        hypothesis=_as_str(exp.get("hypothesis"), label=f"{label}.hypothesis"),
+        experiment=_as_str(exp.get("experiment"), label=f"{label}.experiment"),
+        lessons=Lessons(
+            confirmed=_as_str(lessons_obj.get("confirmed"), label=f"{label}.lessons.confirmed"),
+            rejected=_as_str(lessons_obj.get("rejected"), label=f"{label}.lessons.rejected"),
+            new_insight=_as_str(
+                lessons_obj.get("new_insight"),
+                label=f"{label}.lessons.new_insight",
+            ),
+        ),
+        builds_on=_as_str(exp.get("builds_on"), label=f"{label}.builds_on", default="") or None,
+        open_problems=_as_str_list(exp.get("open_problems") or [], label=f"{label}.open_problems"),
+        changed_section=changed_section,
+        changed_sections=changed_sections,
+        target_category=_as_str(
+            exp.get("target_category"),
+            label=f"{label}.target_category",
+        ),
+        direction_id=_as_str(exp.get("direction_id"), label=f"{label}.direction_id"),
+        direction_summary=_as_str(exp.get("direction_summary"), label=f"{label}.direction_summary"),
+        failure_mechanism=_as_str(
+            exp.get("failure_mechanism"),
+            label=f"{label}.failure_mechanism",
+        ),
+        intervention_type=_as_str(
+            exp.get("intervention_type"),
+            label=f"{label}.intervention_type",
+        ),
+        risk_level=_as_str(exp.get("risk_level"), label=f"{label}.risk_level", default="targeted") or "targeted",
+        expected_primary_metric=_as_str(
+            exp.get("expected_primary_metric"),
+            label=f"{label}.expected_primary_metric",
+        ),
+        expected_tradeoff=_as_str(
+            exp.get("expected_tradeoff"),
+            label=f"{label}.expected_tradeoff",
+        ),
+    )
+
+
+def validate_brainstorm_payload(data: object, *, num_sketches: int) -> tuple[list[ExperimentSketch], bool]:
+    obj = _require_dict(data, label="brainstorm_response")
+    sketches_raw = _require_list(obj.get("sketches") or [], label="sketches")
+    sketches: list[ExperimentSketch] = []
+    for i, item in enumerate(sketches_raw[:num_sketches]):
+        sketch = _require_dict(item, label=f"sketches[{i}]")
+        sketches.append(
+            ExperimentSketch(
+                hypothesis=_as_str(sketch.get("hypothesis"), label=f"sketches[{i}].hypothesis"),
+                target_category=_as_str(sketch.get("target_category"), label=f"sketches[{i}].target_category"),
+                failure_mechanism=_as_str(
+                    sketch.get("failure_mechanism"),
+                    label=f"sketches[{i}].failure_mechanism",
+                ),
+                intervention_type=_as_str(
+                    sketch.get("intervention_type"),
+                    label=f"sketches[{i}].intervention_type",
+                ),
+                direction_id=_as_str(sketch.get("direction_id"), label=f"sketches[{i}].direction_id"),
+                direction_summary=_as_str(
+                    sketch.get("direction_summary"),
+                    label=f"sketches[{i}].direction_summary",
+                ),
+                risk_level=_as_str(sketch.get("risk_level"), label=f"sketches[{i}].risk_level", default="targeted")
+                or "targeted",
+                expected_primary_metric=_as_str(
+                    sketch.get("expected_primary_metric"),
+                    label=f"sketches[{i}].expected_primary_metric",
+                ),
+                builds_on=_as_str(sketch.get("builds_on"), label=f"sketches[{i}].builds_on", default=""),
+            )
+        )
+    return sketches, bool(obj.get("converged", False))
+
+
+def validate_ranking_payload(data: object, *, num_sketches: int) -> list[int]:
+    obj = _require_dict(data, label="ranking_response")
+    ranked_raw = _require_list(obj.get("ranked_indices") or [], label="ranked_indices")
+    ranked: list[int] = []
+    seen: set[int] = set()
+    for i, item in enumerate(ranked_raw):
+        idx = _as_int(item, label=f"ranked_indices[{i}]")
+        if idx < 0 or idx >= num_sketches or idx in seen:
+            continue
+        seen.add(idx)
+        ranked.append(idx)
+    ranked.extend(idx for idx in range(num_sketches) if idx not in seen)
+    return ranked
+
+
 def validate_experiment_batch_payload(data: object, *, num_experiments: int) -> tuple[list[RefinementResult], bool]:
     obj = _require_dict(data, label="experiment_batch_response")
     experiments = _require_list(obj.get("experiments") or [], label="experiments")
-    results: list[RefinementResult] = []
-    for i, item in enumerate(experiments):
-        exp = _require_dict(item, label=f"experiments[{i}]")
-        lessons_obj = _require_dict(exp.get("lessons") or {}, label=f"experiments[{i}].lessons")
-        template = payload_to_template(exp.get("template") or {}, label=f"experiments[{i}].template")
-        changed_section, changed_sections = _normalize_changed_sections(exp, label=f"experiments[{i}]")
-        results.append(
-            RefinementResult(
-                template=template,
-                analysis=_as_str(exp.get("analysis"), label=f"experiments[{i}].analysis"),
-                template_changes=_as_str(
-                    exp.get("template_changes"),
-                    label=f"experiments[{i}].template_changes",
-                    default="none",
-                ),
-                should_stop=False,
-                hypothesis=_as_str(exp.get("hypothesis"), label=f"experiments[{i}].hypothesis"),
-                experiment=_as_str(exp.get("experiment"), label=f"experiments[{i}].experiment"),
-                lessons=Lessons(
-                    confirmed=_as_str(lessons_obj.get("confirmed"), label=f"experiments[{i}].lessons.confirmed"),
-                    rejected=_as_str(lessons_obj.get("rejected"), label=f"experiments[{i}].lessons.rejected"),
-                    new_insight=_as_str(
-                        lessons_obj.get("new_insight"),
-                        label=f"experiments[{i}].lessons.new_insight",
-                    ),
-                ),
-                builds_on=_as_str(exp.get("builds_on"), label=f"experiments[{i}].builds_on", default="") or None,
-                open_problems=_as_str_list(exp.get("open_problems") or [], label=f"experiments[{i}].open_problems"),
-                changed_section=changed_section,
-                changed_sections=changed_sections,
-                target_category=_as_str(
-                    exp.get("target_category"),
-                    label=f"experiments[{i}].target_category",
-                ),
-                direction_id=_as_str(exp.get("direction_id"), label=f"experiments[{i}].direction_id"),
-                direction_summary=_as_str(exp.get("direction_summary"), label=f"experiments[{i}].direction_summary"),
-                failure_mechanism=_as_str(
-                    exp.get("failure_mechanism"),
-                    label=f"experiments[{i}].failure_mechanism",
-                ),
-                intervention_type=_as_str(
-                    exp.get("intervention_type"),
-                    label=f"experiments[{i}].intervention_type",
-                ),
-                risk_level=_as_str(exp.get("risk_level"), label=f"experiments[{i}].risk_level", default="targeted")
-                or "targeted",
-                expected_primary_metric=_as_str(
-                    exp.get("expected_primary_metric"),
-                    label=f"experiments[{i}].expected_primary_metric",
-                ),
-                expected_tradeoff=_as_str(
-                    exp.get("expected_tradeoff"),
-                    label=f"experiments[{i}].expected_tradeoff",
-                ),
-            )
-        )
+    results = [_refinement_result_from_payload(item, label=f"experiments[{i}]") for i, item in enumerate(experiments)]
 
     if len(results) > num_experiments:
         results = results[:num_experiments]
 
     converged = bool(obj.get("converged", False))
     return results, converged
+
+
+def validate_expansion_payload(data: object) -> RefinementResult:
+    return _refinement_result_from_payload(data, label="expansion_response")
 
 
 def validate_synthesis_payload(data: object) -> tuple[PromptTemplate, str]:
@@ -303,6 +356,53 @@ _SCHEMA_HINTS = {
             }
         ],
         "converged": False,
+    },
+    "brainstorm": {
+        "sketches": [
+            {
+                "hypothesis": "...",
+                "target_category": "subject_anchor",
+                "failure_mechanism": "Identity cues are buried behind style language.",
+                "intervention_type": "information_priority",
+                "direction_id": "D1",
+                "direction_summary": "Subject identity lock",
+                "risk_level": "targeted",
+                "expected_primary_metric": "vision_subject",
+                "builds_on": "H3",
+            }
+        ],
+        "converged": False,
+    },
+    "ranking": {
+        "ranked_indices": [2, 7, 0, 5, 1],
+    },
+    "expansion": {
+        "analysis": "...",
+        "lessons": {"confirmed": "...", "rejected": "...", "new_insight": "..."},
+        "hypothesis": "...",
+        "builds_on": "H3",
+        "experiment": "...",
+        "changed_section": "color_palette",
+        "changed_sections": ["color_palette"],
+        "target_category": "color_palette",
+        "direction_id": "D1",
+        "direction_summary": "Palette localization",
+        "failure_mechanism": "Large frame regions and tiny accents are described with the same priority.",
+        "intervention_type": "information_priority",
+        "risk_level": "targeted",
+        "expected_primary_metric": "color_histogram",
+        "expected_tradeoff": "May make captions read more schematically.",
+        "open_problems": ["..."],
+        "template_changes": "...",
+        "template": {
+            "sections": [
+                {"name": "style_foundation", "description": "core style rules", "value": "..."},
+                {"name": "subject_anchor", "description": "subject fidelity instructions", "value": "..."},
+            ],
+            "negative_prompt": "...",
+            "caption_sections": ["Art Style", "Subject"],
+            "caption_length_target": 500,
+        },
     },
     "synthesis": {
         "rationale": "...",

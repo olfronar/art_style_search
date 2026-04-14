@@ -20,7 +20,7 @@ import pytest
 from PIL import Image
 
 from art_style_search.config import Config
-from art_style_search.contracts import Lessons, RefinementResult
+from art_style_search.contracts import ExperimentSketch, Lessons, RefinementResult
 from art_style_search.evaluate import aggregate
 from art_style_search.state import save_state
 from art_style_search.types import (
@@ -202,6 +202,23 @@ def _build_refinement_result(template: PromptTemplate, idx: int) -> RefinementRe
     )
 
 
+def _build_sketch(idx: int) -> ExperimentSketch:
+    categories = ["color_palette", "composition", "technique", "lighting", "texture"]
+    cat = categories[idx % len(categories)]
+    direction_id = ["D1", "D2", "D3"][idx % 3]
+    return ExperimentSketch(
+        hypothesis=f"Testing {cat} improvement",
+        target_category=cat,
+        failure_mechanism=f"{cat} drift",
+        intervention_type="information_priority",
+        direction_id=direction_id,
+        direction_summary=f"Direction {direction_id}",
+        risk_level="targeted" if idx < 3 else "bold",
+        expected_primary_metric="vision_subject",
+        builds_on="",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Patch helpers
 # ---------------------------------------------------------------------------
@@ -334,8 +351,8 @@ def _apply_all_patches(monkeypatch, tmp_path: Path, ref_paths: list[Path]):
     monkeypatch.setattr("art_style_search.workflow.zero_step.run_experiment", fake_run_experiment)
     monkeypatch.setattr("art_style_search.workflow.iteration_execution.run_experiment", fake_run_experiment)
 
-    # 5. Mock propose_experiments (per-iteration reasoning)
-    async def fake_propose_experiments(
+    # 5. Mock brainstorm/rank/expand proposal flow
+    async def fake_brainstorm(
         style_profile,
         current_template,
         knowledge_base,
@@ -344,17 +361,35 @@ def _apply_all_patches(monkeypatch, tmp_path: Path, ref_paths: list[Path]):
         *,
         client,
         model,
-        num_experiments,
+        num_sketches,
         vision_feedback="",
         roundtrip_feedback="",
         caption_diffs="",
     ):
-        return [_build_refinement_result(_valid_template(), i) for i in range(num_experiments)]
+        return [_build_sketch(i) for i in range(num_sketches)], False
 
-    monkeypatch.setattr(
-        "art_style_search.workflow.iteration_proposals.propose_experiments",
-        fake_propose_experiments,
-    )
+    async def fake_rank(sketches, knowledge_base, best_metrics, *, client, model):
+        return list(sketches)
+
+    async def fake_expand(
+        style_profile,
+        current_template,
+        knowledge_base,
+        best_metrics,
+        last_results,
+        *,
+        client,
+        model,
+        sketches,
+        vision_feedback="",
+        roundtrip_feedback="",
+        caption_diffs="",
+    ):
+        return [_build_refinement_result(_valid_template(), i) for i, _sketch in enumerate(sketches)]
+
+    monkeypatch.setattr("art_style_search.workflow.iteration_proposals.brainstorm_experiment_sketches", fake_brainstorm)
+    monkeypatch.setattr("art_style_search.workflow.iteration_proposals.rank_experiment_sketches", fake_rank)
+    monkeypatch.setattr("art_style_search.workflow.iteration_proposals.expand_experiment_sketches", fake_expand)
 
     # 6. Mock enforce_hypothesis_diversity (pass-through)
     def fake_enforce_diversity(results, template):

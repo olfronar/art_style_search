@@ -22,8 +22,11 @@ from art_style_search.prompt import (
     validate_template,
 )
 from art_style_search.prompt.json_contracts import (
+    validate_brainstorm_payload,
+    validate_expansion_payload,
     validate_experiment_batch_payload,
     validate_initial_templates_payload,
+    validate_ranking_payload,
     validate_review_payload,
     validate_style_compilation_payload,
     validate_synthesis_payload,
@@ -560,6 +563,75 @@ class TestValidateTemplate:
 
 
 class TestJsonContracts:
+    def test_brainstorm_payload_reads_sketches_and_converged_flag(self) -> None:
+        payload = {
+            "sketches": [
+                {
+                    "hypothesis": "Promote subject identity to a harder requirement.",
+                    "target_category": "subject_anchor",
+                    "failure_mechanism": "Identity details are buried behind style language.",
+                    "intervention_type": "information_priority",
+                    "direction_id": "D1",
+                    "direction_summary": "Subject identity lock",
+                    "risk_level": "targeted",
+                    "expected_primary_metric": "vision_subject",
+                    "builds_on": "H4",
+                }
+            ],
+            "converged": True,
+        }
+
+        sketches, converged = validate_brainstorm_payload(payload, num_sketches=4)
+
+        assert converged is True
+        assert len(sketches) == 1
+        assert isinstance(sketches[0], contracts.ExperimentSketch)
+        assert sketches[0].direction_id == "D1"
+        assert sketches[0].builds_on == "H4"
+
+    def test_ranking_payload_keeps_unique_in_range_indices_then_appends_unranked(self) -> None:
+        ranked = validate_ranking_payload({"ranked_indices": [2, 2, 99, 0]}, num_sketches=4)
+
+        assert ranked == [2, 0, 1, 3]
+
+    def test_expansion_payload_reads_single_refinement_result(self) -> None:
+        payload = {
+            "analysis": "Need a stronger subject block.",
+            "lessons": {"confirmed": "", "rejected": "", "new_insight": "Identity details drift."},
+            "hypothesis": "Strengthen subject identity anchors.",
+            "builds_on": "H2",
+            "experiment": "Rewrite the subject section to prioritize identity anchors.",
+            "changed_section": "subject_anchor",
+            "changed_sections": ["subject_anchor"],
+            "target_category": "subject_anchor",
+            "direction_id": "D1",
+            "direction_summary": "Subject identity lock",
+            "failure_mechanism": "Identity traits are underspecified.",
+            "intervention_type": "information_priority",
+            "risk_level": "targeted",
+            "expected_primary_metric": "vision_subject",
+            "expected_tradeoff": "May over-constrain stylization language.",
+            "open_problems": ["Identity drift on crowded scenes"],
+            "template_changes": "Reinforce the subject block with required identity facets.",
+            "template": {
+                "sections": [
+                    {"name": "style_foundation", "description": "rules", "value": "Shared rules"},
+                    {"name": "subject_anchor", "description": "subject rules", "value": "Subject guidance"},
+                    {"name": "composition", "description": "layout", "value": "Layout guidance"},
+                    {"name": "technique", "description": "medium", "value": "Technique guidance"},
+                ],
+                "negative_prompt": "avoid blur",
+                "caption_sections": ["Art Style", "Subject", "Composition"],
+                "caption_length_target": 500,
+            },
+        }
+
+        result = validate_expansion_payload(payload)
+
+        assert result.hypothesis == "Strengthen subject identity anchors."
+        assert result.changed_sections == ["subject_anchor"]
+        assert result.expected_primary_metric == "vision_subject"
+
     def test_initial_templates_payload_pads_to_requested_count(self) -> None:
         payload = {
             "templates": [

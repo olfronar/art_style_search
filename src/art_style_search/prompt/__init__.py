@@ -13,6 +13,7 @@ All public symbols are re-exported here so existing callers can continue to
 ``from art_style_search.prompt import X``.
 """
 
+from art_style_search.contracts import ExperimentSketch
 from art_style_search.prompt._format import _format_metrics, _format_style_profile, _format_template
 from art_style_search.prompt._parse import (
     Lessons,
@@ -33,8 +34,11 @@ from art_style_search.prompt._parse import (
     validate_template,
 )
 from art_style_search.prompt.experiments import (
+    brainstorm_experiment_sketches,
     enforce_hypothesis_diversity,
+    expand_experiment_sketches,
     propose_experiments,
+    rank_experiment_sketches,
     select_experiment_portfolio,
 )
 from art_style_search.prompt.initial import propose_initial_templates
@@ -42,6 +46,7 @@ from art_style_search.prompt.review import review_iteration
 from art_style_search.prompt.synthesis import synthesize_templates
 
 __all__ = [
+    "ExperimentSketch",
     "Lessons",
     "RefinementResult",
     "_format_metrics",
@@ -60,9 +65,12 @@ __all__ = [
     "_parse_target_category",
     "_parse_template",
     "_parse_template_changes",
+    "brainstorm_experiment_sketches",
     "enforce_hypothesis_diversity",
+    "expand_experiment_sketches",
     "propose_experiments",
     "propose_initial_templates",
+    "rank_experiment_sketches",
     "review_iteration",
     "select_experiment_portfolio",
     "synthesize_templates",

@@ -5,14 +5,17 @@ from __future__ import annotations
 import logging
 from collections import Counter, defaultdict
 
-from art_style_search.contracts import ExperimentProposal
+from art_style_search.contracts import ExperimentProposal, ExperimentSketch
 from art_style_search.prompt._parse import validate_template
 from art_style_search.prompt.experiments import (
+    brainstorm_experiment_sketches,
     enforce_hypothesis_diversity,
-    propose_experiments,
+    expand_experiment_sketches,
+    rank_experiment_sketches,
     select_experiment_portfolio,
 )
-from art_style_search.types import ConvergenceReason, LoopState
+from art_style_search.scoring import classify_hypothesis
+from art_style_search.types import ConvergenceReason, LoopState, get_category_names
 from art_style_search.workflow.context import RunContext
 from art_style_search.workflow.policy import _should_honor_stop
 
@@ -120,6 +123,36 @@ def _recover_proposal_change_metadata(
     return recovered_changed_section, recovered_targets, was_recovered
 
 
+def _dedupe_ranked_sketches(
+    sketches: list[ExperimentSketch],
+    current_template,
+) -> list[ExperimentSketch]:
+    seen: set[tuple[str, str, str]] = set()
+    deduped: list[ExperimentSketch] = []
+    category_names = get_category_names(current_template)
+
+    for sketch in sketches:
+        category = sketch.target_category or classify_hypothesis(sketch.hypothesis, category_names)
+        key = (
+            category,
+            sketch.failure_mechanism.strip().lower(),
+            sketch.intervention_type.strip().lower(),
+        )
+        if key in seen:
+            logger.warning(
+                "Dropping duplicate ranked sketch (category=%s, mechanism=%s, intervention=%s): %s",
+                key[0],
+                key[1] or "<none>",
+                key[2] or "<none>",
+                sketch.hypothesis[:80],
+            )
+            continue
+        seen.add(key)
+        deduped.append(sketch)
+
+    return deduped
+
+
 async def _propose_iteration_experiments(
     state: LoopState,
     ctx: RunContext,
@@ -127,8 +160,9 @@ async def _propose_iteration_experiments(
     roundtrip_fb: str,
     caption_diffs: str,
 ) -> tuple[list[ExperimentProposal], bool]:
-    """Phase 1: propose a raw batch, then select a 3-direction portfolio."""
-    refinements = await propose_experiments(
+    """Phase 1: brainstorm sketches, rank them, expand survivors, then select a portfolio."""
+    requested_sketches = max(ctx.config.raw_proposals * 2, ctx.config.raw_proposals)
+    sketches, converged = await brainstorm_experiment_sketches(
         state.style_profile,
         state.current_template,
         state.knowledge_base,
@@ -136,11 +170,57 @@ async def _propose_iteration_experiments(
         state.last_iteration_results,
         client=ctx.reasoning_client,
         model=ctx.config.reasoning_model,
-        num_experiments=ctx.config.raw_proposals,
+        num_sketches=requested_sketches,
         vision_feedback=vision_fb,
         roundtrip_feedback=roundtrip_fb,
         caption_diffs=caption_diffs,
     )
+    logger.info("Brainstorm step returned %d sketches (requested=%d)", len(sketches), requested_sketches)
+
+    if converged:
+        if _should_honor_stop(state, ctx, reason="reasoning model emitted stop"):
+            logger.info("Reasoning model signaled convergence during brainstorm — honored")
+            state.converged = True
+            state.convergence_reason = ConvergenceReason.REASONING_STOP
+            return [], True
+        logger.info("Reasoning model signaled convergence during brainstorm — guard rejected")
+
+    if not sketches:
+        if _should_honor_stop(state, ctx, reason="no experiment sketches proposed"):
+            logger.warning("No experiment sketches proposed — honoring stop")
+            state.converged = True
+            state.convergence_reason = ConvergenceReason.REASONING_STOP
+            return [], True
+        logger.warning("No experiment sketches proposed — guard rejected, continuing with empty batch")
+        return [], False
+
+    ranked_sketches = await rank_experiment_sketches(
+        sketches,
+        state.knowledge_base,
+        state.best_metrics,
+        client=ctx.reasoning_client,
+        model=ctx.config.reasoning_model,
+    )
+    ranked_sketches = ranked_sketches[: ctx.config.raw_proposals]
+    logger.info("Ranking step kept %d/%d sketches for expansion", len(ranked_sketches), len(sketches))
+
+    ranked_sketches = _dedupe_ranked_sketches(ranked_sketches, state.current_template)
+    logger.info("Sketch diversity filter kept %d sketches for expansion", len(ranked_sketches))
+
+    refinements = await expand_experiment_sketches(
+        state.style_profile,
+        state.current_template,
+        state.knowledge_base,
+        state.best_metrics,
+        state.last_iteration_results,
+        client=ctx.reasoning_client,
+        model=ctx.config.reasoning_model,
+        sketches=ranked_sketches,
+        vision_feedback=vision_fb,
+        roundtrip_feedback=roundtrip_fb,
+        caption_diffs=caption_diffs,
+    )
+    logger.info("Expand step returned %d refinement proposals", len(refinements))
 
     refinements = enforce_hypothesis_diversity(refinements, state.current_template)
     refinements = select_experiment_portfolio(refinements, num_experiments=ctx.config.num_branches, num_directions=3)

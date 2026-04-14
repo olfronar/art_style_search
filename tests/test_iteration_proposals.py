@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from art_style_search.config import Config
-from art_style_search.contracts import Lessons, RefinementResult
+from art_style_search.contracts import ExperimentSketch, Lessons, RefinementResult
 from art_style_search.types import (
     AggregatedMetrics,
     KnowledgeBase,
@@ -133,6 +133,20 @@ def _make_refinement(direction_id: str, idx: int, *, risk_level: str, changed_se
     )
 
 
+def _make_sketch(direction_id: str, idx: int, *, mechanism: str, intervention_type: str = "information_priority") -> ExperimentSketch:
+    return ExperimentSketch(
+        hypothesis=f"{direction_id} sketch {idx}",
+        target_category="subject_anchor" if direction_id == "D1" else "composition" if direction_id == "D2" else "lighting",
+        failure_mechanism=mechanism,
+        intervention_type=intervention_type,
+        direction_id=direction_id,
+        direction_summary=f"Direction {direction_id}",
+        risk_level="targeted",
+        expected_primary_metric="vision_subject",
+        builds_on="",
+    )
+
+
 @pytest.mark.asyncio
 async def test_propose_iteration_experiments_requests_raw_batch_and_selects_portfolio(monkeypatch, tmp_path: Path) -> None:
     state = _make_state()
@@ -145,11 +159,9 @@ async def test_propose_iteration_experiments_requests_raw_batch_and_selects_port
         eval_semaphore=MagicMock(),
         services=MagicMock(),
     )
-    seen_num_experiments: list[int] = []
+    seen_num_sketches: list[int] = []
 
-    async def fake_propose_experiments(*args, **kwargs):
-        seen_num_experiments.append(kwargs["num_experiments"])
-        return [
+    refinements = [
             _make_refinement("D1", 0, risk_level="targeted", changed_sections=["subject_anchor"]),
             _make_refinement("D1", 1, risk_level="bold", changed_sections=["subject_anchor", "composition_blueprint"]),
             _make_refinement("D1", 2, risk_level="bold", changed_sections=["subject_anchor", "environment_staging"]),
@@ -159,9 +171,21 @@ async def test_propose_iteration_experiments_requests_raw_batch_and_selects_port
             _make_refinement("D3", 0, risk_level="targeted", changed_sections=["lighting_rendering"]),
             _make_refinement("D3", 1, risk_level="bold", changed_sections=["lighting_rendering", "environment_staging"]),
             _make_refinement("D3", 2, risk_level="bold", changed_sections=["lighting_rendering", "subject_anchor"]),
-        ]
+    ]
 
-    monkeypatch.setattr("art_style_search.workflow.iteration_proposals.propose_experiments", fake_propose_experiments)
+    async def fake_brainstorm(*args, **kwargs):
+        seen_num_sketches.append(kwargs["num_sketches"])
+        return [_make_sketch(ref.direction_id, idx, mechanism=ref.failure_mechanism) for idx, ref in enumerate(refinements)], False
+
+    async def fake_rank(*args, **kwargs):
+        return kwargs.get("sketches", args[0])
+
+    async def fake_expand(*args, **kwargs):
+        return list(refinements)
+
+    monkeypatch.setattr("art_style_search.workflow.iteration_proposals.brainstorm_experiment_sketches", fake_brainstorm)
+    monkeypatch.setattr("art_style_search.workflow.iteration_proposals.rank_experiment_sketches", fake_rank)
+    monkeypatch.setattr("art_style_search.workflow.iteration_proposals.expand_experiment_sketches", fake_expand)
     monkeypatch.setattr(
         "art_style_search.workflow.iteration_proposals.enforce_hypothesis_diversity",
         lambda refinements, template: refinements,
@@ -170,7 +194,7 @@ async def test_propose_iteration_experiments_requests_raw_batch_and_selects_port
     proposals, should_stop = await _propose_iteration_experiments(state, ctx, "", "", "")
 
     assert should_stop is False
-    assert seen_num_experiments == [9]
+    assert seen_num_sketches == [18]
     assert len(proposals) == 9
     assert [proposal.direction_id for proposal in proposals[:3]] == ["D1", "D2", "D3"]
     assert [proposal.risk_level for proposal in proposals[:3]] == ["targeted", "targeted", "targeted"]
@@ -211,32 +235,40 @@ async def test_propose_iteration_experiments_keeps_proposal_with_removed_incumbe
         caption_length_target=500,
     )
 
-    async def fake_propose_experiments(*args, **kwargs):
-        return [
-            RefinementResult(
-                template=proposed_template,
-                analysis="Analysis",
-                template_changes="Changed face_hands_pose and caption schema",
-                should_stop=False,
-                hypothesis="Replace anatomy-only logic with scene taxonomy.",
-                experiment="Rename anatomy section and revise caption schema.",
-                lessons=Lessons(),
-                builds_on=None,
-                open_problems=[],
-                changed_section="face_hands_pose",
-                changed_sections=["face_hands_pose", "caption_sections"],
-                target_category="subject_anchor",
-                direction_id="D1",
-                direction_summary="Schema rewrite",
-                failure_mechanism="Anatomy-only logic is too narrow.",
-                intervention_type="section_schema",
-                risk_level="bold",
-                expected_primary_metric="vision_subject",
-                expected_tradeoff="May reduce continuity with older captions.",
-            )
-        ]
+    refinement = RefinementResult(
+        template=proposed_template,
+        analysis="Analysis",
+        template_changes="Changed face_hands_pose and caption schema",
+        should_stop=False,
+        hypothesis="Replace anatomy-only logic with scene taxonomy.",
+        experiment="Rename anatomy section and revise caption schema.",
+        lessons=Lessons(),
+        builds_on=None,
+        open_problems=[],
+        changed_section="face_hands_pose",
+        changed_sections=["face_hands_pose", "caption_sections"],
+        target_category="subject_anchor",
+        direction_id="D1",
+        direction_summary="Schema rewrite",
+        failure_mechanism="Anatomy-only logic is too narrow.",
+        intervention_type="section_schema",
+        risk_level="bold",
+        expected_primary_metric="vision_subject",
+        expected_tradeoff="May reduce continuity with older captions.",
+    )
 
-    monkeypatch.setattr("art_style_search.workflow.iteration_proposals.propose_experiments", fake_propose_experiments)
+    async def fake_brainstorm(*args, **kwargs):
+        return [_make_sketch("D1", 0, mechanism=refinement.failure_mechanism, intervention_type=refinement.intervention_type)], False
+
+    async def fake_rank(*args, **kwargs):
+        return kwargs.get("sketches", args[0])
+
+    async def fake_expand(*args, **kwargs):
+        return [refinement]
+
+    monkeypatch.setattr("art_style_search.workflow.iteration_proposals.brainstorm_experiment_sketches", fake_brainstorm)
+    monkeypatch.setattr("art_style_search.workflow.iteration_proposals.rank_experiment_sketches", fake_rank)
+    monkeypatch.setattr("art_style_search.workflow.iteration_proposals.expand_experiment_sketches", fake_expand)
     monkeypatch.setattr(
         "art_style_search.workflow.iteration_proposals.enforce_hypothesis_diversity",
         lambda refinements, template: refinements,
@@ -272,32 +304,40 @@ async def test_propose_iteration_experiments_recovers_caption_structure_alias_fr
     proposed_template = _valid_template()
     proposed_template.caption_sections = ["Art Style", "Subject", "Silhouette", "Lighting"]
 
-    async def fake_propose_experiments(*args, **kwargs):
-        return [
-            RefinementResult(
-                template=proposed_template,
-                analysis="Analysis",
-                template_changes="Reworked caption section ordering",
-                should_stop=False,
-                hypothesis="If caption structure changes, section salience will improve.",
-                experiment="Change caption structure ordering.",
-                lessons=Lessons(),
-                builds_on=None,
-                open_problems=[],
-                changed_section="caption_structure",
-                changed_sections=["caption_structure"],
-                target_category="caption_structure",
-                direction_id="D1",
-                direction_summary="Schema rewrite",
-                failure_mechanism="Section order hides the most important locks.",
-                intervention_type="section_schema",
-                risk_level="targeted",
-                expected_primary_metric="vision_subject",
-                expected_tradeoff="May reduce continuity with prior captions.",
-            )
-        ]
+    refinement = RefinementResult(
+        template=proposed_template,
+        analysis="Analysis",
+        template_changes="Reworked caption section ordering",
+        should_stop=False,
+        hypothesis="If caption structure changes, section salience will improve.",
+        experiment="Change caption structure ordering.",
+        lessons=Lessons(),
+        builds_on=None,
+        open_problems=[],
+        changed_section="caption_structure",
+        changed_sections=["caption_structure"],
+        target_category="caption_structure",
+        direction_id="D1",
+        direction_summary="Schema rewrite",
+        failure_mechanism="Section order hides the most important locks.",
+        intervention_type="section_schema",
+        risk_level="targeted",
+        expected_primary_metric="vision_subject",
+        expected_tradeoff="May reduce continuity with prior captions.",
+    )
 
-    monkeypatch.setattr("art_style_search.workflow.iteration_proposals.propose_experiments", fake_propose_experiments)
+    async def fake_brainstorm(*args, **kwargs):
+        return [_make_sketch("D1", 0, mechanism=refinement.failure_mechanism, intervention_type=refinement.intervention_type)], False
+
+    async def fake_rank(*args, **kwargs):
+        return kwargs.get("sketches", args[0])
+
+    async def fake_expand(*args, **kwargs):
+        return [refinement]
+
+    monkeypatch.setattr("art_style_search.workflow.iteration_proposals.brainstorm_experiment_sketches", fake_brainstorm)
+    monkeypatch.setattr("art_style_search.workflow.iteration_proposals.rank_experiment_sketches", fake_rank)
+    monkeypatch.setattr("art_style_search.workflow.iteration_proposals.expand_experiment_sketches", fake_expand)
     monkeypatch.setattr(
         "art_style_search.workflow.iteration_proposals.enforce_hypothesis_diversity",
         lambda refinements, template: refinements,
@@ -331,53 +371,66 @@ async def test_propose_iteration_experiments_logs_recovery_summary(monkeypatch, 
     recoverable_template = _valid_template()
     recoverable_template.caption_sections = ["Art Style", "Subject", "Silhouette", "Lighting"]
 
-    async def fake_propose_experiments(*args, **kwargs):
-        return [
-            RefinementResult(
-                template=recoverable_template,
-                analysis="Analysis",
-                template_changes="Reworked caption section ordering",
-                should_stop=False,
-                hypothesis="Recoverable schema change",
-                experiment="Change caption structure ordering.",
-                lessons=Lessons(),
-                builds_on=None,
-                open_problems=[],
-                changed_section="caption_structure",
-                changed_sections=["caption_structure"],
-                target_category="caption_structure",
-                direction_id="D1",
-                direction_summary="Schema rewrite",
-                failure_mechanism="Section order hides the most important locks.",
-                intervention_type="section_schema",
-                risk_level="targeted",
-                expected_primary_metric="vision_subject",
-                expected_tradeoff="May reduce continuity with prior captions.",
-            ),
-            RefinementResult(
-                template=_valid_template(),
-                analysis="Analysis",
-                template_changes="Unknown metadata only",
-                should_stop=False,
-                hypothesis="Unrecoverable change metadata",
-                experiment="Emit bad changed sections.",
-                lessons=Lessons(),
-                builds_on=None,
-                open_problems=[],
-                changed_section="totally_unknown_field",
-                changed_sections=["totally_unknown_field"],
-                target_category="general",
-                direction_id="D2",
-                direction_summary="Broken metadata",
-                failure_mechanism="None",
-                intervention_type="information_priority",
-                risk_level="targeted",
-                expected_primary_metric="vision_subject",
-                expected_tradeoff="None",
-            ),
-        ]
+    refinements = [
+        RefinementResult(
+            template=recoverable_template,
+            analysis="Analysis",
+            template_changes="Reworked caption section ordering",
+            should_stop=False,
+            hypothesis="Recoverable schema change",
+            experiment="Change caption structure ordering.",
+            lessons=Lessons(),
+            builds_on=None,
+            open_problems=[],
+            changed_section="caption_structure",
+            changed_sections=["caption_structure"],
+            target_category="caption_structure",
+            direction_id="D1",
+            direction_summary="Schema rewrite",
+            failure_mechanism="Section order hides the most important locks.",
+            intervention_type="section_schema",
+            risk_level="targeted",
+            expected_primary_metric="vision_subject",
+            expected_tradeoff="May reduce continuity with prior captions.",
+        ),
+        RefinementResult(
+            template=_valid_template(),
+            analysis="Analysis",
+            template_changes="Unknown metadata only",
+            should_stop=False,
+            hypothesis="Unrecoverable change metadata",
+            experiment="Emit bad changed sections.",
+            lessons=Lessons(),
+            builds_on=None,
+            open_problems=[],
+            changed_section="totally_unknown_field",
+            changed_sections=["totally_unknown_field"],
+            target_category="general",
+            direction_id="D2",
+            direction_summary="Broken metadata",
+            failure_mechanism="None",
+            intervention_type="information_priority",
+            risk_level="targeted",
+            expected_primary_metric="vision_subject",
+            expected_tradeoff="None",
+        ),
+    ]
 
-    monkeypatch.setattr("art_style_search.workflow.iteration_proposals.propose_experiments", fake_propose_experiments)
+    async def fake_brainstorm(*args, **kwargs):
+        return [
+            _make_sketch("D1", 0, mechanism=refinements[0].failure_mechanism, intervention_type=refinements[0].intervention_type),
+            _make_sketch("D2", 1, mechanism=refinements[1].failure_mechanism, intervention_type=refinements[1].intervention_type),
+        ], False
+
+    async def fake_rank(*args, **kwargs):
+        return kwargs.get("sketches", args[0])
+
+    async def fake_expand(*args, **kwargs):
+        return list(refinements)
+
+    monkeypatch.setattr("art_style_search.workflow.iteration_proposals.brainstorm_experiment_sketches", fake_brainstorm)
+    monkeypatch.setattr("art_style_search.workflow.iteration_proposals.rank_experiment_sketches", fake_rank)
+    monkeypatch.setattr("art_style_search.workflow.iteration_proposals.expand_experiment_sketches", fake_expand)
     monkeypatch.setattr(
         "art_style_search.workflow.iteration_proposals.enforce_hypothesis_diversity",
         lambda refinements, template: refinements,
@@ -393,3 +446,115 @@ async def test_propose_iteration_experiments_logs_recovery_summary(monkeypatch, 
     assert should_stop is False
     assert len(proposals) == 1
     assert "Proposal validation summary" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_propose_iteration_experiments_honors_brainstorm_stop_before_ranking_or_expansion(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    state = _make_state()
+    ctx = RunContext(
+        config=_make_config(tmp_path),
+        gemini_client=MagicMock(),
+        reasoning_client=MagicMock(),
+        registry=MagicMock(),
+        gemini_semaphore=MagicMock(),
+        eval_semaphore=MagicMock(),
+        services=MagicMock(),
+    )
+    calls: list[str] = []
+
+    async def fake_brainstorm(*args, **kwargs):
+        calls.append("brainstorm")
+        return [_make_sketch("D1", 0, mechanism="Identity drift")], True
+
+    async def fake_rank(*args, **kwargs):
+        calls.append("rank")
+        return []
+
+    async def fake_expand(*args, **kwargs):
+        calls.append("expand")
+        return []
+
+    monkeypatch.setattr(
+        "art_style_search.workflow.iteration_proposals.brainstorm_experiment_sketches",
+        fake_brainstorm,
+    )
+    monkeypatch.setattr(
+        "art_style_search.workflow.iteration_proposals.rank_experiment_sketches",
+        fake_rank,
+    )
+    monkeypatch.setattr(
+        "art_style_search.workflow.iteration_proposals.expand_experiment_sketches",
+        fake_expand,
+    )
+    monkeypatch.setattr("art_style_search.workflow.iteration_proposals._should_honor_stop", lambda *args, **kwargs: True)
+
+    proposals, should_stop = await _propose_iteration_experiments(state, ctx, "", "", "")
+
+    assert proposals == []
+    assert should_stop is True
+    assert calls == ["brainstorm"]
+
+
+@pytest.mark.asyncio
+async def test_propose_iteration_experiments_deduplicates_ranked_sketches_before_expansion(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    state = _make_state()
+    ctx = RunContext(
+        config=_make_config(tmp_path),
+        gemini_client=MagicMock(),
+        reasoning_client=MagicMock(),
+        registry=MagicMock(),
+        gemini_semaphore=MagicMock(),
+        eval_semaphore=MagicMock(),
+        services=MagicMock(),
+    )
+    expand_inputs: list[list[ExperimentSketch]] = []
+
+    async def fake_brainstorm(*args, **kwargs):
+        return [
+            _make_sketch("D1", 0, mechanism="Identity drift"),
+            _make_sketch("D1", 1, mechanism="Identity drift"),
+        ], False
+
+    async def fake_rank(*args, **kwargs):
+        return [
+            _make_sketch("D1", 0, mechanism="Identity drift"),
+            _make_sketch("D1", 1, mechanism="Identity drift"),
+        ]
+
+    async def fake_expand(*args, **kwargs):
+        expand_inputs.append(list(kwargs["sketches"]))
+        return [_make_refinement("D1", 0, risk_level="targeted", changed_sections=["subject_anchor"])]
+
+    monkeypatch.setattr(
+        "art_style_search.workflow.iteration_proposals.brainstorm_experiment_sketches",
+        fake_brainstorm,
+    )
+    monkeypatch.setattr(
+        "art_style_search.workflow.iteration_proposals.rank_experiment_sketches",
+        fake_rank,
+    )
+    monkeypatch.setattr(
+        "art_style_search.workflow.iteration_proposals.expand_experiment_sketches",
+        fake_expand,
+    )
+    monkeypatch.setattr(
+        "art_style_search.workflow.iteration_proposals.enforce_hypothesis_diversity",
+        lambda refinements, template: refinements,
+    )
+    monkeypatch.setattr(
+        "art_style_search.workflow.iteration_proposals.select_experiment_portfolio",
+        lambda refinements, **kwargs: refinements,
+    )
+
+    proposals, should_stop = await _propose_iteration_experiments(state, ctx, "", "", "")
+
+    assert should_stop is False
+    assert len(proposals) == 1
+    assert len(expand_inputs) == 1
+    assert len(expand_inputs[0]) == 1
