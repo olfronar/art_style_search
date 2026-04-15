@@ -399,7 +399,7 @@ def validate_style_compilation_payload(
     return profile, template
 
 
-def _schema_word_block(token: str, *, words: int = 150) -> str:
+def _schema_word_block(token: str, *, words: int = 260) -> str:
     return " ".join([token] * words)
 
 
@@ -458,7 +458,7 @@ def _schema_template_payload() -> dict[str, Any]:
             "Environment",
             "Negative Cues",
         ],
-        "caption_length_target": 500,
+        "caption_length_target": 4000,
     }
 
 
@@ -496,7 +496,7 @@ _SCHEMA_HINTS = {
                 "approach_summary": "subject-first strict checklist",
                 "emphasis": "technique",
                 "instruction_style": "checklist",
-                "caption_length_target": 500,
+                "caption_length_target": 4000,
                 "caption_sections": ["Art Style", "Subject", "Color Palette", "Composition"],
                 "distinguishing_feature": "Terse imperative checklists; compact sections; subject facets enumerated.",
             }

@@ -24,14 +24,14 @@ from art_style_search.workflow.iteration_proposals import _propose_iteration_exp
 def _valid_template() -> PromptTemplate:
     return PromptTemplate(
         sections=[
-            PromptSection(name="style_foundation", description="rules", value="Shared style rules. " * 80),
-            PromptSection(name="subject_anchor", description="subject", value="Subject rules. " * 80),
-            PromptSection(name="composition_blueprint", description="layout", value="Layout rules. " * 80),
-            PromptSection(name="lighting_rendering", description="light", value="Lighting rules. " * 80),
-            PromptSection(name="environment_staging", description="environment", value="Environment rules. " * 80),
-            PromptSection(name="color_palette", description="palette", value="Palette rules. " * 80),
-            PromptSection(name="texture_language", description="texture", value="Texture rules. " * 80),
-            PromptSection(name="negative_constraints", description="avoid", value="Negative rules. " * 80),
+            PromptSection(name="style_foundation", description="rules", value="Shared style rules. " * 130),
+            PromptSection(name="subject_anchor", description="subject", value="Subject rules. " * 130),
+            PromptSection(name="composition_blueprint", description="layout", value="Layout rules. " * 130),
+            PromptSection(name="lighting_rendering", description="light", value="Lighting rules. " * 130),
+            PromptSection(name="environment_staging", description="environment", value="Environment rules. " * 130),
+            PromptSection(name="color_palette", description="palette", value="Palette rules. " * 130),
+            PromptSection(name="texture_language", description="texture", value="Texture rules. " * 130),
+            PromptSection(name="negative_constraints", description="avoid", value="Negative rules. " * 130),
         ],
         caption_sections=["Art Style", "Subject", "Composition", "Lighting", "Texture"],
         caption_length_target=500,
@@ -41,14 +41,14 @@ def _valid_template() -> PromptTemplate:
 def _current_template_with_face_hands_pose() -> PromptTemplate:
     return PromptTemplate(
         sections=[
-            PromptSection(name="style_foundation", description="rules", value="Shared style rules. " * 80),
-            PromptSection(name="subject_anchor", description="subject", value="Subject rules. " * 80),
-            PromptSection(name="face_hands_pose", description="anatomy", value="Pose rules. " * 80),
-            PromptSection(name="global_layout_grid", description="layout", value="Layout rules. " * 80),
-            PromptSection(name="palette_temperature", description="palette", value="Palette rules. " * 80),
-            PromptSection(name="lighting_rendering", description="light", value="Lighting rules. " * 80),
-            PromptSection(name="environment_staging", description="environment", value="Environment rules. " * 80),
-            PromptSection(name="negative_constraints", description="avoid", value="Negative rules. " * 80),
+            PromptSection(name="style_foundation", description="rules", value="Shared style rules. " * 130),
+            PromptSection(name="subject_anchor", description="subject", value="Subject rules. " * 130),
+            PromptSection(name="face_hands_pose", description="anatomy", value="Pose rules. " * 130),
+            PromptSection(name="global_layout_grid", description="layout", value="Layout rules. " * 130),
+            PromptSection(name="palette_temperature", description="palette", value="Palette rules. " * 130),
+            PromptSection(name="lighting_rendering", description="light", value="Lighting rules. " * 130),
+            PromptSection(name="environment_staging", description="environment", value="Environment rules. " * 130),
+            PromptSection(name="negative_constraints", description="avoid", value="Negative rules. " * 130),
         ],
         caption_sections=["Art Style", "Subject", "Pose", "Layout", "Lighting"],
         caption_length_target=500,
@@ -243,7 +243,7 @@ async def test_propose_iteration_experiments_keeps_proposal_with_removed_incumbe
     proposed_template.sections[2] = PromptSection(
         name="scene_type_and_asset_class",
         description="scene taxonomy",
-        value="Scene taxonomy rules. " * 80,
+        value="Scene taxonomy rules. " * 130,
     )
     proposed_template.caption_sections = ["Art Style", "Subject", "Scene Type", "Layout", "Lighting"]
 

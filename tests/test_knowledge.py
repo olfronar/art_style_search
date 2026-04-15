@@ -58,6 +58,28 @@ class TestBuildCaptionDiffs:
         assert "UNCHANGED" in result
         assert "PREV:" in result
 
+    def test_changed_caption_prefers_section_level_diffs_when_labels_exist(self) -> None:
+        path = Path("img.png")
+        prev = [
+            Caption(
+                image_path=path,
+                text="[Art Style] muted watercolor wash [Subject] fox with satchel [Composition] low horizon",
+            )
+        ]
+        worst = [
+            Caption(
+                image_path=path,
+                text="[Art Style] muted watercolor wash [Subject] wolf with lantern [Composition] low horizon",
+            )
+        ]
+
+        result = build_caption_diffs(prev, worst)
+
+        assert "Section changes:" in result
+        assert "[Subject]" in result
+        assert "fox with satchel" in result
+        assert "wolf with lantern" in result
+
 
 class TestOpenProblemStaleness:
     """Test that stale open problems get demoted in priority."""

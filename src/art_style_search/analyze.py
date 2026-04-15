@@ -89,34 +89,35 @@ _COMPILATION_PROMPT = (
     "produce images that match the reference.\n"
     "- Front-load the most distinctive style elements. "
     "Why: text-to-image models attend more to early prompt tokens.\n"
-    "- Create a COMPREHENSIVE template with 8-15 sections covering ALL visual aspects.\n"
-    "- Each section value should be detailed (4-8 sentences) and EMBED the core style rules "
+    "- Create a COMPREHENSIVE template with 8-20 sections covering ALL visual aspects.\n"
+    "- Each section value should be detailed and EMBED the core style rules "
     "from the StyleProfile as literal text that the captioner weaves into every caption. "
     "Why: embedding rules as literal text ensures the captioner repeats them verbatim rather than interpreting them.\n"
-    "- Total rendered meta-prompt should be 1200-2500 words.\n"
+    "- Total rendered meta-prompt should be 2000-8000 words.\n"
     "- The negative prompt should target common failure modes the reasoning model identified.\n"
     '- Include the JSON key "caption_sections": an ordered list of labeled sections '
     'the captioner should produce in its output (e.g. ["Art Style", "Subject", "Color Palette"]).\n'
-    '- Include the JSON key "caption_length_target": target word count for produced captions (e.g. 500).\n\n'
-    "The prompt template should have 8-15 sections covering: technique/medium, color palette, composition, "
+    '- Include the JSON key "caption_length_target": target word count for produced captions (e.g. 4000).\n\n'
+    "The prompt template should have 8-20 sections covering: technique/medium, color palette, composition, "
     "character/figure treatment, background/environment, details/textures, lighting, mood/atmosphere, "
     "and subject rendering. The FIRST section must be 'style_foundation' and the SECOND section must be "
     "'subject_anchor'. The first two caption output labels must be 'Art Style' and 'Subject'. "
     "The [Subject] block must require identity/species, distinguishing features, clothing or equipment, "
-    "pose or action, expression, and props or context, targeting roughly 80-140 words. "
+    "pose or action, expression, and props or context, targeting roughly 1000-2000 words, with [Art Style] also "
+    "expected to run about 1000-2000 words and the remaining caption sections typically 150-400 words each. "
     "Each section should have a short name, a description of what it controls, "
     "and detailed prompt text with embedded style rules as its value. Include a thorough negative prompt.\n\n"
     "## Example (different art style — for format reference only, do NOT copy its content)\n"
     "This example shows the expected structure for a watercolor landscape style. "
     "Your output should match this structure but contain content specific to the analyzed style.\n\n"
     "```json\n"
-    '{{"style_profile":{{"color_palette":"Cool blues and greens with occasional warm sienna accents, high transparency, water bloom effects","composition":"Rule-of-thirds landscape format with atmospheric perspective, soft horizon lines","technique":"Transparent watercolor on cold-pressed paper, wet-on-wet for skies, dry brush for texture","mood_atmosphere":"Serene, contemplative, misty morning light","subject_matter":"Natural landscapes with occasional architectural elements","influences":"English watercolor tradition, Turner atmospheric effects"}},"initial_template":{{"sections":[{{"name":"style_foundation","description":"core style rules","value":"..."}},{{"name":"subject_anchor","description":"subject fidelity","value":"..."}}],"negative_prompt":"...","caption_sections":["Art Style","Subject","Color Palette","Technique","Composition","Lighting & Atmosphere","Textures"],"caption_length_target":500}}}}\n'
+    '{{"style_profile":{{"color_palette":"Cool blues and greens with occasional warm sienna accents, high transparency, water bloom effects","composition":"Rule-of-thirds landscape format with atmospheric perspective, soft horizon lines","technique":"Transparent watercolor on cold-pressed paper, wet-on-wet for skies, dry brush for texture","mood_atmosphere":"Serene, contemplative, misty morning light","subject_matter":"Natural landscapes with occasional architectural elements","influences":"English watercolor tradition, Turner atmospheric effects"}},"initial_template":{{"sections":[{{"name":"style_foundation","description":"core style rules","value":"..."}},{{"name":"subject_anchor","description":"subject fidelity","value":"..."}}],"negative_prompt":"...","caption_sections":["Art Style","Subject","Color Palette","Technique","Composition","Lighting & Atmosphere","Textures"],"caption_length_target":4000}}}}\n'
     "```\n\n"
     "## EXECUTION CHECKLIST — verify before outputting\n"
     "- [ ] style_profile has all 6 fields (color_palette, composition, technique, mood_atmosphere, subject_matter, influences)\n"
     "- [ ] Template first section is 'style_foundation', second is 'subject_anchor'\n"
     "- [ ] caption_sections starts with ['Art Style', 'Subject', ...]\n"
-    "- [ ] Template has 8-15 sections\n"
+    "- [ ] Template has 8-20 sections\n"
     "- [ ] Negative prompt is included\n\n"
     "Respond with EXACTLY one JSON object (no markdown fences, no extra text):\n"
     "{{\n"
@@ -132,7 +133,7 @@ _COMPILATION_PROMPT = (
     '    "sections": [{{"name": "style_foundation", "description": "core art style identity and rules", "value": "..."}}, {{"name": "subject_anchor", "description": "subject fidelity instructions", "value": "..."}}, {{"name": "color_palette", "description": "palette guidance", "value": "..."}}, {{"name": "composition", "description": "layout guidance", "value": "..."}}],\n'
     '    "negative_prompt": "...",\n'
     '    "caption_sections": ["Art Style", "Subject", "Color Palette", "Technique", "Composition"],\n'
-    '    "caption_length_target": 500\n'
+    '    "caption_length_target": 4000\n'
     "  }}\n"
     "}}"
 )
@@ -213,7 +214,7 @@ async def _reasoning_compile(
         response_name="style_compilation",
         schema_hint=schema_hint("style_compilation"),
         response_schema=response_schema("style_compilation"),
-        max_tokens=12000,
+        max_tokens=20000,
     )
 
 

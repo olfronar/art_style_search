@@ -16,6 +16,7 @@ from art_style_search.analyze import (
     _REASONING_ANALYSIS_PROMPT,
     _gemini_analyze,
     _load_cache,
+    _reasoning_compile,
     _save_cache,
 )
 from art_style_search.types import PromptSection, PromptTemplate
@@ -71,14 +72,14 @@ class TestStyleCache:
     def _make_valid_template() -> PromptTemplate:
         return PromptTemplate(
             sections=[
-                PromptSection(name="style_foundation", description="rules", value="Shared rules. " * 80),
-                PromptSection(name="subject_anchor", description="subject rules", value="Subject guidance. " * 80),
-                PromptSection(name="color_palette", description="colors", value="Palette guidance. " * 80),
-                PromptSection(name="composition", description="layout", value="Composition guidance. " * 80),
-                PromptSection(name="technique", description="medium", value="Technique guidance. " * 80),
-                PromptSection(name="lighting", description="light", value="Lighting guidance. " * 80),
-                PromptSection(name="environment", description="environment", value="Environment guidance. " * 80),
-                PromptSection(name="textures", description="textures", value="Texture guidance. " * 80),
+                PromptSection(name="style_foundation", description="rules", value="Shared rules. " * 130),
+                PromptSection(name="subject_anchor", description="subject rules", value="Subject guidance. " * 130),
+                PromptSection(name="color_palette", description="colors", value="Palette guidance. " * 130),
+                PromptSection(name="composition", description="layout", value="Composition guidance. " * 130),
+                PromptSection(name="technique", description="medium", value="Technique guidance. " * 130),
+                PromptSection(name="lighting", description="light", value="Lighting guidance. " * 130),
+                PromptSection(name="environment", description="environment", value="Environment guidance. " * 130),
+                PromptSection(name="textures", description="textures", value="Texture guidance. " * 130),
             ],
             negative_prompt="avoid blur",
             caption_sections=["Art Style", "Subject", "Color Palette", "Composition", "Technique"],
@@ -168,6 +169,26 @@ class TestAnalyzePrompts:
         assert "<caption_length>" not in _COMPILATION_PROMPT
         assert '"caption_sections"' in _COMPILATION_PROMPT
         assert '"caption_length_target"' in _COMPILATION_PROMPT
+        assert "2000-8000 words" in _COMPILATION_PROMPT
+        assert "1000-2000 words" in _COMPILATION_PROMPT
+
+    @pytest.mark.asyncio
+    async def test_reasoning_compile_uses_larger_output_budget(self) -> None:
+        captured: dict[str, object] = {}
+
+        class FakeClient:
+            async def call_json(self, **kwargs):
+                captured.update(kwargs)
+                return make_style_profile(), TestStyleCache._make_valid_template()
+
+        await _reasoning_compile(
+            "Gemini analysis",
+            "Reasoning analysis",
+            client=FakeClient(),  # type: ignore[arg-type]
+            model="fake-model",
+        )
+
+        assert captured["max_tokens"] == 20000
 
     @pytest.mark.asyncio
     async def test_gemini_analyze_uses_system_instruction(self, tmp_path: Path) -> None:

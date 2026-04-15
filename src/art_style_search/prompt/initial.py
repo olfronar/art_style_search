@@ -23,13 +23,13 @@ logger = logging.getLogger(__name__)
 _BRAINSTORM_EXAMPLE = (
     "## Example of a good sketch\n"
     '{"approach_summary":"subject-first strict checklist",'
-    '"emphasis":"technique","instruction_style":"checklist","caption_length_target":500,'
+    '"emphasis":"technique","instruction_style":"checklist","caption_length_target":4000,'
     '"caption_sections":["Art Style","Subject","Color Palette","Composition","Lighting","Texture"],'
     '"distinguishing_feature":"Terse imperative bullets per section; subject facets enumerated '
     '(species, clothing, pose, expression, props) to force identity specificity over style language."}\n\n'
     "## Example of a bad sketch (too vague — avoid this)\n"
     '{"approach_summary":"comprehensive","emphasis":"general","instruction_style":"detailed",'
-    '"caption_length_target":500,"caption_sections":["Art Style","Subject"],'
+    '"caption_length_target":4000,"caption_sections":["Art Style","Subject"],'
     '"distinguishing_feature":"better than baseline"}'
 )
 
@@ -46,7 +46,7 @@ _BASE_REQUIREMENTS = (
     "2. Second section MUST be 'subject_anchor' — produces the [Subject] block (identity, features, pose; "
     "most important for reproduction).\n"
     "3. caption_sections MUST start with ['Art Style', 'Subject', ...].\n"
-    "4. Total rendered template MUST be 1200-2500 words across 8-15 sections (4-8 sentences each).\n"
+    "4. Total rendered template MUST be 2000-8000 words across 8-20 sections.\n"
 )
 
 
@@ -74,13 +74,13 @@ def _brainstorm_system(num_sketches: int) -> str:
         "- emphasis: what the variant optimizes for — one of {technique, spatial, mood, balanced, palette}\n"
         "- instruction_style: how the captioner is addressed — one of {checklist, artistic_direction, "
         "technical_analysis, hybrid}\n"
-        "- caption_length_target: integer word count target for captions (200-1200, vary across sketches)\n"
+        "- caption_length_target: integer word count target for captions (500-6000, vary across sketches)\n"
         "- caption_sections: ordered list, MUST start with ['Art Style', 'Subject', ...] then 4-10 more "
         "section names of your choosing (these become labeled blocks like [Color Palette] in captions)\n"
         "- distinguishing_feature: 1-2 sentences explaining what makes THIS sketch's approach different from "
         "the others; what mechanism is it betting on?\n\n"
         "## Diversity requirements\n"
-        "- Vary caption_length_target meaningfully (some short ~300, some long ~900)\n"
+        "- Vary caption_length_target meaningfully (some around ~800, some around ~4000)\n"
         "- Vary the caption_sections set/ordering after the two anchors\n"
         "- Vary instruction_style — don't make every sketch a checklist\n"
         "- Vary emphasis — at least 3 different emphasis values across the batch\n"
@@ -135,7 +135,7 @@ def _expand_system() -> str:
         "approach_summary, emphasis, instruction_style, caption_length_target, caption_sections, and "
         "distinguishing_feature — these are your design contract.\n\n"
         "## Section requirements\n"
-        "- 8-15 sections, each 4-8 sentences of instruction.\n"
+        "- 8-20 sections, with enough detailed instruction to reach 2000-8000 rendered words overall.\n"
         "- First section MUST be 'style_foundation'; it instructs the captioner to open every caption "
         "with a [Art Style] block containing FIXED, REUSABLE style rules copied verbatim from the Style Profile. "
         "This block must be nearly IDENTICAL across all captions (shared style DNA).\n"
@@ -144,9 +144,11 @@ def _expand_system() -> str:
         "- The remaining sections come from the sketch's caption_sections (after Art Style/Subject) — "
         "create one template section per labeled caption section, plus any additional sections needed to "
         "cover technique/medium, lighting, mood, textures, and a negative-instruction section.\n"
+        "- The template must explicitly support long captions: [Art Style] and [Subject] should be allowed to run "
+        "about 1000-2000 words each when warranted, while ancillary caption sections usually land in the 150-400 word range.\n"
         "- Each section embeds the relevant style rules from the Style Profile as literal text the captioner "
         "should repeat verbatim, then layers per-image observations on top.\n"
-        "- Total rendered template MUST be 1200-2500 words.\n\n"
+        "- Total rendered template MUST be 2000-8000 words.\n\n"
         "## Output format\n"
         "Return EXACTLY one JSON object — a single PromptTemplate. No markdown fences. No commentary.\n"
         "Required keys: sections (list of {name,description,value}), negative_prompt (string), "
@@ -158,7 +160,7 @@ def _expand_system() -> str:
 def _expand_user(sketch: InitialTemplateSketch, style_profile: StyleProfile) -> str:
     return (
         "Expand the following sketch into a complete meta-prompt. The sketch defines the approach; "
-        "you must realize it in a 1200-2500 word template that obeys all anchor rules.\n\n"
+        "you must realize it in a 2000-8000 word template that obeys all anchor rules.\n\n"
         "## Sketch to Expand\n"
         f"{_render_sketch(sketch, 0)}\n"
         "## Style Profile\n"
@@ -241,7 +243,7 @@ async def expand_initial_sketches(
             response_name=f"initial_expansion_{idx}",
             schema_hint=schema_hint("initial_expansion"),
             response_schema=response_schema("initial_expansion"),
-            max_tokens=16000,
+            max_tokens=24000,
             repair_retries=2,
         )
         for idx, sketch in enumerate(sketches)

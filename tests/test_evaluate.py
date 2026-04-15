@@ -163,6 +163,55 @@ class TestXAIComparison:
         assert content[2]["text"].endswith("ORIGINAL reference:")  # type: ignore[index]
 
     @pytest.mark.asyncio
+    async def test_compare_vision_per_image_prioritizes_subject_style_and_composition_sections(
+        self, tmp_path: Path
+    ) -> None:
+        ref_path = tmp_path / "ref.png"
+        gen_path = tmp_path / "gen.png"
+        _write_image(ref_path, (10, 20, 30))
+        _write_image(gen_path, (30, 20, 10))
+
+        captured: dict[str, object] = {}
+        response_text = (
+            '<style verdict="MATCH">Style matches closely.</style>\n'
+            '<subject verdict="PARTIAL">Subject differs slightly.</subject>\n'
+            '<composition verdict="MISS">Composition is off.</composition>'
+        )
+
+        async def fake_create(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(output_text=response_text)
+
+        xai_client = SimpleNamespace(responses=SimpleNamespace(create=fake_create))
+
+        long_caption = (
+            "[Color Palette] "
+            + ("palette " * 900)
+            + "[Subject] SUBJECT_MARKER fox with amber eyes, satchel, lantern, lifted paw, wary glance. "
+            + ("subject_detail " * 80)
+            + "[Art Style] STYLE_MARKER dense impasto brushwork, muted sienna, dry-brush edges. "
+            + ("style_detail " * 80)
+            + "[Composition] COMPOSITION_MARKER low horizon, centered subject, marsh reeds framing both sides. "
+            + ("composition_detail " * 80)
+        )
+
+        await compare_vision_per_image(
+            [(ref_path, gen_path)],
+            [long_caption],
+            provider="xai",
+            client=None,
+            xai_client=xai_client,
+            model="grok-4.20-reasoning-latest",
+            semaphore=asyncio.Semaphore(1),
+        )
+
+        prompt_text = captured["input"][1]["content"][-1]["text"]  # type: ignore[index]
+        assert "SUBJECT_MARKER" in prompt_text
+        assert "STYLE_MARKER" in prompt_text
+        assert "COMPOSITION_MARKER" in prompt_text
+        assert prompt_text.index("[Subject]") < prompt_text.index("[Art Style]") < prompt_text.index("[Composition]")
+
+    @pytest.mark.asyncio
     async def test_pairwise_compare_experiments_uses_xai_and_parses_winner(self, tmp_path: Path, monkeypatch) -> None:
         ref_path = tmp_path / "ref.png"
         gen_a = tmp_path / "a.png"
