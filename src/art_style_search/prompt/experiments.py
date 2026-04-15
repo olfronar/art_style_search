@@ -169,7 +169,10 @@ def _experiment_system_prompt(
     strategy = (
         "## ITERATION STRATEGY\n\n"
         "Work in EXACTLY 3 directions (D1 > D2 > D3 by priority).\n"
-        "Each direction: 1 targeted (change 1 section) + 1-3 bold (change 1-3 related sections).\n"
+        "Each direction contains 1 targeted proposal and 1 to 3 bold proposals.\n"
+        "Section-count rules (HARD CAP — proposals that violate these are rejected):\n"
+        "- targeted proposal: changed_sections has exactly 1 entry.\n"
+        "- bold proposal: changed_sections has 1, 2, or 3 entries. Never 4 or more.\n"
         "Bold proposals must change information priority, scene-type policy, section schema, or a cluster of related sections — not wording polish.\n\n"
         "### Valid section names\n"
         f"Concrete: {section_name_list}\n"
