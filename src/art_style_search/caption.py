@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 
 from google import genai  # type: ignore[attr-defined]
@@ -16,10 +17,13 @@ from art_style_search.utils import async_retry, caption_circuit_breaker, image_t
 logger = logging.getLogger(__name__)
 
 CAPTION_SYSTEM = (
-    "You are an expert art analyst producing captions for text-to-image generation. "
-    "Your captions will be fed to an image generator — every detail you write must be specific enough "
-    "to reproduce the original image visually.\n\n"
+    "You are an expert art analyst producing captions that function as both faithful descriptions and "
+    "ready-to-use text-to-image prompts. Your captions will be fed directly to an image generator, so every "
+    "detail you write must be specific enough to reproduce the original image visually.\n\n"
     "Quality standards:\n"
+    "- Lead with concrete subject identity and scene-defining information before softer stylistic interpretation.\n"
+    "- Prefer direct positive phrasing and generation-ready wording over hedged narration.\n"
+    "- When dense specifics help, use compact comma-delimited visual tokens.\n"
     "- Use precise color names (e.g. 'burnt sienna', 'cerulean blue'), never vague terms like 'warm colors' or 'dark tones'. "
     "If you cannot name a specific color, describe it by hue, saturation, and value (e.g. 'a muted orange-brown, medium saturation, mid-value').\n"
     "- Use art terminology appropriate to the medium (e.g. 'impasto strokes' for oil painting, 'wet-on-wet blending' for watercolor, "
@@ -33,7 +37,8 @@ CAPTION_PROMPT = (
     "Describe this image in comprehensive detail for someone who cannot see it. "
     "These descriptions will be used to understand and reproduce the art style.\n\n"
     "## Output format\n"
-    "Use these labeled sections in this exact order. Each section: 2-4 sentences with specific details.\n\n"
+    "Use these labeled sections in this exact order. Keep the labels exactly as written and let each section expand "
+    "to the length needed for concrete visual detail.\n\n"
     "[Art Style]: Shared style DNA visible in the image — recurring rendering rules, medium cues, "
     "and reusable technique language that would help recreate another image in the same style.\n"
     "[Subject] (MOST IMPORTANT): What is depicted — identity, species, poses, expressions, "
@@ -47,11 +52,29 @@ CAPTION_PROMPT = (
     "[Textures]: Surface qualities, patterns, tactile impressions.\n\n"
     "## Constraints\n"
     "- Be precise. Use art terminology and specific color names.\n"
-    "- Target 400-600 words total.\n"
+    "- Target 2000-6000 words total.\n"
     "- Do not speculate about the artist's intent; describe only what is visible.\n"
-    "- [Subject] must be the most detailed section (aim for 80-140 words).\n"
+    "- [Subject] and [Art Style] each 800-2000 words when the image supports that detail; they should be the longest sections.\n"
+    "- Ancillary sections should usually land in the 150-400 word range while staying concrete.\n"
     "- Keep the labels exactly as written above."
 )
+
+_CAPTION_TARGET_RE = re.compile(r"target length:\s*approximately\s*(\d+)\s*words", re.IGNORECASE)
+_AVG_WORD_CHARS = 4
+_FALLBACK_MIN_CAPTION_CHARS = 600
+_CAPTIONER_MAX_OUTPUT_TOKENS = 32000
+
+
+def _caption_length_target_from_prompt(prompt: str) -> int:
+    match = _CAPTION_TARGET_RE.search(prompt)
+    return int(match.group(1)) if match else 0
+
+
+def _minimum_caption_chars(prompt: str) -> int:
+    target = _caption_length_target_from_prompt(prompt)
+    if target > 0:
+        return max(_FALLBACK_MIN_CAPTION_CHARS, int(target * 0.5 * _AVG_WORD_CHARS))
+    return _FALLBACK_MIN_CAPTION_CHARS
 
 
 async def caption_single(
@@ -95,7 +118,10 @@ async def caption_single(
                         image_to_gemini_part(image_path),
                         prompt,
                     ],
-                    config=genai_types.GenerateContentConfig(system_instruction=CAPTION_SYSTEM),
+                    config=genai_types.GenerateContentConfig(
+                        system_instruction=CAPTION_SYSTEM,
+                        max_output_tokens=_CAPTIONER_MAX_OUTPUT_TOKENS,
+                    ),
                 ),
                 timeout=90,
             )
@@ -106,7 +132,7 @@ async def caption_single(
     )
 
     # Validate caption quality — empty or very short captions waste downstream cycles
-    min_caption_length = 900 if prompt == CAPTION_PROMPT else 150
+    min_caption_length = _minimum_caption_chars(prompt)
     if not caption_text or len(caption_text.strip()) < min_caption_length:
         msg = (
             f"Captioning {image_path.name} produced empty or too-short caption "

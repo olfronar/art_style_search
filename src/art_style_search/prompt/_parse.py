@@ -204,11 +204,11 @@ def _parse_refinement_branches(text: str, num_experiments: int) -> list[Refineme
 
 # Align validation bounds with the prompt contract for model-produced templates.
 _MIN_SECTIONS = 8
-_MAX_SECTIONS = 15
-_MIN_CAPTION_LENGTH = 200
-_MAX_CAPTION_LENGTH = 1200
-_MIN_RENDERED_WORDS = 1200
-_MAX_RENDERED_WORDS = 2500
+_MAX_SECTIONS = 20
+_MIN_CAPTION_LENGTH = 500
+_MAX_CAPTION_LENGTH = 10000
+_MIN_RENDERED_WORDS = 2000
+_MAX_RENDERED_WORDS = 8000
 
 # Ordered anchor requirements for sections and caption sections.  Adding a third
 # required anchor means one-line edits here — the validator iterates both tables.

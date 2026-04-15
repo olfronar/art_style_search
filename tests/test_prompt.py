@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -40,7 +41,14 @@ from art_style_search.prompt.json_contracts import (
     validate_style_compilation_payload,
     validate_synthesis_payload,
 )
-from art_style_search.types import AggregatedMetrics, KnowledgeBase, PromptSection, PromptTemplate
+from art_style_search.types import (
+    AggregatedMetrics,
+    Caption,
+    KnowledgeBase,
+    MetricScores,
+    PromptSection,
+    PromptTemplate,
+)
 from tests.conftest import make_style_profile
 
 # ---------------------------------------------------------------------------
@@ -430,14 +438,14 @@ class TestParseChangedSection:
 def _make_valid_template() -> PromptTemplate:
     """Build a minimal valid template for validation tests."""
     sections = [
-        PromptSection(name="style_foundation", description="Style rules", value="Foundation rules. " * 80),
-        PromptSection(name="subject_anchor", description="Subject rules", value="Subject rules. " * 80),
-        PromptSection(name="color_palette", description="Colors", value="Color rules. " * 80),
-        PromptSection(name="composition", description="Layout", value="Comp rules. " * 80),
-        PromptSection(name="technique", description="Technique", value="Tech rules. " * 80),
-        PromptSection(name="lighting", description="Lighting", value="Lighting rules. " * 80),
-        PromptSection(name="environment", description="Environment", value="Environment rules. " * 80),
-        PromptSection(name="textures", description="Textures", value="Texture rules. " * 80),
+        PromptSection(name="style_foundation", description="Style rules", value="Foundation rules. " * 130),
+        PromptSection(name="subject_anchor", description="Subject rules", value="Subject rules. " * 130),
+        PromptSection(name="color_palette", description="Colors", value="Color rules. " * 130),
+        PromptSection(name="composition", description="Layout", value="Comp rules. " * 130),
+        PromptSection(name="technique", description="Technique", value="Tech rules. " * 130),
+        PromptSection(name="lighting", description="Lighting", value="Lighting rules. " * 130),
+        PromptSection(name="environment", description="Environment", value="Environment rules. " * 130),
+        PromptSection(name="textures", description="Textures", value="Texture rules. " * 130),
     ]
     return PromptTemplate(
         sections=sections,
@@ -484,9 +492,15 @@ class TestValidateTemplate:
 
     def test_caption_length_out_of_bounds(self) -> None:
         t = _make_valid_template()
-        t.caption_length_target = 150
+        t.caption_length_target = 499
         errors = validate_template(t)
         assert any("Caption length" in e for e in errors)
+
+    def test_large_caption_length_target_is_allowed(self) -> None:
+        t = _make_valid_template()
+        t.caption_length_target = 6000
+        errors = validate_template(t)
+        assert not any("Caption length" in e for e in errors)
 
     def test_rendered_prompt_word_count_out_of_bounds(self) -> None:
         t = _make_valid_template()
@@ -1206,6 +1220,7 @@ class TestPromptSurfaceExamples:
         assert '"caption_sections": [\n    "Art Style",\n    "Subject"' in expand_schema or (
             '"caption_sections": ["Art Style", "Subject"' in expand_schema
         )
+        assert expand_calls[0]["max_tokens"] == 24000
 
     @pytest.mark.asyncio
     async def test_synthesis_prompt_example_keeps_subject_anchor_in_caption_sections(self) -> None:
@@ -1244,6 +1259,136 @@ class TestPromptSurfaceExamples:
 
         system = captured["system"]  # type: ignore[assignment]
         assert '"caption_sections": ["Art Style", "Subject"' in system
+        assert "2000-8000 words" in system
+
+    @pytest.mark.asyncio
+    async def test_experiment_expansion_uses_large_template_budget(self) -> None:
+        from art_style_search.prompt.experiments import expand_experiment_sketches
+
+        captured: dict[str, object] = {}
+        sketch = contracts.ExperimentSketch(
+            hypothesis="Subject identity is too diffuse.",
+            target_category="subject_anchor",
+            failure_mechanism="Identity details are buried under style language.",
+            intervention_type="information_priority",
+            direction_id="D1",
+            direction_summary="Subject identity lock",
+            risk_level="targeted",
+            expected_primary_metric="vision_subject",
+            builds_on="H3",
+        )
+
+        class FakeClient:
+            async def call_json(self, **kwargs):
+                captured.update(kwargs)
+                return RefinementResult(
+                    template=_make_valid_template(),
+                    analysis="Need a stronger subject block.",
+                    template_changes="Strengthen subject_anchor.",
+                    should_stop=False,
+                    hypothesis=sketch.hypothesis,
+                    experiment="Rewrite the subject block to front-load identity facets.",
+                    lessons=Lessons(),
+                    builds_on=sketch.builds_on,
+                    open_problems=[],
+                    changed_section="subject_anchor",
+                    changed_sections=["subject_anchor"],
+                    target_category=sketch.target_category,
+                    direction_id=sketch.direction_id,
+                    direction_summary=sketch.direction_summary,
+                    failure_mechanism=sketch.failure_mechanism,
+                    intervention_type=sketch.intervention_type,
+                    risk_level=sketch.risk_level,
+                    expected_primary_metric=sketch.expected_primary_metric,
+                )
+
+        results = await expand_experiment_sketches(
+            make_style_profile(),
+            _make_valid_template(),
+            KnowledgeBase(),
+            None,
+            None,
+            client=FakeClient(),  # type: ignore[arg-type]
+            model="fake-model",
+            sketches=[sketch],
+            is_first_iteration=True,
+        )
+
+        assert len(results) == 1
+        assert captured["max_tokens"] == 24000
+        assert "2000-8000 words" in captured["system"]  # type: ignore[operator]
+
+    def test_shared_proposal_user_prioritizes_key_caption_sections_and_larger_feedback_budget(self) -> None:
+        from art_style_search.prompt.experiments import _build_shared_proposal_user
+
+        best = type(
+            "Result",
+            (),
+            {
+                "kept": True,
+                "branch_id": 0,
+                "aggregated": AggregatedMetrics(
+                    dreamsim_similarity_mean=0.7,
+                    dreamsim_similarity_std=0.01,
+                    hps_score_mean=0.25,
+                    hps_score_std=0.01,
+                    aesthetics_score_mean=6.0,
+                    aesthetics_score_std=0.2,
+                ),
+                "hypothesis": "Best hypothesis",
+                "experiment": "Best experiment",
+                "per_image_scores": [],
+                "iteration_captions": [],
+                "vision_feedback": "",
+            },
+        )()
+        worst_caption = (
+            "[Color Palette] "
+            + ("palette " * 160)
+            + "[Subject] SUBJECT_MARKER fox with amber eyes, satchel, lantern, lifted paw, wary glance. "
+            + ("subject_detail " * 80)
+            + "[Art Style] STYLE_MARKER dense impasto brushwork, muted sienna, dry-brush edges. "
+            + ("style_detail " * 80)
+            + "[Composition] COMPOSITION_MARKER low horizon, centered subject, marsh reeds framing both sides. "
+            + ("composition_detail " * 40)
+        )
+        worst = type(
+            "Result",
+            (),
+            {
+                "kept": False,
+                "branch_id": 1,
+                "aggregated": AggregatedMetrics(
+                    dreamsim_similarity_mean=0.3,
+                    dreamsim_similarity_std=0.02,
+                    hps_score_mean=0.12,
+                    hps_score_std=0.01,
+                    aesthetics_score_mean=4.0,
+                    aesthetics_score_std=0.3,
+                ),
+                "hypothesis": "Worst hypothesis",
+                "experiment": "Worst experiment",
+                "per_image_scores": [MetricScores(dreamsim_similarity=0.1, hps_score=0.1, aesthetics_score=4.0)],
+                "iteration_captions": [Caption(image_path=Path("worst.png"), text=worst_caption)],
+                "vision_feedback": " ".join(f"vf{i}" for i in range(450)),
+            },
+        )()
+
+        user = _build_shared_proposal_user(
+            make_style_profile(),
+            _make_valid_template(),
+            KnowledgeBase(),
+            best.aggregated,
+            [best, worst],  # type: ignore[list-item]
+            vision_feedback="",
+            roundtrip_feedback="",
+            caption_diffs="",
+        )
+
+        assert "SUBJECT_MARKER" in user
+        assert "STYLE_MARKER" in user
+        assert "vf350" in user
+        assert "vf430" not in user
 
 
 class TestRankInitialSketches:

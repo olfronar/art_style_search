@@ -48,6 +48,34 @@ class TestCheckSectionLengths:
         text = "[Art Style] word " * 10 + "[Color Palette] word " * 10 + "[Composition] word " * 10
         assert _check_section_lengths(text, ["Art Style", "Color Palette", "Composition"]) == "OK"
 
+    def test_primary_section_can_dominate_up_to_sixty_percent(self) -> None:
+        text = (
+            "[Art Style] "
+            + ("style " * 30)
+            + "[Subject] "
+            + ("subject " * 110)
+            + "[Composition] "
+            + ("composition " * 30)
+            + "[Lighting] "
+            + ("lighting " * 30)
+        )
+        assert _check_section_lengths(text, ["Art Style", "Subject", "Composition", "Lighting"]) == "OK"
+
+    def test_primary_section_above_sixty_percent_is_imbalanced(self) -> None:
+        text = (
+            "[Art Style] "
+            + ("style " * 20)
+            + "[Subject] "
+            + ("subject " * 130)
+            + "[Composition] "
+            + ("composition " * 25)
+            + "[Lighting] "
+            + ("lighting " * 25)
+        )
+        result = _check_section_lengths(text, ["Art Style", "Subject", "Composition", "Lighting"])
+        assert result.startswith("IMBALANCED")
+        assert "Subject" in result
+
     def test_imbalanced_one_dominates(self) -> None:
         text = "[Art Style] " + "word " * 100 + "[Color Palette] word"
         result = _check_section_lengths(text, ["Art Style", "Color Palette"])
@@ -167,7 +195,7 @@ class TestComputeCaptionComplianceStats:
         assert stats.overall == 1.0
 
     def test_subject_specificity_rate_is_full_for_rich_subject_blocks(self) -> None:
-        subject_text = (
+        detail_chunk = (
             "A young red fox with white socks and a narrow muzzle stands as the main animal subject. "
             "Its amber eyes, nicked left ear, and dark foreleg markings make it immediately identifiable. "
             "It wears a weathered canvas satchel with brass clasps, a thin leather harness, and a wrapped field lantern. "
@@ -175,6 +203,7 @@ class TestComputeCaptionComplianceStats:
             "Its expression is alert but wary, with raised ears, a tight mouth, and a focused sideways glance. "
             "Nearby props include the lantern, a folded map, and broken reeds that frame the animal in context."
         )
+        subject_text = " ".join([detail_chunk] * 4)
         captions = [
             Caption(
                 image_path=Path("a.png"),
@@ -193,6 +222,32 @@ class TestComputeCaptionComplianceStats:
         )
 
         assert stats.subject_specificity_rate == 1.0
+
+    def test_subject_specificity_rate_rejects_long_sections_with_detail_only_up_front(self) -> None:
+        detail_chunk = (
+            "A young red fox with white socks and a narrow muzzle stands as the main animal subject. "
+            "Its amber eyes, nicked left ear, and dark foreleg markings make it immediately identifiable. "
+            "It wears a weathered canvas satchel with brass clasps, a thin leather harness, and a wrapped field lantern. "
+            "The fox is caught mid-step, turning its shoulders while lifting one paw and twisting toward the viewer. "
+            "Its expression is alert but wary, with raised ears, a tight mouth, and a focused sideways glance. "
+            "Nearby props include the lantern, a folded map, and broken reeds that frame the animal in context."
+        )
+        filler = "contour atmosphere tonal surface interval staging backdrop rhythm " * 70
+        subject_text = f"{detail_chunk} {detail_chunk} {filler}"
+        captions = [
+            Caption(
+                image_path=Path("a.png"),
+                text=f"[Art Style] shared style rules [Subject] {subject_text} [Composition] low horizon",
+            ),
+        ]
+
+        stats = compute_caption_compliance_stats(
+            ["style_foundation", "subject_anchor", "composition"],
+            captions,
+            caption_sections=["Art Style", "Subject", "Composition"],
+        )
+
+        assert stats.subject_specificity_rate == 0.0
 
     def test_subject_specificity_rate_rejects_short_generic_subject_blocks(self) -> None:
         captions = [

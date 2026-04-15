@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from art_style_search.caption_sections import parse_labeled_sections
 from art_style_search.contracts import ExperimentSketch, Lessons, RefinementResult
 from art_style_search.prompt._format import (
     _format_metrics,
@@ -36,6 +37,30 @@ from art_style_search.utils import ReasoningClient
 logger = logging.getLogger(__name__)
 
 _STRUCTURAL_CHANGE_TARGETS = ("caption_sections", "caption_length_target", "negative_prompt")
+
+
+def _caption_feedback_excerpt(text: str, max_words: int) -> str:
+    """Prioritize the most informative labeled sections before truncating."""
+    parsed = parse_labeled_sections(text)
+    if not parsed:
+        return _truncate_words(text, max_words)
+
+    parts: list[str] = []
+    seen: set[str] = set()
+    for name in ("Subject", "Art Style"):
+        body = parsed.get(name, "").strip()
+        if body:
+            parts.append(f"[{name}] {body}")
+            seen.add(name)
+    for name, body in parsed.items():
+        stripped = body.strip()
+        if name in seen or not stripped:
+            continue
+        parts.append(f"[{name}] {stripped}")
+
+    if not parts:
+        return _truncate_words(text, max_words)
+    return _truncate_words("\n\n".join(parts), max_words)
 
 _BRAINSTORM_EXAMPLE = (
     "## Example of a good sketch\n"
@@ -118,9 +143,11 @@ def _experiment_system_prompt(
             "Captions serve TWO purposes: (1) recreate the image faithfully, (2) embed REUSABLE art-style guidance in labeled sections.\n"
             "Embed core style rules as literal text the captioner repeats verbatim, plus per-image observations.\n\n"
             "### Meta-prompt structure\n"
-            "8-15 sections, each 4-8 sentences, 1200-2500 words total. Cover: colors, technique, characters, background, composition, lighting, textures, mood, and what to AVOID.\n\n"
+            "8-20 sections, 2000-8000 words total. Cover: colors, technique, characters, background, composition, lighting, textures, mood, and what to AVOID.\n\n"
             "### Caption output structure\n"
-            "First: [Art Style] (shared rules, identical across captions). Second: [Subject] (image-specific, 80-140 words). Remaining: your choice — the optimization surface.\n\n"
+            "First: [Art Style] (shared rules, identical across captions, often 1000-2000 words). "
+            "Second: [Subject] (image-specific and most important, often 1000-2000 words). "
+            "Remaining sections typically run 150-400 words each — they are your optimization surface.\n\n"
             "### Metrics\n"
             "| Metric | Range | Good | Description |\n"
             "|--------|-------|------|-------------|\n"
@@ -195,7 +222,7 @@ def _expand_system(current_template: PromptTemplate, *, is_first_iteration: bool
             "- [ ] changed_sections[0] == changed_section\n"
             "- [ ] First template section is 'style_foundation', second is 'subject_anchor'\n"
             "- [ ] caption_sections starts with ['Art Style', 'Subject']\n"
-            "- [ ] Total rendered template is 1200-2500 words\n\n"
+            "- [ ] Total rendered template is 2000-8000 words\n\n"
             "Critical field types:\n"
             "- analysis: one string field, never an array\n"
             '- lessons: one JSON object with keys {"confirmed","rejected","new_insight"}, each a string\n'
@@ -304,14 +331,14 @@ def _build_shared_proposal_user(
                 )
                 if idx < len(worst.iteration_captions):
                     cap = worst.iteration_captions[idx]
-                    cap_text = _truncate_words(cap.text, 100)
+                    cap_text = _caption_feedback_excerpt(cap.text, 800)
                     worst_parts.append(
                         f"Worst image ({cap.image_path.name}): "
                         f"DS={worst.per_image_scores[idx].dreamsim_similarity:.3f}\n"
                         f"Caption: {cap_text}\n"
                     )
             if worst.vision_feedback:
-                worst_parts.append(f"Vision feedback: {_truncate_words(worst.vision_feedback, 100)}\n")
+                worst_parts.append(f"Vision feedback: {_truncate_words(worst.vision_feedback, 400)}\n")
             user_parts.append("".join(worst_parts))
 
     # Adaptive vision feedback word limit based on plateau depth
@@ -357,7 +384,7 @@ def _rank_user(
 ) -> str:
     parts = ["## Candidate Sketches\n"]
     parts.extend(_render_sketch(sketch, idx) for idx, sketch in enumerate(sketches))
-    kb_text = format_knowledge_base(knowledge_base, max_words=1000)
+    kb_text = format_knowledge_base(knowledge_base, max_words=2000)
     if kb_text:
         parts.extend(["\n## Knowledge Base Summary\n", kb_text])
     if best_metrics:
@@ -656,7 +683,7 @@ async def expand_experiment_sketches(
             response_name=f"expansion_{idx}",
             schema_hint=schema_hint("expansion"),
             response_schema=response_schema("expansion"),
-            max_tokens=16000,
+            max_tokens=24000,
             repair_retries=2,
         )
         for idx, sketch in enumerate(sketches)

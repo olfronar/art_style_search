@@ -84,13 +84,14 @@ async def synthesize_templates(
         "- When metric annotations are ambiguous, prefer the experiment with higher overall DreamSim.\n"
         "For caption_sections ordering: prefer the experiment with higher style_consistency.\n"
         "For caption_length_target: prefer the experiment with higher completion_rate.\n"
-        "Preserve embedded style rules in section values. Keep the template 8-15 sections, 1200-2500 words rendered.\n\n"
+        "Preserve embedded style rules in section values. Keep the template 8-20 sections, 2000-8000 words rendered, "
+        "with the caption contract still allowing [Art Style] and [Subject] to run roughly 1000-2000 words each.\n\n"
         "## EXECUTION CHECKLIST — verify before outputting\n"
         "- [ ] First section is 'style_foundation', second is 'subject_anchor'\n"
         "- [ ] caption_sections starts with ['Art Style', 'Subject']\n"
         "- [ ] No section was averaged or merged — each comes from a single experiment\n"
-        "- [ ] Template has 8-15 sections\n"
-        "- [ ] Total rendered word count is 1200-2500\n"
+        "- [ ] Template has 8-20 sections\n"
+        "- [ ] Total rendered word count is 2000-8000\n"
         "- [ ] All embedded style rules are preserved\n\n"
         "Response format:\n"
         "{\n"
@@ -99,7 +100,7 @@ async def synthesize_templates(
         '    "sections": [{"name": "style_foundation", "description": "...", "value": "..."}, {"name": "subject_anchor", "description": "...", "value": "..."}, {"name": "color_palette", "description": "...", "value": "..."}, {"name": "composition", "description": "...", "value": "..."}],\n'
         '    "negative_prompt": "...",\n'
         '    "caption_sections": ["Art Style", "Subject", "Color Palette"],\n'
-        '    "caption_length_target": 500\n'
+        '    "caption_length_target": 4000\n'
         "  }\n"
         "}\n"
         "Return JSON only. No markdown fences, no commentary."

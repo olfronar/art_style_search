@@ -64,16 +64,18 @@ _VISION_SYSTEM = (
     "- PARTIAL (composition): 'Subject correctly centered but cropped tighter, cutting off the lower background detail.'\n"
     "- MISS (composition): 'Close-up portrait where reference shows a wide establishing shot with extensive landscape.'"
 )
-_VISION_CAPTION_CHAR_LIMIT = 3500
+_VISION_CAPTION_CHAR_LIMIT = 40000
 
 _VERDICT_RE = re.compile(
     r'<(\w+)\s+verdict="(\w+)">(.*?)</\1>',
     re.DOTALL,
 )
 
-_SUBJECT_MIN_WORDS = 80
+_SUBJECT_MIN_WORDS = 400
 _SUBJECT_MIN_FACETS = 4
 _SUBJECT_MIN_SPECIFIC_WORDS = 8
+_SUBJECT_WINDOW_WORDS = 200
+_SUBJECT_MIN_WINDOW_SPECIFIC_RATIO = 0.03
 _SUBJECT_WORD_RE = re.compile(r"[a-z0-9'-]+")
 _SUBJECT_GENERIC_WORDS = {
     "figure",
@@ -221,6 +223,24 @@ _SUBJECT_FACET_KEYWORDS = {
         "grass",
     },
 }
+_SUBJECT_SPECIFIC_KEYWORDS = set().union(*_SUBJECT_FACET_KEYWORDS.values())
+
+
+def _vision_caption_excerpt(caption: str) -> str:
+    """Prioritize the most judge-relevant labeled sections before truncating."""
+    parsed = parse_labeled_sections(caption)
+    if not parsed:
+        return caption[:_VISION_CAPTION_CHAR_LIMIT]
+
+    parts: list[str] = []
+    for name in ("Subject", "Art Style", "Composition"):
+        body = parsed.get(name, "").strip()
+        if body:
+            parts.append(f"[{name}] {body}")
+    excerpt = "\n\n".join(parts)
+    if not excerpt:
+        return caption[:_VISION_CAPTION_CHAR_LIMIT]
+    return excerpt[:_VISION_CAPTION_CHAR_LIMIT]
 
 
 def _parse_vision_verdicts(text: str) -> VisionScores:
@@ -264,7 +284,7 @@ async def _compare_vision_single_gemini(
         image_to_gemini_part(first_image),
         second_label,
         image_to_gemini_part(second_image),
-        _VISION_SINGLE_PROMPT.format(caption=caption[:_VISION_CAPTION_CHAR_LIMIT]),
+        _VISION_SINGLE_PROMPT.format(caption=_vision_caption_excerpt(caption)),
     ]
 
     async def _call() -> tuple[str, VisionScores]:
@@ -307,7 +327,7 @@ async def _compare_vision_single_xai(
         {"type": "input_image", "image_url": image_to_xai_data_url(first_image), "detail": "high"},
         {"type": "input_text", "text": second_label},
         {"type": "input_image", "image_url": image_to_xai_data_url(second_image), "detail": "high"},
-        {"type": "input_text", "text": _VISION_SINGLE_PROMPT.format(caption=caption[:_VISION_CAPTION_CHAR_LIMIT])},
+        {"type": "input_text", "text": _VISION_SINGLE_PROMPT.format(caption=_vision_caption_excerpt(caption))},
     ]
 
     async def _call() -> tuple[str, VisionScores]:
@@ -572,11 +592,13 @@ def _lengths_from_parsed(parsed: dict[str, str], expected_sections: list[str]) -
         return "EMPTY"
 
     issues: list[str] = []
+    primary_sections = set(expected_sections[:2])
     for name, count in word_counts.items():
         ratio = count / total_words
-        if ratio > 0.50:
+        max_ratio = 0.60 if name in primary_sections else 0.50
+        if ratio > max_ratio:
             issues.append(f"{name} too long ({ratio:.0%})")
-        elif ratio < 0.05 and len(expected_sections) <= 6:
+        elif name not in primary_sections and ratio < 0.02:
             issues.append(f"{name} too short ({ratio:.0%})")
 
     return "OK" if not issues else f"IMBALANCED: {'; '.join(issues)}"
@@ -603,6 +625,14 @@ def _subject_specificity_from_parsed(parsed: dict[str, str]) -> str:
     specific_count = len(meaningful) - generic_count
     if generic_count > 0 and specific_count < max(_SUBJECT_MIN_SPECIFIC_WORDS, generic_count * 2):
         return "WEAK (generic subject terms without enough modifiers)"
+
+    for start in range(0, len(meaningful), _SUBJECT_WINDOW_WORDS):
+        window = meaningful[start : start + _SUBJECT_WINDOW_WORDS]
+        if not window:
+            continue
+        specific_hits = sum(1 for w in window if w in _SUBJECT_SPECIFIC_KEYWORDS)
+        if specific_hits / len(window) < _SUBJECT_MIN_WINDOW_SPECIFIC_RATIO:
+            return "WEAK (specific detail density drops in later windows)"
 
     return "OK"
 

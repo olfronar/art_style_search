@@ -365,6 +365,9 @@ def _apply_all_patches(monkeypatch, tmp_path: Path, ref_paths: list[Path]):
         vision_feedback="",
         roundtrip_feedback="",
         caption_diffs="",
+        is_first_iteration=False,
+        iteration=0,
+        plateau_counter=0,
     ):
         return [_build_sketch(i) for i in range(num_sketches)], False
 
@@ -384,6 +387,9 @@ def _apply_all_patches(monkeypatch, tmp_path: Path, ref_paths: list[Path]):
         vision_feedback="",
         roundtrip_feedback="",
         caption_diffs="",
+        is_first_iteration=False,
+        iteration=0,
+        plateau_counter=0,
     ):
         return [_build_refinement_result(_valid_template(), i) for i, _sketch in enumerate(sketches)]
 

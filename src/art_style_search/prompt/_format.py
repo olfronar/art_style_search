@@ -75,7 +75,7 @@ def _truncate_words(text: str, max_words: int, *, suffix: str = "...") -> str:
 # ---------------------------------------------------------------------------
 
 
-def format_knowledge_base(kb: KnowledgeBase, max_words: int = 1500) -> str:
+def format_knowledge_base(kb: KnowledgeBase, max_words: int = 3000) -> str:
     """Produce a structured, budget-enforced prompt section for the reasoning model.
 
     Priority order (fill until budget exhausted):
