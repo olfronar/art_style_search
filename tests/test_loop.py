@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import random
 from dataclasses import replace
 from pathlib import Path
@@ -809,6 +810,47 @@ async def test_run_synthesis_experiment_skips_invalid_template(tmp_path: Path, m
 
     assert ranking.synth_result is None
     assert len(ranking.exp_results) == 1
+
+
+@pytest.mark.asyncio
+async def test_run_synthesis_experiment_skips_runtime_failure_without_traceback(
+    tmp_path: Path, monkeypatch, caplog
+) -> None:
+    state = make_loop_state()
+    config = _make_config(tmp_path)
+    ctx = RunContext(
+        config=config,
+        gemini_client=MagicMock(),
+        reasoning_client=MagicMock(),
+        registry=MagicMock(),
+        gemini_semaphore=MagicMock(),
+        eval_semaphore=MagicMock(),
+        services=MagicMock(),
+    )
+    result = _make_result(branch_id=0, agg=_make_agg())
+    ranking = IterationRanking(
+        exp_results=[result],
+        adaptive_scores={id(result): composite_score(result.aggregated)},
+        best_exp=result,
+        best_score=composite_score(result.aggregated),
+        baseline_score=0.1,
+        epsilon=0.01,
+    )
+
+    async def fail_run(*args, **kwargs):
+        raise RuntimeError("Experiment 1: only 9/20 images generated (45%), below 50% threshold")
+
+    monkeypatch.setattr("art_style_search.workflow.iteration_execution.validate_template", lambda template: [])
+    monkeypatch.setattr("art_style_search.workflow.iteration_execution.run_experiment", fail_run)
+
+    with caplog.at_level(logging.WARNING):
+        await _run_synthesis_experiment((make_prompt_template(), "fragile synthesis"), ranking, state, ctx, iteration=2)
+
+    assert ranking.synth_result is None
+    assert len(ranking.exp_results) == 1
+    assert "Synthesis experiment skipped" in caplog.text
+    assert "below 50% threshold" in caplog.text
+    assert "Traceback" not in caplog.text
 
 
 # ---------------------------------------------------------------------------

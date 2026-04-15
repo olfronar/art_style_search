@@ -266,17 +266,21 @@ async def _run_synthesis_experiment(
         logger.warning("Synthesis template invalid — skipping: %s", "; ".join(errors))
         return
 
-    synth_result = await run_experiment(
-        experiment_id=len(ranking.exp_results),
-        template=merged_template,
-        iteration=iteration,
-        fixed_refs=state.fixed_references,
-        config=ctx.config,
-        last_results=state.last_iteration_results,
-        hypothesis=merged_hypothesis,
-        experiment_desc="Synthesis of top experiments",
-        services=ctx.services,
-    )
+    try:
+        synth_result = await run_experiment(
+            experiment_id=len(ranking.exp_results),
+            template=merged_template,
+            iteration=iteration,
+            fixed_refs=state.fixed_references,
+            config=ctx.config,
+            last_results=state.last_iteration_results,
+            hypothesis=merged_hypothesis,
+            experiment_desc="Synthesis of top experiments",
+            services=ctx.services,
+        )
+    except RuntimeError as exc:
+        logger.warning("Synthesis experiment skipped: %s", exc)
+        return
     merged_score = composite_score(synth_result.aggregated)
     logger.info(
         "Synthesis result: DS=%.4f (best individual: %.4f)",
