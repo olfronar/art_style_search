@@ -216,6 +216,7 @@ async def _setup_run_context(config: Config) -> RunContext:
         openai_api_key=config.openai_api_key,
         xai_api_key=config.xai_api_key,
         base_url=config.reasoning_base_url,
+        debug_dir=config.log_dir / "reasoning_debug",
     )
     xai_client = None
     if config.comparison_provider == "xai":

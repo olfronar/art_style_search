@@ -11,7 +11,7 @@ from google import genai  # type: ignore[attr-defined]
 from google.genai import types as genai_types  # type: ignore[attr-defined]
 
 from art_style_search.prompt._parse import validate_template
-from art_style_search.prompt.json_contracts import schema_hint, validate_style_compilation_payload
+from art_style_search.prompt.json_contracts import response_schema, schema_hint, validate_style_compilation_payload
 from art_style_search.state import prompt_template_from_dict, style_profile_from_dict, to_dict
 from art_style_search.types import Caption, PromptTemplate, StyleProfile
 from art_style_search.utils import (
@@ -212,6 +212,7 @@ async def _reasoning_compile(
         ),
         response_name="style_compilation",
         schema_hint=schema_hint("style_compilation"),
+        response_schema=response_schema("style_compilation"),
         max_tokens=12000,
     )
 

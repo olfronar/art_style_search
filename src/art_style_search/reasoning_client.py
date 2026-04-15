@@ -8,6 +8,7 @@ import logging
 import random as _rng
 import re
 from collections.abc import Callable
+from pathlib import Path
 from typing import TypeVar
 
 import anthropic
@@ -88,6 +89,19 @@ def _extract_json_payload(text: str) -> str:
 
 def parse_json_response(text: str) -> object:
     """Parse JSON from a model response, tolerating markdown fences or preamble."""
+    stripped = _strip_json_fences(text)
+    decoder = json.JSONDecoder()
+
+    for opener in ("{", "["):
+        start = stripped.find(opener)
+        if start == -1:
+            continue
+        try:
+            obj, _ = decoder.raw_decode(stripped[start:])
+            return obj
+        except json.JSONDecodeError:
+            continue
+
     payload = _extract_json_payload(text)
     return json.loads(payload)
 
@@ -163,8 +177,10 @@ class ReasoningClient:
         openai_api_key: str = "",
         xai_api_key: str = "",
         base_url: str = "",
+        debug_dir: Path | str | None = None,
     ) -> None:
         self.provider = provider
+        self._debug_dir = Path(debug_dir) if debug_dir else None
         if provider == "anthropic":
             self._anthropic = anthropic.AsyncAnthropic(
                 api_key=anthropic_api_key,
@@ -233,6 +249,7 @@ class ReasoningClient:
         validator: Callable[[object], T],
         response_name: str,
         schema_hint: str = "",
+        response_schema: dict[str, object] | None = None,
         max_tokens: int = 16000,
         repair_retries: int = 1,
         final_failure_log_level: int = logging.WARNING,
@@ -240,10 +257,19 @@ class ReasoningClient:
         """Send a reasoning request, parse JSON, validate it, and optionally repair it."""
 
         system, user = _adapt_prompts_for_provider(system, user, self.provider)
-        current_text = await self.call(model=model, system=system, user=user, max_tokens=max_tokens)
+        current_text = await self._call_json_transport(
+            model=model,
+            system=system,
+            user=user,
+            response_name=response_name,
+            response_schema=response_schema,
+            max_tokens=max_tokens,
+        )
         try:
             return validator(parse_json_response(current_text))
         except Exception as exc:
+            self._write_debug_artifact(response_name, "raw", current_text)
+            self._write_debug_artifact(response_name, "validation_error", str(exc))
             if repair_retries <= 0:
                 msg = f"{response_name} validation failed"
                 logger.log(final_failure_log_level, "%s validation failed: %s", response_name, exc)
@@ -268,17 +294,23 @@ class ReasoningClient:
                 f"The previous response for '{response_name}' was invalid.\n"
                 f"Validation error: {current_exc}\n"
                 f"{hint_block}"
-                "Original system prompt:\n"
-                f"{system}\n\n"
-                "Original user prompt:\n"
-                f"{user}\n\n"
+                "Return a corrected JSON response for the same request.\n\n"
                 "Invalid response:\n"
                 f"{current_text}\n"
             )
-            current_text = await self.call(model=model, system=repair_system, user=repair_user, max_tokens=max_tokens)
+            current_text = await self._call_json_transport(
+                model=model,
+                system=repair_system,
+                user=repair_user,
+                response_name=f"{response_name}_repair",
+                response_schema=response_schema,
+                max_tokens=max_tokens,
+            )
+            self._write_debug_artifact(response_name, f"repair_{attempt + 1}", current_text)
             try:
                 return validator(parse_json_response(current_text))
             except Exception as repair_exc:
+                self._write_debug_artifact(response_name, f"repair_{attempt + 1}_error", str(repair_exc))
                 current_exc = repair_exc
 
         msg = f"{response_name} validation failed after repair"
@@ -290,6 +322,27 @@ class ReasoningClient:
             current_exc,
         )
         raise RuntimeError(msg) from current_exc
+
+    async def _call_json_transport(
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        response_name: str,
+        response_schema: dict[str, object] | None,
+        max_tokens: int,
+    ) -> str:
+        if self.provider == "openai":
+            return await self._call_openai_json(
+                model=model,
+                system=system,
+                user=user,
+                response_name=response_name,
+                response_schema=response_schema,
+                max_tokens=max_tokens,
+            )
+        return await self.call(model=model, system=system, user=user, max_tokens=max_tokens)
 
     async def _call_anthropic(self, *, model: str, system: str, user: str, max_tokens: int) -> str:
         response = await stream_message(
@@ -332,6 +385,40 @@ class ReasoningClient:
 
         return await async_retry(_call, label="OpenAI call", base_delay=_STREAM_BASE_DELAY)
 
+    async def _call_openai_json(
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        response_name: str,
+        response_schema: dict[str, object] | None,
+        max_tokens: int,
+    ) -> str:
+        format_name = re.sub(r"[^A-Za-z0-9_-]+", "_", response_name)[:64] or "response"
+        json_schema = response_schema or {"type": "object", "additionalProperties": True}
+
+        async def _call() -> str:
+            response = await self._openai.responses.create(
+                model=model,
+                instructions=system,
+                input=user,
+                reasoning={"effort": "medium"},
+                max_output_tokens=max_tokens,
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": format_name,
+                        "description": f"Structured response for {format_name}",
+                        "strict": True,
+                        "schema": json_schema,
+                    }
+                },
+            )
+            return response.output_text
+
+        return await async_retry(_call, label="OpenAI JSON call", base_delay=_STREAM_BASE_DELAY)
+
     async def _call_xai(self, *, model: str, system: str, user: str, max_tokens: int) -> str:
         async def _call() -> str:
             response = await self._xai.responses.create(
@@ -360,3 +447,12 @@ class ReasoningClient:
             return response.choices[0].message.content or ""
 
         return await async_retry(_call, label="Local model call", base_delay=2.0)
+
+    def _write_debug_artifact(self, response_name: str, suffix: str, content: str) -> None:
+        debug_dir = getattr(self, "_debug_dir", None)
+        if debug_dir is None:
+            return
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", response_name)
+        path = debug_dir / f"{safe_name}_{suffix}.txt"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")

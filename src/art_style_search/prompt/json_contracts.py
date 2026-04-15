@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 from art_style_search.contracts import ExperimentSketch, InitialTemplateSketch, Lessons, RefinementResult
-from art_style_search.prompt._parse import validate_template
+from art_style_search.prompt._parse import _parse_template, validate_template
 from art_style_search.types import PromptSection, PromptTemplate, ReviewResult, StyleProfile
 from art_style_search.utils import CATEGORY_SYNONYMS
 
@@ -39,6 +39,8 @@ def _as_prose_str(data: object, *, label: str, default: str = "") -> str:
         return default
     if isinstance(data, str):
         return data.strip()
+    if isinstance(data, dict):
+        return json.dumps(data, sort_keys=True)
     if isinstance(data, list):
         parts = [_as_str(item, label=f"{label}[{i}]") for i, item in enumerate(data)]
         return "\n".join(part for part in parts if part)
@@ -61,6 +63,11 @@ def _as_int(data: object, *, label: str, default: int = 0) -> int:
 
 
 def _as_str_list(data: object, *, label: str) -> list[str]:
+    if data is None:
+        return []
+    if isinstance(data, str):
+        value = data.strip()
+        return [value] if value else []
     items = _require_list(data, label=label)
     result: list[str] = []
     for i, item in enumerate(items):
@@ -146,6 +153,12 @@ def style_profile_to_payload(profile: StyleProfile) -> dict[str, Any]:
 
 
 def payload_to_template(data: object, *, label: str = "template") -> PromptTemplate:
+    if isinstance(data, str):
+        template = _parse_template(data)
+        if template.sections:
+            return template
+        msg = f"{label} must be a JSON object"
+        raise ValueError(msg)
     obj = _require_dict(data, label=label)
     sections_raw = _require_list(obj.get("sections") or [], label=f"{label}.sections")
     sections: list[PromptSection] = []
@@ -386,6 +399,96 @@ def validate_style_compilation_payload(
     return profile, template
 
 
+def _schema_word_block(token: str, *, words: int = 150) -> str:
+    return " ".join([token] * words)
+
+
+def _schema_template_payload() -> dict[str, Any]:
+    return {
+        "sections": [
+            {
+                "name": "style_foundation",
+                "description": "core style rules",
+                "value": _schema_word_block("style_dna"),
+            },
+            {
+                "name": "subject_anchor",
+                "description": "subject fidelity instructions",
+                "value": _schema_word_block("subject_lock"),
+            },
+            {
+                "name": "color_palette",
+                "description": "palette guidance",
+                "value": _schema_word_block("palette_role"),
+            },
+            {
+                "name": "accent_colors",
+                "description": "accent placement guidance",
+                "value": _schema_word_block("accent_focus"),
+            },
+            {
+                "name": "lighting",
+                "description": "light direction guidance",
+                "value": _schema_word_block("lighting_balance"),
+            },
+            {
+                "name": "material_finish",
+                "description": "surface treatment guidance",
+                "value": _schema_word_block("material_finish"),
+            },
+            {
+                "name": "environment",
+                "description": "setting and staging guidance",
+                "value": _schema_word_block("environment_stage"),
+            },
+            {
+                "name": "negative_constraints",
+                "description": "avoidance guidance",
+                "value": _schema_word_block("negative_guard"),
+            },
+        ],
+        "negative_prompt": "photorealism, gritty realism, muddy neutrals, harsh black shadows, noisy microtexture",
+        "caption_sections": [
+            "Art Style",
+            "Subject",
+            "Color Palette",
+            "Accent Colors",
+            "Lighting",
+            "Material Finish",
+            "Environment",
+            "Negative Cues",
+        ],
+        "caption_length_target": 500,
+    }
+
+
+def _section_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["name", "description", "value"],
+        "properties": {
+            "name": {"type": "string"},
+            "description": {"type": "string"},
+            "value": {"type": "string"},
+        },
+    }
+
+
+def _template_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["sections", "negative_prompt", "caption_sections", "caption_length_target"],
+        "properties": {
+            "sections": {"type": "array", "items": _section_schema()},
+            "negative_prompt": {"type": "string"},
+            "caption_sections": {"type": "array", "items": {"type": "string"}},
+            "caption_length_target": {"type": "integer"},
+        },
+    }
+
+
 _SCHEMA_HINTS = {
     "initial_brainstorm": {
         "sketches": [
@@ -399,17 +502,7 @@ _SCHEMA_HINTS = {
             }
         ]
     },
-    "initial_expansion": {
-        "sections": [
-            {"name": "style_foundation", "description": "core style rules", "value": "..."},
-            {"name": "subject_anchor", "description": "subject fidelity instructions", "value": "..."},
-            {"name": "color_palette", "description": "palette guidance", "value": "..."},
-            {"name": "composition", "description": "layout guidance", "value": "..."},
-        ],
-        "negative_prompt": "...",
-        "caption_sections": ["Art Style", "Subject", "Color Palette"],
-        "caption_length_target": 500,
-    },
+    "initial_expansion": _schema_template_payload(),
     "brainstorm": {
         "sketches": [
             {
@@ -447,31 +540,11 @@ _SCHEMA_HINTS = {
         "expected_tradeoff": "May make captions read more schematically.",
         "open_problems": ["..."],
         "template_changes": "...",
-        "template": {
-            "sections": [
-                {"name": "style_foundation", "description": "core style rules", "value": "..."},
-                {"name": "subject_anchor", "description": "subject fidelity instructions", "value": "..."},
-                {"name": "color_palette", "description": "palette guidance", "value": "..."},
-                {"name": "composition", "description": "layout guidance", "value": "..."},
-            ],
-            "negative_prompt": "...",
-            "caption_sections": ["Art Style", "Subject"],
-            "caption_length_target": 500,
-        },
+        "template": _schema_template_payload(),
     },
     "synthesis": {
         "rationale": "...",
-        "template": {
-            "sections": [
-                {"name": "style_foundation", "description": "core style rules", "value": "..."},
-                {"name": "subject_anchor", "description": "subject fidelity instructions", "value": "..."},
-                {"name": "color_palette", "description": "palette guidance", "value": "..."},
-                {"name": "composition", "description": "layout guidance", "value": "..."},
-            ],
-            "negative_prompt": "...",
-            "caption_sections": ["Art Style", "Subject", "Color Palette"],
-            "caption_length_target": 500,
-        },
+        "template": _schema_template_payload(),
     },
     "review": {
         "experiment_assessments": ["[EXP 0] SIGNAL - ..."],
@@ -488,16 +561,192 @@ _SCHEMA_HINTS = {
             "subject_matter": "...",
             "influences": "...",
         },
-        "initial_template": {
-            "sections": [
-                {"name": "style_foundation", "description": "core style rules", "value": "..."},
-                {"name": "subject_anchor", "description": "subject fidelity instructions", "value": "..."},
-                {"name": "color_palette", "description": "palette guidance", "value": "..."},
-                {"name": "composition", "description": "layout guidance", "value": "..."},
-            ],
-            "negative_prompt": "...",
-            "caption_sections": ["Art Style", "Subject"],
-            "caption_length_target": 500,
+        "initial_template": _schema_template_payload(),
+    },
+}
+
+
+_RESPONSE_SCHEMAS = {
+    "initial_brainstorm": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["sketches"],
+        "properties": {
+            "sketches": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": [
+                        "approach_summary",
+                        "emphasis",
+                        "instruction_style",
+                        "caption_length_target",
+                        "caption_sections",
+                        "distinguishing_feature",
+                    ],
+                    "properties": {
+                        "approach_summary": {"type": "string"},
+                        "emphasis": {"type": "string"},
+                        "instruction_style": {"type": "string"},
+                        "caption_length_target": {"type": "integer"},
+                        "caption_sections": {"type": "array", "items": {"type": "string"}},
+                        "distinguishing_feature": {"type": "string"},
+                    },
+                },
+            }
+        },
+    },
+    "initial_expansion": _template_schema(),
+    "brainstorm": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["sketches", "converged"],
+        "properties": {
+            "sketches": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": [
+                        "hypothesis",
+                        "target_category",
+                        "failure_mechanism",
+                        "intervention_type",
+                        "direction_id",
+                        "direction_summary",
+                        "risk_level",
+                        "expected_primary_metric",
+                        "builds_on",
+                    ],
+                    "properties": {
+                        "hypothesis": {"type": "string"},
+                        "target_category": {"type": "string"},
+                        "failure_mechanism": {"type": "string"},
+                        "intervention_type": {"type": "string"},
+                        "direction_id": {"type": "string"},
+                        "direction_summary": {"type": "string"},
+                        "risk_level": {"type": "string"},
+                        "expected_primary_metric": {"type": "string"},
+                        "builds_on": {"type": "string"},
+                    },
+                },
+            },
+            "converged": {"type": "boolean"},
+        },
+    },
+    "ranking": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["ranked_indices"],
+        "properties": {
+            "ranked_indices": {"type": "array", "items": {"type": "integer"}},
+        },
+    },
+    "expansion": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "analysis",
+            "lessons",
+            "hypothesis",
+            "builds_on",
+            "experiment",
+            "changed_section",
+            "changed_sections",
+            "target_category",
+            "direction_id",
+            "direction_summary",
+            "failure_mechanism",
+            "intervention_type",
+            "risk_level",
+            "expected_primary_metric",
+            "expected_tradeoff",
+            "open_problems",
+            "template_changes",
+            "template",
+        ],
+        "properties": {
+            "analysis": {"type": "string"},
+            "lessons": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["confirmed", "rejected", "new_insight"],
+                "properties": {
+                    "confirmed": {"type": "string"},
+                    "rejected": {"type": "string"},
+                    "new_insight": {"type": "string"},
+                },
+            },
+            "hypothesis": {"type": "string"},
+            "builds_on": {"type": "string"},
+            "experiment": {"type": "string"},
+            "changed_section": {"type": "string"},
+            "changed_sections": {"type": "array", "items": {"type": "string"}},
+            "target_category": {"type": "string"},
+            "direction_id": {"type": "string"},
+            "direction_summary": {"type": "string"},
+            "failure_mechanism": {"type": "string"},
+            "intervention_type": {"type": "string"},
+            "risk_level": {"type": "string"},
+            "expected_primary_metric": {"type": "string"},
+            "expected_tradeoff": {"type": "string"},
+            "open_problems": {"type": "array", "items": {"type": "string"}},
+            "template_changes": {"type": "string"},
+            "template": _template_schema(),
+        },
+    },
+    "synthesis": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["rationale", "template"],
+        "properties": {
+            "rationale": {"type": "string"},
+            "template": _template_schema(),
+        },
+    },
+    "review": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "experiment_assessments",
+            "noise_vs_signal",
+            "strategic_guidance",
+            "recommended_categories",
+        ],
+        "properties": {
+            "experiment_assessments": {"type": "array", "items": {"type": "string"}},
+            "noise_vs_signal": {"type": "string"},
+            "strategic_guidance": {"type": "string"},
+            "recommended_categories": {"type": "array", "items": {"type": "string"}},
+        },
+    },
+    "style_compilation": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["style_profile", "initial_template"],
+        "properties": {
+            "style_profile": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "color_palette",
+                    "composition",
+                    "technique",
+                    "mood_atmosphere",
+                    "subject_matter",
+                    "influences",
+                ],
+                "properties": {
+                    "color_palette": {"type": "string"},
+                    "composition": {"type": "string"},
+                    "technique": {"type": "string"},
+                    "mood_atmosphere": {"type": "string"},
+                    "subject_matter": {"type": "string"},
+                    "influences": {"type": "string"},
+                },
+            },
+            "initial_template": _template_schema(),
         },
     },
 }
@@ -505,3 +754,7 @@ _SCHEMA_HINTS = {
 
 def schema_hint(name: str) -> str:
     return json.dumps(_SCHEMA_HINTS[name], indent=2)
+
+
+def response_schema(name: str) -> dict[str, Any]:
+    return json.loads(json.dumps(_RESPONSE_SCHEMAS[name]))

@@ -176,6 +176,9 @@ async def _propose_iteration_experiments(
         vision_feedback=vision_fb,
         roundtrip_feedback=roundtrip_fb,
         caption_diffs=caption_diffs,
+        is_first_iteration=state.iteration == 0,
+        iteration=state.iteration,
+        plateau_counter=state.plateau_counter,
     )
     logger.info("Brainstorm step returned %d sketches (requested=%d)", len(sketches), requested_sketches)
 
@@ -221,6 +224,9 @@ async def _propose_iteration_experiments(
         vision_feedback=vision_fb,
         roundtrip_feedback=roundtrip_fb,
         caption_diffs=caption_diffs,
+        is_first_iteration=state.iteration == 0,
+        iteration=state.iteration,
+        plateau_counter=state.plateau_counter,
     )
     logger.info("Expand step returned %d refinement proposals", len(refinements))
 

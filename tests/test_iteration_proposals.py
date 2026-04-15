@@ -376,6 +376,62 @@ async def test_propose_iteration_experiments_recovers_caption_structure_alias_fr
 
 
 @pytest.mark.asyncio
+async def test_propose_iteration_experiments_forwards_iteration_context_to_reasoning_calls(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    state = _make_state()
+    state.iteration = 2
+    state.plateau_counter = 4
+    ctx = RunContext(
+        config=_make_config(tmp_path),
+        gemini_client=MagicMock(),
+        reasoning_client=MagicMock(),
+        registry=MagicMock(),
+        gemini_semaphore=MagicMock(),
+        eval_semaphore=MagicMock(),
+        services=MagicMock(),
+    )
+    brainstorm_kwargs: dict[str, object] = {}
+    expand_kwargs: dict[str, object] = {}
+    refinement = _make_refinement("D1", 0, risk_level="targeted", changed_sections=["subject_anchor"])
+
+    async def fake_brainstorm(*args, **kwargs):
+        brainstorm_kwargs.update(kwargs)
+        return [_make_sketch("D1", 0, mechanism=refinement.failure_mechanism)], False
+
+    async def fake_rank(*args, **kwargs):
+        return kwargs.get("sketches", args[0])
+
+    async def fake_expand(*args, **kwargs):
+        expand_kwargs.update(kwargs)
+        return [refinement]
+
+    monkeypatch.setattr("art_style_search.workflow.iteration_proposals.brainstorm_experiment_sketches", fake_brainstorm)
+    monkeypatch.setattr("art_style_search.workflow.iteration_proposals.rank_experiment_sketches", fake_rank)
+    monkeypatch.setattr("art_style_search.workflow.iteration_proposals.expand_experiment_sketches", fake_expand)
+    monkeypatch.setattr(
+        "art_style_search.workflow.iteration_proposals.enforce_hypothesis_diversity",
+        lambda refinements, template: refinements,
+    )
+    monkeypatch.setattr(
+        "art_style_search.workflow.iteration_proposals.select_experiment_portfolio",
+        lambda refinements, **kwargs: refinements,
+    )
+
+    proposals, should_stop = await _propose_iteration_experiments(state, ctx, "", "", "")
+
+    assert should_stop is False
+    assert len(proposals) == 1
+    assert brainstorm_kwargs["iteration"] == 2
+    assert brainstorm_kwargs["plateau_counter"] == 4
+    assert brainstorm_kwargs["is_first_iteration"] is False
+    assert expand_kwargs["iteration"] == 2
+    assert expand_kwargs["plateau_counter"] == 4
+    assert expand_kwargs["is_first_iteration"] is False
+
+
+@pytest.mark.asyncio
 async def test_propose_iteration_experiments_logs_recovery_summary(monkeypatch, tmp_path: Path, caplog) -> None:
     state = _make_state()
     ctx = RunContext(

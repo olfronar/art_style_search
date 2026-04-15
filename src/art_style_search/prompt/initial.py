@@ -8,6 +8,7 @@ import logging
 from art_style_search.contracts import InitialTemplateSketch
 from art_style_search.prompt._format import _format_style_profile
 from art_style_search.prompt.json_contracts import (
+    response_schema,
     schema_hint,
     validate_initial_brainstorm_payload,
     validate_initial_expansion_payload,
@@ -183,6 +184,7 @@ async def brainstorm_initial_sketches(
         validator=lambda data: validate_initial_brainstorm_payload(data, num_sketches=num_sketches),
         response_name="initial_brainstorm",
         schema_hint=schema_hint("initial_brainstorm"),
+        response_schema=response_schema("initial_brainstorm"),
         max_tokens=40000,
         repair_retries=2,
     )
@@ -208,6 +210,7 @@ async def rank_initial_sketches(
             validator=lambda data: validate_ranking_payload(data, num_sketches=len(sketches)),
             response_name="initial_ranking",
             schema_hint=schema_hint("ranking"),
+            response_schema=response_schema("ranking"),
             max_tokens=10000,
             repair_retries=1,
             final_failure_log_level=logging.INFO,
@@ -237,8 +240,9 @@ async def expand_initial_sketches(
             validator=validate_initial_expansion_payload,
             response_name=f"initial_expansion_{idx}",
             schema_hint=schema_hint("initial_expansion"),
+            response_schema=response_schema("initial_expansion"),
             max_tokens=16000,
-            repair_retries=1,
+            repair_retries=2,
         )
         for idx, sketch in enumerate(sketches)
     ]

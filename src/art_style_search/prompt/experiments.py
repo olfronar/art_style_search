@@ -16,6 +16,7 @@ from art_style_search.prompt._format import (
 )
 from art_style_search.prompt._parse import _MAX_RENDERED_WORDS, _MIN_RENDERED_WORDS
 from art_style_search.prompt.json_contracts import (
+    response_schema,
     schema_hint,
     validate_brainstorm_payload,
     validate_expansion_payload,
@@ -199,6 +200,10 @@ def _expand_system(current_template: PromptTemplate, *, is_first_iteration: bool
             "- analysis: one string field, never an array\n"
             '- lessons: one JSON object with keys {"confirmed","rejected","new_insight"}, each a string\n'
             "- builds_on: a string like 'H3' or 'H3, H5', or an empty string\n\n"
+            "- template: one JSON object with keys sections, negative_prompt, caption_sections, caption_length_target "
+            "(never XML text)\n"
+            "- template_changes: one summary string, never an object\n"
+            "- open_problems: a JSON array of strings, even when there is only one item\n\n"
             "Minimal wire-shape example:\n"
             '{"analysis":"...","lessons":{"confirmed":"","rejected":"","new_insight":"..."},"builds_on":"","hypothesis":"..."}\n\n'
             "Response format — one JSON object describing a single fully expanded experiment proposal. "
@@ -568,6 +573,7 @@ async def brainstorm_experiment_sketches(
         validator=lambda data: validate_brainstorm_payload(data, num_sketches=num_sketches),
         response_name="brainstorm",
         schema_hint=schema_hint("brainstorm"),
+        response_schema=response_schema("brainstorm"),
         max_tokens=40000,
         repair_retries=2,
     )
@@ -594,6 +600,7 @@ async def rank_experiment_sketches(
             validator=lambda data: validate_ranking_payload(data, num_sketches=len(sketches)),
             response_name="ranking",
             schema_hint=schema_hint("ranking"),
+            response_schema=response_schema("ranking"),
             max_tokens=10000,
             repair_retries=1,
             final_failure_log_level=logging.INFO,
@@ -648,8 +655,9 @@ async def expand_experiment_sketches(
             validator=validate_expansion_payload,
             response_name=f"expansion_{idx}",
             schema_hint=schema_hint("expansion"),
+            response_schema=response_schema("expansion"),
             max_tokens=16000,
-            repair_retries=1,
+            repair_retries=2,
         )
         for idx, sketch in enumerate(sketches)
     ]

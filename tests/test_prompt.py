@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
 import pytest
@@ -770,6 +771,41 @@ class TestJsonContracts:
         assert result.changed_sections == ["subject_anchor"]
         assert result.expected_primary_metric == "vision_subject"
 
+    def test_expansion_payload_normalizes_live_openai_shape(self) -> None:
+        valid_template = _make_valid_template()
+        payload = {
+            "analysis": "Current metrics show a strong style-versus-subject imbalance.",
+            "lessons": {"confirmed": "", "rejected": "", "new_insight": "Ordering pressure dominates."},
+            "hypothesis": "Compress the Art Style anchor.",
+            "builds_on": "H1, H2",
+            "experiment": "Compress style_foundation only.",
+            "changed_section": "style_foundation",
+            "changed_sections": ["style_foundation"],
+            "target_category": "caption_structure",
+            "direction_id": "D1",
+            "direction_summary": "Subject signal recovery by reducing style-token dominance",
+            "failure_mechanism": "Early style boilerplate monopolizes attention.",
+            "intervention_type": "information_priority",
+            "risk_level": "targeted",
+            "expected_primary_metric": "vision_subject",
+            "expected_tradeoff": "May slightly reduce style redundancy.",
+            "open_problems": "Background-only references may still underperform.",
+            "template_changes": {
+                "style_foundation": {
+                    "change": "Replace the long block with a compact shared DNA preamble.",
+                    "why": "Reduce early token competition.",
+                }
+            },
+            "template": _format_template(valid_template),
+        }
+
+        result = validate_expansion_payload(payload)
+
+        assert result.open_problems == ["Background-only references may still underperform."]
+        assert result.template.sections[0].name == "style_foundation"
+        assert result.template.caption_sections[:2] == ["Art Style", "Subject"]
+        assert "compact shared DNA preamble" in result.template_changes
+
     def test_initial_brainstorm_payload_parses_sketches(self) -> None:
         payload = {
             "sketches": [
@@ -1090,6 +1126,15 @@ class TestJsonContracts:
         assert '"Subject"' in initial_brainstorm_hint
         assert initial_expansion_hint.count('"name"') >= 4
         assert expansion_hint.count('"name"') >= 4
+
+    def test_schema_hint_examples_satisfy_template_validators(self) -> None:
+        initial_template = validate_initial_expansion_payload(json.loads(schema_hint("initial_expansion")))
+        expansion_result = validate_expansion_payload(json.loads(schema_hint("expansion")))
+        synthesis_template, _ = validate_synthesis_payload(json.loads(schema_hint("synthesis")))
+
+        assert len(initial_template.sections) >= 8
+        assert len(expansion_result.template.sections) >= 8
+        assert len(synthesis_template.sections) >= 8
 
 
 class TestProposeExperiments:

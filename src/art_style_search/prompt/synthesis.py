@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from art_style_search.prompt._format import _format_metrics, _format_style_profile, _format_template
-from art_style_search.prompt.json_contracts import schema_hint, validate_synthesis_payload
+from art_style_search.prompt.json_contracts import response_schema, schema_hint, validate_synthesis_payload
 from art_style_search.types import AggregatedMetrics, IterationResult, PromptTemplate, StyleProfile
 from art_style_search.utils import ReasoningClient
 
@@ -136,6 +136,7 @@ async def synthesize_templates(
         validator=validate_synthesis_payload,
         response_name="synthesis",
         schema_hint=schema_hint("synthesis"),
+        response_schema=response_schema("synthesis"),
         max_tokens=12000,
     )
 

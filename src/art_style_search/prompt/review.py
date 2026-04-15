@@ -6,7 +6,7 @@ import statistics
 from typing import TYPE_CHECKING
 
 from art_style_search.prompt._format import _format_metrics, format_knowledge_base
-from art_style_search.prompt.json_contracts import schema_hint, validate_review_payload
+from art_style_search.prompt.json_contracts import response_schema, schema_hint, validate_review_payload
 from art_style_search.types import (
     AggregatedMetrics,
     IterationResult,
@@ -165,5 +165,6 @@ async def review_iteration(
         validator=validate_review_payload,
         response_name="review",
         schema_hint=schema_hint("review"),
+        response_schema=response_schema("review"),
         max_tokens=6000,
     )

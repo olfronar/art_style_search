@@ -23,8 +23,48 @@ class TestParseJsonResponse:
         data = parse_json_response('Here is the result:\n{"status": "done"}')
         assert data == {"status": "done"}
 
+    def test_extracts_first_complete_json_object_when_trailing_data_exists(self) -> None:
+        data = parse_json_response('{"status": "done"}\n{"status": "duplicate"}')
+        assert data == {"status": "done"}
+
 
 class TestCallJson:
+    @pytest.mark.asyncio
+    async def test_openai_call_json_uses_structured_outputs(self) -> None:
+        captured: dict[str, object] = {}
+
+        async def fake_create(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(output_text='{"status":"fixed"}')
+
+        client = ReasoningClient.__new__(ReasoningClient)
+        client.provider = "openai"
+        client._openai = SimpleNamespace(responses=SimpleNamespace(create=fake_create))
+
+        result = await ReasoningClient.call_json(
+            client,
+            model="gpt-5.4",
+            system="system",
+            user="user",
+            validator=lambda data: data["status"],  # type: ignore[index]
+            response_name="test_payload",
+            schema_hint='{"status": "..."}',
+        )
+
+        assert result == "fixed"
+        assert captured["model"] == "gpt-5.4"
+        assert captured["input"] == "user"
+        assert captured["instructions"] == "system"
+        assert captured["text"] == {
+            "format": {
+                "description": "Structured response for test_payload",
+                "name": "test_payload",
+                "schema": {"additionalProperties": True, "type": "object"},
+                "strict": True,
+                "type": "json_schema",
+            }
+        }
+
     @pytest.mark.asyncio
     async def test_repairs_invalid_json_once_logs_attempt_at_info(self, caplog) -> None:
         client = ReasoningClient.__new__(ReasoningClient)
