@@ -60,6 +60,7 @@ CAPTION_PROMPT = (
 )
 
 _CAPTION_TARGET_RE = re.compile(r"target length:\s*approximately\s*(\d+)\s*words", re.IGNORECASE)
+_CAPTION_TARGET_RANGE_RE = re.compile(r"target\s+(\d+)\s*-\s*(\d+)\s*words", re.IGNORECASE)
 _AVG_WORD_CHARS = 4
 _FALLBACK_MIN_CAPTION_CHARS = 600
 _CAPTIONER_MAX_OUTPUT_TOKENS = 32000
@@ -67,7 +68,12 @@ _CAPTIONER_MAX_OUTPUT_TOKENS = 32000
 
 def _caption_length_target_from_prompt(prompt: str) -> int:
     match = _CAPTION_TARGET_RE.search(prompt)
-    return int(match.group(1)) if match else 0
+    if match:
+        return int(match.group(1))
+    range_match = _CAPTION_TARGET_RANGE_RE.search(prompt)
+    if range_match:
+        return int(range_match.group(1))
+    return 0
 
 
 def _minimum_caption_chars(prompt: str) -> int:

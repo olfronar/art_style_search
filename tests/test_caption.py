@@ -44,6 +44,29 @@ class TestCaptionSingle:
             )
 
     @pytest.mark.asyncio
+    async def test_bootstrap_prompt_enforces_scaled_floor(self, tmp_path: Path) -> None:
+        """CAPTION_PROMPT targets 2000-6000 words, so a ~700-char caption must be rejected."""
+        image_path = tmp_path / "ref.png"
+        image_path.write_bytes(b"fake-image")
+
+        class FakeModels:
+            async def generate_content(self, **kwargs):
+                return SimpleNamespace(text="x" * 700)
+
+        class FakeClient:
+            aio = SimpleNamespace(models=FakeModels())
+
+        with pytest.raises(RuntimeError, match="too-short caption"):
+            await caption_single(
+                image_path,
+                prompt=CAPTION_PROMPT,
+                model="fake-model",
+                client=FakeClient(),  # type: ignore[arg-type]
+                cache_dir=None,
+                semaphore=asyncio.Semaphore(1),
+            )
+
+    @pytest.mark.asyncio
     async def test_rejects_caption_shorter_than_scaled_target_floor(self, tmp_path: Path) -> None:
         image_path = tmp_path / "ref.png"
         image_path.write_bytes(b"fake-image")
@@ -74,7 +97,7 @@ class TestCaptionSingle:
         class FakeModels:
             async def generate_content(self, **kwargs):
                 captured.update(kwargs)
-                return SimpleNamespace(text="[Art Style] " + ("detail " * 120))
+                return SimpleNamespace(text="[Art Style] " + ("detail " * 1200))
 
         class FakeClient:
             aio = SimpleNamespace(models=FakeModels())
