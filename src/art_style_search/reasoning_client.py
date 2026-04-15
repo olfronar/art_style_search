@@ -227,18 +227,34 @@ class ReasoningClient:
         system: str,
         user: str,
         max_tokens: int = 16000,
+        temperature: float | None = None,
+        reasoning_effort: str | None = None,
     ) -> str:
-        """Send a reasoning request and return the text response."""
+        """Send a reasoning request and return the text response.
+
+        *temperature* and *reasoning_effort* are passed to providers that support them
+        (see individual _call_* methods). Unsupported combinations are silently ignored:
+        Anthropic ignores custom temperature when extended thinking is on; OpenAI reasoning
+        models ignore temperature entirely.
+        """
         system, user = _adapt_prompts_for_provider(system, user, self.provider)
+        kwargs = {
+            "model": model,
+            "system": system,
+            "user": user,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "reasoning_effort": reasoning_effort,
+        }
         if self.provider == "anthropic":
-            return await self._call_anthropic(model=model, system=system, user=user, max_tokens=max_tokens)
+            return await self._call_anthropic(**kwargs)
         if self.provider == "openai":
-            return await self._call_openai(model=model, system=system, user=user, max_tokens=max_tokens)
+            return await self._call_openai(**kwargs)
         if self.provider == "xai":
-            return await self._call_xai(model=model, system=system, user=user, max_tokens=max_tokens)
+            return await self._call_xai(**kwargs)
         if self.provider == "local":
-            return await self._call_local(model=model, system=system, user=user, max_tokens=max_tokens)
-        return await self._call_zai(model=model, system=system, user=user, max_tokens=max_tokens)
+            return await self._call_local(**kwargs)
+        return await self._call_zai(**kwargs)
 
     async def call_json(
         self,
@@ -253,6 +269,8 @@ class ReasoningClient:
         max_tokens: int = 16000,
         repair_retries: int = 1,
         final_failure_log_level: int = logging.WARNING,
+        temperature: float | None = None,
+        reasoning_effort: str | None = None,
     ) -> T:
         """Send a reasoning request, parse JSON, validate it, and optionally repair it."""
 
@@ -264,6 +282,8 @@ class ReasoningClient:
             response_name=response_name,
             response_schema=response_schema,
             max_tokens=max_tokens,
+            temperature=temperature,
+            reasoning_effort=reasoning_effort,
         )
         try:
             return validator(parse_json_response(current_text))
@@ -305,6 +325,8 @@ class ReasoningClient:
                 response_name=f"{response_name}_repair",
                 response_schema=response_schema,
                 max_tokens=max_tokens,
+                temperature=temperature,
+                reasoning_effort=reasoning_effort,
             )
             self._write_debug_artifact(response_name, f"repair_{attempt + 1}", current_text)
             try:
@@ -332,6 +354,8 @@ class ReasoningClient:
         response_name: str,
         response_schema: dict[str, object] | None,
         max_tokens: int,
+        temperature: float | None = None,
+        reasoning_effort: str | None = None,
     ) -> str:
         if self.provider == "openai":
             return await self._call_openai_json(
@@ -341,30 +365,75 @@ class ReasoningClient:
                 response_name=response_name,
                 response_schema=response_schema,
                 max_tokens=max_tokens,
+                temperature=temperature,
+                reasoning_effort=reasoning_effort,
             )
-        return await self.call(model=model, system=system, user=user, max_tokens=max_tokens)
-
-    async def _call_anthropic(self, *, model: str, system: str, user: str, max_tokens: int) -> str:
-        response = await stream_message(
-            self._anthropic,
+        return await self.call(
             model=model,
-            max_tokens=max_tokens,
-            thinking={"type": "adaptive"},
             system=system,
-            messages=[{"role": "user", "content": user}],
+            user=user,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            reasoning_effort=reasoning_effort,
         )
+
+    async def _call_anthropic(
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        max_tokens: int,
+        temperature: float | None = None,
+        reasoning_effort: str | None = None,
+    ) -> str:
+        # Anthropic thinking modes: "disabled" | "adaptive" | "enabled" (with budget).
+        # Temperature is only honored when thinking is disabled (extended thinking requires temp=1).
+        thinking_block: dict[str, object]
+        if reasoning_effort == "high":
+            thinking_block = {"type": "enabled", "budget_tokens": 16000}
+        elif reasoning_effort == "low":
+            thinking_block = {"type": "disabled"}
+        else:
+            thinking_block = {"type": "adaptive"}
+
+        kwargs: dict[str, object] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "thinking": thinking_block,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+        }
+        if temperature is not None and reasoning_effort == "low":
+            kwargs["temperature"] = temperature
+
+        response = await stream_message(self._anthropic, **kwargs)
         return extract_text(response)
 
-    async def _call_zai(self, *, model: str, system: str, user: str, max_tokens: int) -> str:
+    async def _call_zai(
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        max_tokens: int,
+        temperature: float | None = None,
+        reasoning_effort: str | None = None,
+    ) -> str:
+        _ = reasoning_effort  # Z.AI does not expose a reasoning-effort knob
+
         def _sync_call() -> str:
-            response = self._zai.chat.completions.create(
-                model=model,
-                messages=[
+            kwargs: dict[str, object] = {
+                "model": model,
+                "messages": [
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ],
-                max_tokens=max_tokens,
-            )
+                "max_tokens": max_tokens,
+            }
+            if temperature is not None:
+                kwargs["temperature"] = temperature
+            response = self._zai.chat.completions.create(**kwargs)
             return response.choices[0].message.content
 
         async def _call() -> str:
@@ -372,13 +441,25 @@ class ReasoningClient:
 
         return await async_retry(_call, label="Z.AI call", base_delay=_STREAM_BASE_DELAY)
 
-    async def _call_openai(self, *, model: str, system: str, user: str, max_tokens: int) -> str:
+    async def _call_openai(
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        max_tokens: int,
+        temperature: float | None = None,
+        reasoning_effort: str | None = None,
+    ) -> str:
+        _ = temperature  # OpenAI reasoning models reject `temperature`; diversity is controlled via `reasoning.effort`
+        effort = reasoning_effort or "medium"
+
         async def _call() -> str:
             response = await self._openai.responses.create(
                 model=model,
                 instructions=system,
                 input=user,
-                reasoning={"effort": "medium"},
+                reasoning={"effort": effort},
                 max_output_tokens=max_tokens,
             )
             return response.output_text
@@ -394,16 +475,20 @@ class ReasoningClient:
         response_name: str,
         response_schema: dict[str, object] | None,
         max_tokens: int,
+        temperature: float | None = None,
+        reasoning_effort: str | None = None,
     ) -> str:
+        _ = temperature  # OpenAI reasoning models reject `temperature`; diversity is controlled via `reasoning.effort`
         format_name = re.sub(r"[^A-Za-z0-9_-]+", "_", response_name)[:64] or "response"
         json_schema = response_schema or {"type": "object", "additionalProperties": True}
+        effort = reasoning_effort or "medium"
 
         async def _call() -> str:
             response = await self._openai.responses.create(
                 model=model,
                 instructions=system,
                 input=user,
-                reasoning={"effort": "medium"},
+                reasoning={"effort": effort},
                 max_output_tokens=max_tokens,
                 text={
                     "format": {
@@ -419,31 +504,59 @@ class ReasoningClient:
 
         return await async_retry(_call, label="OpenAI JSON call", base_delay=_STREAM_BASE_DELAY)
 
-    async def _call_xai(self, *, model: str, system: str, user: str, max_tokens: int) -> str:
+    async def _call_xai(
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        max_tokens: int,
+        temperature: float | None = None,
+        reasoning_effort: str | None = None,
+    ) -> str:
+        _ = reasoning_effort  # xAI's Grok endpoints do not uniformly expose a reasoning-effort knob
+
         async def _call() -> str:
-            response = await self._xai.responses.create(
-                model=model,
-                input=[
+            kwargs: dict[str, object] = {
+                "model": model,
+                "input": [
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ],
-                max_output_tokens=max_tokens,
-                store=False,
-            )
+                "max_output_tokens": max_tokens,
+                "store": False,
+            }
+            if temperature is not None:
+                kwargs["temperature"] = temperature
+            response = await self._xai.responses.create(**kwargs)
             return response.output_text
 
         return await async_retry(_call, label="xAI call", base_delay=_STREAM_BASE_DELAY)
 
-    async def _call_local(self, *, model: str, system: str, user: str, max_tokens: int) -> str:
+    async def _call_local(
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        max_tokens: int,
+        temperature: float | None = None,
+        reasoning_effort: str | None = None,
+    ) -> str:
+        _ = reasoning_effort  # local OpenAI-compatible servers vary; skip until a specific server signals support
+
         async def _call() -> str:
-            response = await self._local.chat.completions.create(
-                model=model,
-                messages=[
+            kwargs: dict[str, object] = {
+                "model": model,
+                "messages": [
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ],
-                max_tokens=max_tokens,
-            )
+                "max_tokens": max_tokens,
+            }
+            if temperature is not None:
+                kwargs["temperature"] = temperature
+            response = await self._local.chat.completions.create(**kwargs)
             return response.choices[0].message.content or ""
 
         return await async_retry(_call, label="Local model call", base_delay=2.0)

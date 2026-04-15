@@ -189,6 +189,8 @@ async def brainstorm_initial_sketches(
         response_schema=response_schema("initial_brainstorm"),
         max_tokens=40000,
         repair_retries=2,
+        temperature=0.9,
+        reasoning_effort="high",
     )
     if not sketches:
         logger.warning("No valid sketches parsed from initial brainstorm response")
@@ -216,6 +218,8 @@ async def rank_initial_sketches(
             max_tokens=10000,
             repair_retries=1,
             final_failure_log_level=logging.INFO,
+            temperature=0.1,
+            reasoning_effort="low",
         )
     except Exception as exc:
         logger.info("Initial ranking failed; falling back to brainstorm order: %s: %s", type(exc).__name__, exc)
@@ -245,6 +249,8 @@ async def expand_initial_sketches(
             response_schema=response_schema("initial_expansion"),
             max_tokens=24000,
             repair_retries=2,
+            temperature=0.3,
+            reasoning_effort="high",
         )
         for idx, sketch in enumerate(sketches)
     ]

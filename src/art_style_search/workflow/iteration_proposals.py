@@ -13,6 +13,7 @@ from art_style_search.prompt.experiments import (
     expand_experiment_sketches,
     rank_experiment_sketches,
     select_experiment_portfolio,
+    template_structural_signature,
 )
 from art_style_search.scoring import classify_hypothesis
 from art_style_search.types import ConvergenceReason, LoopState, get_category_names
@@ -231,7 +232,22 @@ async def _propose_iteration_experiments(
     logger.info("Expand step returned %d refinement proposals", len(refinements))
 
     refinements = enforce_hypothesis_diversity(refinements, state.current_template)
-    refinements = select_experiment_portfolio(refinements, num_experiments=ctx.config.num_branches, num_directions=3)
+    refinements = select_experiment_portfolio(
+        refinements,
+        num_experiments=ctx.config.num_branches,
+        num_directions=3,
+        incumbent_template=state.current_template,
+    )
+    if refinements:
+        incumbent_sig = template_structural_signature(state.current_template)
+        distinct_sigs = {template_structural_signature(r.template) for r in refinements}
+        novel_count = sum(1 for sig in distinct_sigs if sig != incumbent_sig)
+        logger.info(
+            "Portfolio structural diversity: %d distinct signatures across %d proposals (%d novel vs incumbent)",
+            len(distinct_sigs),
+            len(refinements),
+            novel_count,
+        )
     proposals: list[ExperimentProposal] = []
     for refinement in refinements:
         if refinement.should_stop:

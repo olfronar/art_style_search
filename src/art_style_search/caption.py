@@ -11,10 +11,16 @@ from pathlib import Path
 from google import genai  # type: ignore[attr-defined]
 from google.genai import types as genai_types  # type: ignore[attr-defined]
 
+from art_style_search.caption_sections import parse_labeled_sections
 from art_style_search.types import Caption
 from art_style_search.utils import async_retry, caption_circuit_breaker, image_to_gemini_part
 
 logger = logging.getLogger(__name__)
+
+_ANCHOR_SECTION_MIN_WORDS: dict[str, int] = {
+    "Art Style": 100,
+    "Subject": 80,
+}
 
 CAPTION_SYSTEM = (
     "You are an expert art analyst producing captions that function as both faithful descriptions and "
@@ -145,6 +151,23 @@ async def caption_single(
             f"({len(caption_text.strip()) if caption_text else 0} chars, min {min_caption_length})"
         )
         raise RuntimeError(msg)
+
+    # Validate per-section anchor minima — catches catastrophic section collapses (e.g. 9-word [Art Style])
+    # that pass the total-length check and poison downstream scoring.
+    parsed_sections = parse_labeled_sections(caption_text)
+    if parsed_sections:
+        section_violations: list[str] = []
+        for section_name, min_words in _ANCHOR_SECTION_MIN_WORDS.items():
+            if section_name not in parsed_sections:
+                continue
+            actual_words = len(parsed_sections[section_name].split())
+            if actual_words < min_words:
+                section_violations.append(f"[{section_name}]={actual_words}w (min {min_words})")
+        if section_violations:
+            msg = f"Captioning {image_path.name} produced catastrophically short anchor sections: " + "; ".join(
+                section_violations
+            )
+            raise RuntimeError(msg)
 
     # Write cache
     if cache_dir is not None:

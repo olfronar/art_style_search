@@ -71,7 +71,7 @@ class TestCallJson:
         client.provider = "anthropic"
         responses = iter(["not json", '{"status": "fixed"}'])
 
-        async def fake_call(*, model, system, user, max_tokens):
+        async def fake_call(*, model, system, user, max_tokens, temperature=None, reasoning_effort=None):
             return next(responses)
 
         client.call = fake_call  # type: ignore[method-assign]
@@ -104,7 +104,7 @@ class TestCallJson:
             ]
         )
 
-        async def fake_call(*, model, system, user, max_tokens):
+        async def fake_call(*, model, system, user, max_tokens, temperature=None, reasoning_effort=None):
             return next(responses)
 
         client.call = fake_call  # type: ignore[method-assign]
@@ -134,7 +134,7 @@ class TestCallJson:
         client.provider = "anthropic"
         responses = iter(["not json", "still not json"])
 
-        async def fake_call(*, model, system, user, max_tokens):
+        async def fake_call(*, model, system, user, max_tokens, temperature=None, reasoning_effort=None):
             return next(responses)
 
         client.call = fake_call  # type: ignore[method-assign]
@@ -159,7 +159,7 @@ class TestCallJson:
         client.provider = "anthropic"
         responses = iter(["not json", "still not json"])
 
-        async def fake_call(*, model, system, user, max_tokens):
+        async def fake_call(*, model, system, user, max_tokens, temperature=None, reasoning_effort=None):
             return next(responses)
 
         client.call = fake_call  # type: ignore[method-assign]

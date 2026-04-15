@@ -185,7 +185,14 @@ async def _reasoning_analyze(
     user = _REASONING_ANALYSIS_PROMPT.format(captions=captions_text)
 
     logger.info("Sending %d captions to %s for style analysis", len(captions), model)
-    return await client.call(model=model, system=_ANALYSIS_SYSTEM, user=user, max_tokens=8000)
+    return await client.call(
+        model=model,
+        system=_ANALYSIS_SYSTEM,
+        user=user,
+        max_tokens=8000,
+        temperature=0.3,
+        reasoning_effort="medium",
+    )
 
 
 async def _reasoning_compile(
@@ -215,6 +222,8 @@ async def _reasoning_compile(
         schema_hint=schema_hint("style_compilation"),
         response_schema=response_schema("style_compilation"),
         max_tokens=20000,
+        temperature=0.3,
+        reasoning_effort="medium",
     )
 
 

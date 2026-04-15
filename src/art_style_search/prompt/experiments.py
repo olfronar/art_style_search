@@ -178,10 +178,20 @@ def _experiment_system_prompt(
         f"Concrete: {section_name_list}\n"
         f"Structural: {structural_change_targets}\n"
         "target_category may use taxonomy labels. Multiple directions may touch the same category with DIFFERENT mechanisms.\n\n"
+        "### Structural exploration quota (HARD RULE)\n"
+        "At least 1 proposal in the batch MUST change template STRUCTURE, not just section wording. "
+        "A 'structural change' means AT LEAST ONE of:\n"
+        "- modifying caption_sections (add, remove, or reorder labeled output sections), OR\n"
+        "- changing caption_length_target by >=30% from the incumbent, OR\n"
+        "- adding, removing, or renaming an entry in the template's sections list (the section_names set).\n"
+        "Rewording an existing section's value — however extensively — does NOT count as structural. "
+        "Without structural exploration the search converges to one schema and the loop stops learning. "
+        "If the incumbent's (section_names, caption_sections, caption_length_target) triple has held steady for 2+ iterations, at least one bold proposal MUST change AT LEAST TWO of those three.\n\n"
         "### Search principles\n"
         "- **Momentum**: Double down on confirmed KB insights. Do not undo confirmed improvements.\n"
         "- **Boldness**: Assume the incumbent is conceptually wrong in at least one way. Every direction needs a bold variant.\n"
-        "- **Diversity**: No two proposals may share (category, failure_mechanism, intervention_type).\n\n"
+        "- **Diversity**: No two proposals may share (category, failure_mechanism, intervention_type).\n"
+        "- **Structural novelty**: Pure value-rewording batches are the most common failure mode of this optimizer. Explicitly consider section-schema or length changes alongside content edits.\n\n"
         "## DIAGNOSTIC TIPS\n"
         "- DreamSim weak -> captions miss structural/semantic details.\n"
         "- Per-image scores vary -> consider conditional captioning.\n"
@@ -430,8 +440,23 @@ def _stop_result(current_template: PromptTemplate) -> RefinementResult:
     )
 
 
+_CAPTION_ANCHOR_MIN_WORDS = 100  # [Art Style] / [Subject] floor (matches caption.py validation)
+_CAPTION_ANCILLARY_MIN_WORDS = 80  # Other labeled caption sections
+
+
+def _minimum_plausible_caption_total(caption_sections: list[str]) -> int:
+    """Minimum caption length implied by anchor + ancillary section floors."""
+    n = len(caption_sections)
+    if n == 0:
+        return 0
+    n_anchors = min(n, 2)
+    n_ancillary = max(n - 2, 0)
+    return n_anchors * _CAPTION_ANCHOR_MIN_WORDS + n_ancillary * _CAPTION_ANCILLARY_MIN_WORDS
+
+
 def _validate_expanded_template(result: RefinementResult, incumbent: PromptTemplate) -> list[str]:
     """Programmatic post-expand verification. Returns list of violation descriptions."""
+    _ = incumbent  # reserved for future diff-based validations
     issues: list[str] = []
     tmpl = result.template
 
@@ -452,6 +477,17 @@ def _validate_expanded_template(result: RefinementResult, incumbent: PromptTempl
         issues.append(
             f"changed_sections[0]='{result.changed_sections[0]}' != changed_section='{result.changed_section}'"
         )
+
+    # N3: Self-contradictory caption_length_target — the reasoner asks for fewer total words than
+    # its own caption_sections floor can produce. Captioner will always overshoot such targets.
+    if tmpl.caption_length_target > 0 and tmpl.caption_sections:
+        min_plausible_total = _minimum_plausible_caption_total(tmpl.caption_sections)
+        if tmpl.caption_length_target < min_plausible_total:
+            issues.append(
+                f"caption_length_target={tmpl.caption_length_target} is below minimum plausible total "
+                f"({min_plausible_total}w) for {len(tmpl.caption_sections)} caption sections "
+                f"(floor = 2*{_CAPTION_ANCHOR_MIN_WORDS} + {max(len(tmpl.caption_sections) - 2, 0)}*{_CAPTION_ANCILLARY_MIN_WORDS})"
+            )
 
     return issues
 
@@ -506,16 +542,58 @@ def enforce_hypothesis_diversity(
     return diverse_results
 
 
+def template_structural_signature(template: PromptTemplate) -> tuple[tuple[str, ...], tuple[str, ...], int]:
+    """Return a hashable signature capturing a template's structural identity.
+
+    Two templates share a signature when their section_names, caption_sections order,
+    and caption_length_target are identical — i.e., only section VALUES may differ.
+    """
+    section_names = tuple(section.name for section in template.sections)
+    caption_sections = tuple(template.caption_sections)
+    return (section_names, caption_sections, template.caption_length_target)
+
+
+def _length_target_delta_ratio(a: int, b: int) -> float:
+    if max(a, b) <= 0:
+        return 0.0
+    return abs(a - b) / max(a, b)
+
+
+def _is_structurally_novel(
+    candidate: PromptTemplate,
+    incumbent: PromptTemplate,
+    *,
+    length_delta_threshold: float = 0.30,
+) -> bool:
+    """True when candidate differs from incumbent on at least one structural axis.
+
+    Structural axes: section_names set/order, caption_sections order, caption_length_target (>=threshold delta).
+    Value-only edits return False.
+    """
+    cand_sig = template_structural_signature(candidate)
+    incumb_sig = template_structural_signature(incumbent)
+    if cand_sig[0] != incumb_sig[0]:
+        return True
+    if cand_sig[1] != incumb_sig[1]:
+        return True
+    return _length_target_delta_ratio(cand_sig[2], incumb_sig[2]) >= length_delta_threshold
+
+
 def select_experiment_portfolio(
     results: list[RefinementResult],
     *,
     num_experiments: int,
     num_directions: int = 3,
+    incumbent_template: PromptTemplate | None = None,
 ) -> list[RefinementResult]:
     """Select a portfolio from raw proposals.
 
     Take one targeted proposal per direction first, preserving direction order,
     then fill remaining slots with bold proposals in original order.
+
+    When *incumbent_template* is provided, the portfolio is post-checked for structural
+    novelty: if every selected proposal shares the incumbent's structural signature,
+    swap the lowest-priority non-targeted pick for a structurally-novel candidate when one exists.
     """
     if not results or num_experiments <= 0:
         return []
@@ -539,24 +617,57 @@ def select_experiment_portfolio(
         selected.append(targeted)
         seen_ids.add(id(targeted))
         if len(selected) >= num_experiments:
-            return selected[:num_experiments]
-
-    bold_candidates = [r for r in results if r.risk_level == "bold" and id(r) not in seen_ids]
-    for candidate in bold_candidates:
-        selected.append(candidate)
-        seen_ids.add(id(candidate))
-        if len(selected) >= num_experiments:
-            return selected[:num_experiments]
-
-    for candidate in results:
-        if id(candidate) in seen_ids:
-            continue
-        selected.append(candidate)
-        seen_ids.add(id(candidate))
-        if len(selected) >= num_experiments:
             break
 
-    return selected[:num_experiments]
+    if len(selected) < num_experiments:
+        bold_candidates = [r for r in results if r.risk_level == "bold" and id(r) not in seen_ids]
+        for candidate in bold_candidates:
+            selected.append(candidate)
+            seen_ids.add(id(candidate))
+            if len(selected) >= num_experiments:
+                break
+
+    if len(selected) < num_experiments:
+        for candidate in results:
+            if id(candidate) in seen_ids:
+                continue
+            selected.append(candidate)
+            seen_ids.add(id(candidate))
+            if len(selected) >= num_experiments:
+                break
+
+    selected = selected[:num_experiments]
+
+    if incumbent_template is not None and selected:
+        has_novel = any(_is_structurally_novel(r.template, incumbent_template) for r in selected)
+        if not has_novel:
+            novel_candidate = next(
+                (
+                    r
+                    for r in results
+                    if id(r) not in {id(s) for s in selected} and _is_structurally_novel(r.template, incumbent_template)
+                ),
+                None,
+            )
+            if novel_candidate is not None:
+                swap_positions = [i for i, s in enumerate(selected) if s.risk_level == "bold"]
+                if not swap_positions:
+                    swap_positions = [len(selected) - 1]
+                swap_idx = swap_positions[-1]
+                replaced = selected[swap_idx]
+                logger.info(
+                    "Structural novelty swap: replacing '%s' (shares incumbent signature) with '%s' (novel)",
+                    replaced.hypothesis[:80],
+                    novel_candidate.hypothesis[:80],
+                )
+                selected[swap_idx] = novel_candidate
+            else:
+                logger.warning(
+                    "Portfolio has no structurally novel proposals vs incumbent and no swap candidate available — "
+                    "mode-collapse risk for this iteration"
+                )
+
+    return selected
 
 
 async def brainstorm_experiment_sketches(
@@ -607,6 +718,8 @@ async def brainstorm_experiment_sketches(
         response_schema=response_schema("brainstorm"),
         max_tokens=40000,
         repair_retries=2,
+        temperature=0.9,
+        reasoning_effort="high",
     )
     if not sketches:
         logger.warning("No valid sketches parsed from brainstorm response")
@@ -635,6 +748,8 @@ async def rank_experiment_sketches(
             max_tokens=10000,
             repair_retries=1,
             final_failure_log_level=logging.INFO,
+            temperature=0.1,
+            reasoning_effort="low",
         )
     except Exception as exc:
         logger.info("Ranking failed; falling back to brainstorm order: %s: %s", type(exc).__name__, exc)
@@ -689,6 +804,8 @@ async def expand_experiment_sketches(
             response_schema=response_schema("expansion"),
             max_tokens=24000,
             repair_retries=2,
+            temperature=0.3,
+            reasoning_effort="high",
         )
         for idx, sketch in enumerate(sketches)
     ]

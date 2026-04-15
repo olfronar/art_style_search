@@ -142,6 +142,8 @@ async def synthesize_templates(
         schema_hint=schema_hint("synthesis"),
         response_schema=response_schema("synthesis"),
         max_tokens=12000,
+        temperature=0.3,
+        reasoning_effort="medium",
     )
 
     if not merged.sections:
