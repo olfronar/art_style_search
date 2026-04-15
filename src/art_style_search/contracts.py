@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from art_style_search.types import PromptTemplate
+from art_style_search.types import DirectionId, PromptTemplate, RiskLevel
 
 
 @dataclass
@@ -24,9 +24,9 @@ class ExperimentSketch:
     target_category: str
     failure_mechanism: str
     intervention_type: str
-    direction_id: str
+    direction_id: DirectionId | str
     direction_summary: str
-    risk_level: str
+    risk_level: RiskLevel | str
     expected_primary_metric: str
     builds_on: str = ""
 
@@ -59,11 +59,11 @@ class RefinementResult:
     changed_section: str = ""
     changed_sections: list[str] | None = None
     target_category: str = ""
-    direction_id: str = ""
+    direction_id: DirectionId | str = ""
     direction_summary: str = ""
     failure_mechanism: str = ""
     intervention_type: str = ""
-    risk_level: str = "targeted"
+    risk_level: RiskLevel | str = "targeted"
     expected_primary_metric: str = ""
     expected_tradeoff: str = ""
 
@@ -83,10 +83,10 @@ class ExperimentProposal:
     changed_section: str = ""
     changed_sections: list[str] | None = None
     target_category: str = ""
-    direction_id: str = ""
+    direction_id: DirectionId | str = ""
     direction_summary: str = ""
     failure_mechanism: str = ""
     intervention_type: str = ""
-    risk_level: str = "targeted"
+    risk_level: RiskLevel | str = "targeted"
     expected_primary_metric: str = ""
     expected_tradeoff: str = ""

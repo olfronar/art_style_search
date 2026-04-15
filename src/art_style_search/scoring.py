@@ -50,6 +50,40 @@ def improvement_epsilon(baseline: float) -> float:
     return max(IMPROVEMENT_EPSILON * (1.0 - clamped), _EPSILON_FLOOR)
 
 
+def compliance_mean(m: AggregatedMetrics) -> float:
+    """Unweighted mean of the five compliance components on an AggregatedMetrics."""
+    return compliance_components_mean(
+        m.compliance_topic_coverage,
+        m.compliance_marker_coverage,
+        m.section_ordering_rate,
+        m.section_balance_rate,
+        m.subject_specificity_rate,
+    )
+
+
+# Pairs of (label, attribute) driving `metric_deltas`.  Any metric that appears here must be an
+# attribute of AggregatedMetrics and meaningful as a diff vs baseline.
+_METRIC_DELTA_ATTRS: tuple[tuple[str, str], ...] = (
+    ("dreamsim_similarity_mean", "dreamsim_similarity_mean"),
+    ("color_histogram_mean", "color_histogram_mean"),
+    ("ssim_mean", "ssim_mean"),
+    ("hps_score_mean", "hps_score_mean"),
+    ("aesthetics_score_mean", "aesthetics_score_mean"),
+    ("vision_style", "vision_style"),
+    ("vision_subject", "vision_subject"),
+    ("vision_composition", "vision_composition"),
+    ("style_consistency", "style_consistency"),
+    ("completion_rate", "completion_rate"),
+)
+
+
+def metric_deltas(metrics: AggregatedMetrics, baseline: AggregatedMetrics) -> dict[str, float]:
+    """Per-metric diffs `metrics - baseline` for every tracked metric plus compliance."""
+    deltas = {label: getattr(metrics, attr) - getattr(baseline, attr) for label, attr in _METRIC_DELTA_ATTRS}
+    deltas["compliance"] = compliance_mean(metrics) - compliance_mean(baseline)
+    return deltas
+
+
 def _normalize_hps(raw: float, ceiling: float = _HPS_CEILING) -> float:
     """Normalize raw HPS v2 score to [0, 1] using the empirical ceiling."""
     return min(raw / ceiling, 1.0)

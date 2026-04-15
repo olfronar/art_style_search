@@ -9,10 +9,15 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from typing import Any
+
+# Shared enum-like aliases for directional-search metadata.  Keeping these here (not in
+# ``taxonomy.py``) because they travel with every IterationResult / proposal / contract.
+RiskLevel = Literal["targeted", "bold"]
+DirectionId = Literal["D1", "D2", "D3"]
 
 
 @dataclass(frozen=True)
@@ -151,33 +156,7 @@ class AggregatedMetrics:
 
     def summary_dict(self) -> dict[str, float]:
         """Flat dict for JSON serialization and reasoning model consumption."""
-        return {
-            "dreamsim_similarity_mean": self.dreamsim_similarity_mean,
-            "dreamsim_similarity_std": self.dreamsim_similarity_std,
-            "hps_score_mean": self.hps_score_mean,
-            "hps_score_std": self.hps_score_std,
-            "aesthetics_score_mean": self.aesthetics_score_mean,
-            "aesthetics_score_std": self.aesthetics_score_std,
-            "color_histogram_mean": self.color_histogram_mean,
-            "color_histogram_std": self.color_histogram_std,
-            "ssim_mean": self.ssim_mean,
-            "ssim_std": self.ssim_std,
-            "style_consistency": self.style_consistency,
-            "completion_rate": self.completion_rate,
-            "vision_style": self.vision_style,
-            "vision_style_std": self.vision_style_std,
-            "vision_subject": self.vision_subject,
-            "vision_subject_std": self.vision_subject_std,
-            "vision_composition": self.vision_composition,
-            "vision_composition_std": self.vision_composition_std,
-            "compliance_topic_coverage": self.compliance_topic_coverage,
-            "compliance_marker_coverage": self.compliance_marker_coverage,
-            "section_ordering_rate": self.section_ordering_rate,
-            "section_balance_rate": self.section_balance_rate,
-            "subject_specificity_rate": self.subject_specificity_rate,
-            "requested_ref_count": float(self.requested_ref_count),
-            "actual_ref_count": float(self.actual_ref_count),
-        }
+        return {f.name: float(getattr(self, f.name)) for f in fields(self)}
 
 
 @dataclass(frozen=True)
@@ -280,11 +259,11 @@ class Hypothesis:
     metric_delta: dict[str, float]  # {"dreamsim": +0.02, "hps": +0.01, ...}
     kept: bool
     lesson: str  # confirmed/rejected/insight text
-    direction_id: str = ""
+    direction_id: DirectionId | str = ""
     direction_summary: str = ""
     failure_mechanism: str = ""
     intervention_type: str = ""
-    risk_level: str = "targeted"
+    risk_level: RiskLevel | str = "targeted"
     expected_primary_metric: str = ""
     expected_tradeoff: str = ""
     changed_sections: list[str] = field(default_factory=list)
@@ -335,11 +314,11 @@ class KnowledgeBase:
         lesson: str,
         confirmed: str,
         rejected: str,
-        direction_id: str = "",
+        direction_id: DirectionId | str = "",
         direction_summary: str = "",
         failure_mechanism: str = "",
         intervention_type: str = "",
-        risk_level: str = "targeted",
+        risk_level: RiskLevel | str = "targeted",
         expected_primary_metric: str = "",
         expected_tradeoff: str = "",
         changed_sections: list[str] | None = None,
@@ -440,7 +419,7 @@ class IterationResult:
     hypothesis experiment (no persistent branch identity).
     """
 
-    branch_id: int  # kept for backward compat; now used as experiment_id
+    branch_id: int
     iteration: int
     template: PromptTemplate
     rendered_prompt: str
@@ -460,11 +439,11 @@ class IterationResult:
     changed_section: str = ""
     target_category: str = ""
     changed_sections: list[str] = field(default_factory=list)
-    direction_id: str = ""
+    direction_id: DirectionId | str = ""
     direction_summary: str = ""
     failure_mechanism: str = ""
     intervention_type: str = ""
-    risk_level: str = "targeted"
+    risk_level: RiskLevel | str = "targeted"
     expected_primary_metric: str = ""
     expected_tradeoff: str = ""
 

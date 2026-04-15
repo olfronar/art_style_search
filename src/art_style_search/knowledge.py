@@ -8,6 +8,7 @@ from typing import Literal
 
 from art_style_search.caption_sections import parse_labeled_sections
 from art_style_search.contracts import ExperimentProposal
+from art_style_search.prompt._format import _truncate_words
 from art_style_search.scoring import classify_hypothesis
 from art_style_search.types import (
     AggregatedMetrics,
@@ -25,16 +26,15 @@ _PRIORITY_ORDER = {"HIGH": 0, "MED": 1, "LOW": 2}
 _PRIORITY_PREFIX_RE = re.compile(r"^\[(HIGH|MED|LOW)\]\s*", re.IGNORECASE)
 IterationDecision = Literal["promoted", "exploration", "rejected"]
 
+
+def strip_priority_prefix(text: str) -> str:
+    """Strip a leading [HIGH]/[MED]/[LOW] tag (case-insensitive) from problem text."""
+    return _PRIORITY_PREFIX_RE.sub("", text)
+
+
 _NEAR_DUP_THRESHOLD = 0.5
 _CAPTION_DIFF_WORD_BUDGET = 1500
 _CAPTION_DIFF_SECTION_PRIORITY = ("Subject", "Art Style", "Composition")
-
-
-def _truncate_words(text: str, max_words: int, *, suffix: str = "...") -> str:
-    words = text.split()
-    if len(words) <= max_words:
-        return text
-    return " ".join(words[:max_words]) + suffix
 
 
 def _section_diff_summary(prev_text: str, current_text: str) -> str:

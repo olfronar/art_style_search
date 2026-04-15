@@ -66,7 +66,7 @@ _VISION_SYSTEM = (
 )
 _VISION_CAPTION_CHAR_LIMIT = 40000
 
-_VERDICT_RE = re.compile(
+VERDICT_PATTERN = re.compile(
     r'<(\w+)\s+verdict="(\w+)">(.*?)</\1>',
     re.DOTALL,
 )
@@ -246,7 +246,7 @@ def _vision_caption_excerpt(caption: str) -> str:
 def _parse_vision_verdicts(text: str) -> VisionScores:
     """Parse ternary verdicts from per-image Gemini vision comparison."""
     scores: dict[str, VisionDimensionScore] = {}
-    for match in _VERDICT_RE.finditer(text):
+    for match in VERDICT_PATTERN.finditer(text):
         dim_name = match.group(1)
         verdict = match.group(2).upper()
         assessment = match.group(3).strip()
@@ -432,6 +432,21 @@ _PAIRWISE_SYSTEM = (
     "Evaluate the trios independently, ignore ordering bias, and return only the requested tags."
 )
 
+_PAIRWISE_WINNER_SCORES = {"A": 1.0, "B": 0.0, "TIE": 0.5}
+
+
+def _parse_pairwise_response(text: str) -> tuple[str, float]:
+    """Extract rationale + winner score from a pairwise-comparison response body."""
+    winner = (extract_xml_tag(text, "winner") or "TIE").upper()
+    rationale = extract_xml_tag(text, "rationale") or text[:300]
+    style_v = extract_xml_tag(text, "style_verdict") or ""
+    color_v = extract_xml_tag(text, "color_verdict") or ""
+    subject_v = extract_xml_tag(text, "subject_verdict") or ""
+    comp_v = extract_xml_tag(text, "composition_verdict") or ""
+    if style_v or color_v or subject_v or comp_v:
+        logger.info("Pairwise per-aspect: style=%s color=%s subject=%s comp=%s", style_v, color_v, subject_v, comp_v)
+    return rationale, _PAIRWISE_WINNER_SCORES.get(winner, 0.5)
+
 
 async def pairwise_compare_experiments(
     pairs_a: list[tuple[Path, Path]],
@@ -491,19 +506,7 @@ async def pairwise_compare_experiments(
                     ),
                     timeout=120,
                 )
-            text = response.text or ""
-            winner = (extract_xml_tag(text, "winner") or "TIE").upper()
-            rationale = extract_xml_tag(text, "rationale") or text[:300]
-            style_v = extract_xml_tag(text, "style_verdict") or ""
-            color_v = extract_xml_tag(text, "color_verdict") or ""
-            subject_v = extract_xml_tag(text, "subject_verdict") or ""
-            comp_v = extract_xml_tag(text, "composition_verdict") or ""
-            if style_v or color_v or subject_v or comp_v:
-                logger.info(
-                    "Pairwise per-aspect: style=%s color=%s subject=%s comp=%s", style_v, color_v, subject_v, comp_v
-                )
-            score = {"A": 1.0, "B": 0.0, "TIE": 0.5}.get(winner, 0.5)
-            return (rationale, score)
+            return _parse_pairwise_response(response.text or "")
     elif provider == "xai":
         if xai_client is None:
             msg = "xAI comparison requires an xAI client"
@@ -539,19 +542,7 @@ async def pairwise_compare_experiments(
                     ),
                     timeout=120,
                 )
-            text = response.output_text or ""
-            winner = (extract_xml_tag(text, "winner") or "TIE").upper()
-            rationale = extract_xml_tag(text, "rationale") or text[:300]
-            style_v = extract_xml_tag(text, "style_verdict") or ""
-            color_v = extract_xml_tag(text, "color_verdict") or ""
-            subject_v = extract_xml_tag(text, "subject_verdict") or ""
-            comp_v = extract_xml_tag(text, "composition_verdict") or ""
-            if style_v or color_v or subject_v or comp_v:
-                logger.info(
-                    "Pairwise per-aspect: style=%s color=%s subject=%s comp=%s", style_v, color_v, subject_v, comp_v
-                )
-            score = {"A": 1.0, "B": 0.0, "TIE": 0.5}.get(winner, 0.5)
-            return (rationale, score)
+            return _parse_pairwise_response(response.output_text or "")
     else:
         msg = f"Unknown comparison provider: {provider}"
         raise ValueError(msg)
@@ -635,21 +626,6 @@ def _subject_specificity_from_parsed(parsed: dict[str, str]) -> str:
             return "WEAK (specific detail density drops in later windows)"
 
     return "OK"
-
-
-def _check_section_ordering(caption_text: str, expected_sections: list[str]) -> str:
-    """Check if labeled sections appear in the expected order."""
-    return _ordering_from_parsed(parse_labeled_sections(caption_text), expected_sections)
-
-
-def _check_section_lengths(caption_text: str, expected_sections: list[str]) -> str:
-    """Check if sections have roughly proportional word counts."""
-    return _lengths_from_parsed(parse_labeled_sections(caption_text), expected_sections)
-
-
-def _check_subject_specificity(caption_text: str) -> str:
-    """Check whether the ``[Subject]`` block is detailed and specific."""
-    return _subject_specificity_from_parsed(parse_labeled_sections(caption_text))
 
 
 def compute_caption_compliance(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from art_style_search.contracts import ExperimentProposal, Lessons
@@ -14,7 +15,10 @@ from art_style_search.workflow.context import RunContext, _log_experiment_result
 if TYPE_CHECKING:
     from art_style_search.workflow.iteration_execution import IterationRanking
 
-_MAX_PERSISTED_HISTORY = 30
+# History entries are trimmed of captions+rendered prompt (both live in per-iteration
+# JSON logs under {log_dir}/iter_NNN_branch_M.json).  10 entries ≈ one iteration of
+# experiments, enough for the reasoning model to reference immediate prior results.
+_MAX_PERSISTED_HISTORY = 10
 
 
 def _update_knowledge_base_for_iteration(
@@ -76,7 +80,7 @@ def _record_iteration_state(
         state.prev_best_captions = list(current_best.iteration_captions)
 
     state.last_iteration_results = ranking.exp_results
-    state.experiment_history.extend(ranking.exp_results)
+    state.experiment_history.extend(replace(r, iteration_captions=[], rendered_prompt="") for r in ranking.exp_results)
     if len(state.experiment_history) > _MAX_PERSISTED_HISTORY:
         state.experiment_history = state.experiment_history[-_MAX_PERSISTED_HISTORY:]
 

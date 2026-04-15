@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import html
 import logging
+import re
 from pathlib import Path
 
+from art_style_search.evaluate import VERDICT_PATTERN
+from art_style_search.knowledge import strip_priority_prefix as _strip_priority_prefix
 from art_style_search.report_data import ReportData, _rel
 from art_style_search.scoring import adaptive_composite_score, composite_score
 from art_style_search.types import (
@@ -20,25 +23,9 @@ from art_style_search.types import (
 logger = logging.getLogger(__name__)
 
 _MAX_TREE_DEPTH = 6
-_PRIORITY_PREFIXES = ("[HIGH] ", "[MED] ", "[LOW] ", "[HIGH]", "[MED]", "[LOW]")
 
-
-def _strip_priority_prefix(text: str) -> str:
-    """Strip leading [HIGH]/[MED]/[LOW] prefix from problem text."""
-    for prefix in _PRIORITY_PREFIXES:
-        if text.startswith(prefix):
-            return text[len(prefix) :]
-    return text
-
-
-_VERDICT_TAG_RE = __import__("re").compile(
-    r"<(style|subject|composition)\s+verdict=\"(MATCH|PARTIAL|MISS)\">(.*?)</\1>",
-    __import__("re").DOTALL,
-)
-_IMAGE_HEADER_RE = __import__("re").compile(r"^\*\*(.+?)\*\*\s*\[([^\]]+)\]:\s*", __import__("re").MULTILINE)
-_RAW_TAG_CLEAN_RE = __import__("re").compile(
-    r"</?(style|subject|composition|key_gap)\b[^>]*>", __import__("re").IGNORECASE
-)
+_IMAGE_HEADER_RE = re.compile(r"^\*\*(.+?)\*\*\s*\[([^\]]+)\]:\s*", re.MULTILINE)
+_RAW_TAG_CLEAN_RE = re.compile(r"</?(style|subject|composition|key_gap)\b[^>]*>", re.IGNORECASE)
 
 _VERDICT_CSS = {"MATCH": "verdict-match", "PARTIAL": "verdict-partial", "MISS": "verdict-miss"}
 _VERDICT_LABEL = {"MATCH": "Match", "PARTIAL": "Partial", "MISS": "Miss"}
@@ -68,7 +55,7 @@ def _format_vision_feedback(raw: str) -> str:
 
         # Parse verdict tags within this image's body
         verdicts: list[str] = []
-        for match in _VERDICT_TAG_RE.finditer(body):
+        for match in VERDICT_PATTERN.finditer(body):
             dim = match.group(1) or ""
             verdict = match.group(2) or ""
             text = (match.group(3) or "").strip()

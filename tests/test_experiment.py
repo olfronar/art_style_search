@@ -14,7 +14,7 @@ from art_style_search.experiment import (
     replicate_experiment,
 )
 from art_style_search.types import Caption
-from tests.conftest import make_iteration_result, make_metric_scores
+from tests.conftest import make_iteration_result, make_metric_scores, make_prompt_template
 
 # ---------------------------------------------------------------------------
 # collect_experiment_results
@@ -159,6 +159,99 @@ class TestReplicateExperiment:
         )
 
         assert replicated.median_aggregated.style_consistency == pytest.approx(0.42)
+
+    @pytest.mark.asyncio
+    async def test_generates_fresh_replicate_forwards_negative_prompt(self, tmp_path) -> None:
+        """Without existing_result, _run_one_replicate must run and forward the template's negative_prompt."""
+        from art_style_search.config import Config
+        from art_style_search.types import MetricScores, VisionDimensionScore, VisionScores
+
+        ref_path = tmp_path / "ref.png"
+        ref_path.touch()
+
+        captured_negative: dict[str, str | None] = {}
+
+        class FakeCaptioning:
+            async def caption_single(self, image_path, *, prompt, cache_dir, cache_key=""):
+                return Caption(
+                    image_path=image_path,
+                    text=(
+                        "[Art Style] Watercolor with soft edges.\n"
+                        "[Subject] A red fox with white socks and alert ears.\n"
+                        "[Color Palette] Ochre, moss green."
+                    ),
+                )
+
+        class FakeGeneration:
+            async def generate_single(self, prompt, *, index, output_path, negative_prompt=None):
+                captured_negative["negative_prompt"] = negative_prompt
+                output_path.touch()
+                return output_path
+
+        class FakeEvaluation:
+            async def evaluate_images(self, gen_paths, ref_paths, captions):
+                scores = [
+                    MetricScores(dreamsim_similarity=0.7, hps_score=0.25, aesthetics_score=5.5) for _ in gen_paths
+                ]
+                return scores, 0
+
+            async def compare_vision_per_image(self, pairs, captions):
+                vs = [
+                    VisionScores(
+                        style=VisionDimensionScore("style", 1.0, ""),
+                        subject=VisionDimensionScore("subject", 1.0, ""),
+                        composition=VisionDimensionScore("composition", 1.0, ""),
+                    )
+                    for _ in pairs
+                ]
+                return "", vs
+
+        services = type(
+            "FakeServices",
+            (),
+            {"captioning": FakeCaptioning(), "generation": FakeGeneration(), "evaluation": FakeEvaluation()},
+        )()
+
+        template = make_prompt_template()
+        template = replace(template, negative_prompt="photorealism, harsh shadows")
+        config = Config(
+            reference_dir=tmp_path / "refs",
+            output_dir=tmp_path / "outputs",
+            log_dir=tmp_path / "logs",
+            state_file=tmp_path / "state.json",
+            run_dir=tmp_path,
+            max_iterations=1,
+            plateau_window=5,
+            num_branches=1,
+            aspect_ratio="1:1",
+            num_fixed_refs=1,
+            caption_model="caption-model",
+            generator_model="generator-model",
+            reasoning_model="reasoning-model",
+            reasoning_provider="anthropic",
+            reasoning_base_url="",
+            gemini_concurrency=1,
+            eval_concurrency=1,
+            seed=42,
+            protocol="classic",
+            anthropic_api_key="test",
+            google_api_key="test",
+            zai_api_key="",
+            openai_api_key="",
+        )
+
+        replicated = await replicate_experiment(
+            template=template,
+            branch_id=0,
+            iteration=1,
+            fixed_refs=[ref_path],
+            config=config,
+            services=services,
+            n_replicates=1,
+        )
+
+        assert captured_negative["negative_prompt"] == "photorealism, harsh shadows"
+        assert len(replicated.replicate_scores) == 1
 
 
 class TestCaptionAndGenerate:

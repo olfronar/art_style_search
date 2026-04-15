@@ -19,10 +19,12 @@ from art_style_search.evaluate import (
 from art_style_search.types import (
     AggregatedMetrics,
     Caption,
+    DirectionId,
     IterationResult,
     MetricScores,
     PromptTemplate,
     ReplicatedEvaluation,
+    RiskLevel,
     VisionScores,
     verdict_label,
 )
@@ -141,11 +143,9 @@ async def _caption_and_generate(
     cache_dir = config.log_dir / f"iter_{iteration:03d}" / f"exp_{experiment_id}" / "captions"
     gen_dir = config.output_dir / f"iter_{iteration:03d}" / f"exp_{experiment_id}"
     gen_dir.mkdir(parents=True, exist_ok=True)
-    # In rigorous mode, include prompt hash so cache invalidates when meta-prompt changes
-    cache_key = f"iter{iteration}_e{experiment_id}"
-    if config.protocol == "rigorous":
-        prompt_hash = hashlib.sha256(meta_prompt.encode()).hexdigest()[:8]
-        cache_key = f"{cache_key}_p{prompt_hash}"
+    # Content-derived cache key: captions are a pure function of (image_bytes, meta_prompt).
+    # Identical meta-prompts share cache across experiments and iterations.
+    cache_key = f"p{hashlib.sha256(meta_prompt.encode()).hexdigest()[:12]}"
 
     async def _caption_then_generate(ref_path: Path, i: int) -> tuple[Caption, Path]:
         caption = await services.captioning.caption_single(
@@ -198,11 +198,11 @@ async def run_experiment(
     changed_section: str = "",
     changed_sections: list[str] | None = None,
     target_category: str = "",
-    direction_id: str = "",
+    direction_id: DirectionId | str = "",
     direction_summary: str = "",
     failure_mechanism: str = "",
     intervention_type: str = "",
-    risk_level: str = "targeted",
+    risk_level: RiskLevel | str = "targeted",
     expected_primary_metric: str = "",
     expected_tradeoff: str = "",
 ) -> IterationResult:
@@ -391,6 +391,7 @@ async def replicate_experiment(
         captions, generated_paths, pairs = await _caption_and_generate(
             fixed_refs,
             meta_prompt,
+            negative_prompt=template.negative_prompt,
             config=config,
             services=services,
             iteration=iteration,

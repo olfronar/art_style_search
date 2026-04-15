@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from art_style_search.contracts import Lessons, RefinementResult
 from art_style_search.prompt._format import suggest_target_categories
-from art_style_search.prompt._parse import Lessons, RefinementResult
 from art_style_search.prompt.experiments import enforce_hypothesis_diversity, select_experiment_portfolio
 from art_style_search.types import CategoryProgress, KnowledgeBase
 from tests.conftest import make_prompt_template

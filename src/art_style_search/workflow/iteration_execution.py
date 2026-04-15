@@ -28,6 +28,10 @@ from art_style_search.workflow.policy import _candidate_results_for_validation
 
 logger = logging.getLogger(__name__)
 
+# Confirmatory-validation replicates use a dedicated branch_id outside the regular experiment range
+# so they never collide with proposal indices in logs/state.
+_INCUMBENT_BRANCH_ID = 900
+
 
 @dataclass
 class IterationRanking:
@@ -177,7 +181,7 @@ async def _confirmatory_validation(
         tasks.append(
             replicate_experiment(
                 template=state.best_template,
-                branch_id=900,
+                branch_id=_INCUMBENT_BRANCH_ID,
                 iteration=iteration,
                 fixed_refs=state.fixed_references,
                 config=ctx.config,

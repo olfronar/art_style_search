@@ -7,12 +7,12 @@ from typing import TYPE_CHECKING
 
 from art_style_search.prompt._format import _format_metrics, format_knowledge_base
 from art_style_search.prompt.json_contracts import response_schema, schema_hint, validate_review_payload
+from art_style_search.scoring import compliance_mean, metric_deltas
 from art_style_search.types import (
     AggregatedMetrics,
     IterationResult,
     KnowledgeBase,
     ReviewResult,
-    compliance_components_mean,
 )
 from art_style_search.utils import ReasoningClient
 
@@ -69,31 +69,26 @@ _REVIEW_SYSTEM = (
 )
 
 
-def _compliance_mean(metrics: AggregatedMetrics) -> float:
-    return compliance_components_mean(
-        metrics.compliance_topic_coverage,
-        metrics.compliance_marker_coverage,
-        metrics.section_ordering_rate,
-        metrics.section_balance_rate,
-        metrics.subject_specificity_rate,
-    )
+# Short labels for the delta/noise-floor summaries shown in the reviewer prompt.
+_REVIEW_DELTA_LABELS: dict[str, str] = {
+    "dreamsim_similarity_mean": "DS",
+    "color_histogram_mean": "Color",
+    "hps_score_mean": "HPS",
+    "ssim_mean": "SSIM",
+    "aesthetics_score_mean": "Aes",
+    "vision_style": "vision_style",
+    "vision_subject": "vision_subject",
+    "vision_composition": "vision_composition",
+    "style_consistency": "style_consistency",
+    "completion_rate": "completion_rate",
+    "compliance": "compliance",
+}
 
 
 def _delta_summary(metrics: AggregatedMetrics, baseline: AggregatedMetrics) -> str:
-    return (
-        "Deltas vs baseline: "
-        f"DS={metrics.dreamsim_similarity_mean - baseline.dreamsim_similarity_mean:+.4f} "
-        f"Color={metrics.color_histogram_mean - baseline.color_histogram_mean:+.4f} "
-        f"HPS={metrics.hps_score_mean - baseline.hps_score_mean:+.4f} "
-        f"SSIM={metrics.ssim_mean - baseline.ssim_mean:+.4f} "
-        f"Aes={metrics.aesthetics_score_mean - baseline.aesthetics_score_mean:+.4f} "
-        f"vision_style={metrics.vision_style - baseline.vision_style:+.4f} "
-        f"vision_subject={metrics.vision_subject - baseline.vision_subject:+.4f} "
-        f"vision_composition={metrics.vision_composition - baseline.vision_composition:+.4f} "
-        f"style_consistency={metrics.style_consistency - baseline.style_consistency:+.4f} "
-        f"completion_rate={metrics.completion_rate - baseline.completion_rate:+.4f} "
-        f"compliance={_compliance_mean(metrics) - _compliance_mean(baseline):+.4f}\n"
-    )
+    deltas = metric_deltas(metrics, baseline)
+    parts = " ".join(f"{label}={deltas[attr]:+.4f}" for attr, label in _REVIEW_DELTA_LABELS.items())
+    return f"Deltas vs baseline: {parts}\n"
 
 
 def _noise_floor_summary(experiments: list[IterationResult]) -> str:
@@ -104,20 +99,21 @@ def _noise_floor_summary(experiments: list[IterationResult]) -> str:
         return statistics.pstdev(values) if len(values) >= 2 else 0.0
 
     metrics = [exp.aggregated for exp in experiments]
-    return (
-        "## Noise floors for this run\n"
-        f"DS=±{_std([m.dreamsim_similarity_mean for m in metrics]):.4f} "
-        f"Color=±{_std([m.color_histogram_mean for m in metrics]):.4f} "
-        f"HPS=±{_std([m.hps_score_mean for m in metrics]):.4f} "
-        f"SSIM=±{_std([m.ssim_mean for m in metrics]):.4f} "
-        f"Aes=±{_std([m.aesthetics_score_mean for m in metrics]):.4f} "
-        f"vision_style=±{_std([m.vision_style for m in metrics]):.4f} "
-        f"vision_subject=±{_std([m.vision_subject for m in metrics]):.4f} "
-        f"vision_composition=±{_std([m.vision_composition for m in metrics]):.4f} "
-        f"style_consistency=±{_std([m.style_consistency for m in metrics]):.4f} "
-        f"completion_rate=±{_std([m.completion_rate for m in metrics]):.4f} "
-        f"compliance=±{_std([_compliance_mean(m) for m in metrics]):.4f}\n"
-    )
+    value_fns: dict[str, list[float]] = {
+        "dreamsim_similarity_mean": [m.dreamsim_similarity_mean for m in metrics],
+        "color_histogram_mean": [m.color_histogram_mean for m in metrics],
+        "hps_score_mean": [m.hps_score_mean for m in metrics],
+        "ssim_mean": [m.ssim_mean for m in metrics],
+        "aesthetics_score_mean": [m.aesthetics_score_mean for m in metrics],
+        "vision_style": [m.vision_style for m in metrics],
+        "vision_subject": [m.vision_subject for m in metrics],
+        "vision_composition": [m.vision_composition for m in metrics],
+        "style_consistency": [m.style_consistency for m in metrics],
+        "completion_rate": [m.completion_rate for m in metrics],
+        "compliance": [compliance_mean(m) for m in metrics],
+    }
+    parts = " ".join(f"{label}=±{_std(value_fns[attr]):.4f}" for attr, label in _REVIEW_DELTA_LABELS.items())
+    return f"## Noise floors for this run\n{parts}\n"
 
 
 async def review_iteration(

@@ -62,6 +62,7 @@ def _caption_feedback_excerpt(text: str, max_words: int) -> str:
         return _truncate_words(text, max_words)
     return _truncate_words("\n\n".join(parts), max_words)
 
+
 _BRAINSTORM_EXAMPLE = (
     "## Example of a good sketch\n"
     '{"hypothesis":"Subject descriptions use generic terms (person, figure) instead of specific identity cues, '

@@ -4,14 +4,24 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from art_style_search.caption_sections import parse_labeled_sections
 from art_style_search.evaluate import (
-    _check_section_lengths,
-    _check_section_ordering,
+    _lengths_from_parsed,
+    _ordering_from_parsed,
     check_caption_compliance,
     compute_caption_compliance_stats,
     compute_style_consistency,
 )
 from art_style_search.types import Caption
+
+
+def _check_section_ordering(caption_text: str, expected_sections: list[str]) -> str:
+    return _ordering_from_parsed(parse_labeled_sections(caption_text), expected_sections)
+
+
+def _check_section_lengths(caption_text: str, expected_sections: list[str]) -> str:
+    return _lengths_from_parsed(parse_labeled_sections(caption_text), expected_sections)
+
 
 # -- _check_section_ordering --------------------------------------------------
 

@@ -3,7 +3,8 @@
 The package is organised as:
 
 - ``_format`` — rendering dataclasses into text blocks
-- ``_parse`` — regexes and parsing helpers, plus ``Lessons`` and ``RefinementResult``
+- ``_parse`` — XML template parser (fallback) + ``validate_template``
+- ``json_contracts`` — JSON payload validators used by every per-iteration call
 - ``initial`` — zero-step: propose N diverse initial templates
 - ``experiments`` — per-iteration: propose N experiment branches, dedup by category
 - ``synthesis`` — merge top experiments' best sections into one template
@@ -13,26 +14,9 @@ All public symbols are re-exported here so existing callers can continue to
 ``from art_style_search.prompt import X``.
 """
 
-from art_style_search.contracts import ExperimentSketch, InitialTemplateSketch
+from art_style_search.contracts import ExperimentSketch, InitialTemplateSketch, Lessons, RefinementResult
 from art_style_search.prompt._format import _format_metrics, _format_style_profile, _format_template
-from art_style_search.prompt._parse import (
-    Lessons,
-    RefinementResult,
-    _parse_analysis,
-    _parse_builds_on,
-    _parse_changed_section,
-    _parse_converged,
-    _parse_experiment,
-    _parse_hypothesis,
-    _parse_initial_templates,
-    _parse_lessons,
-    _parse_open_problems,
-    _parse_refinement_branches,
-    _parse_target_category,
-    _parse_template,
-    _parse_template_changes,
-    validate_template,
-)
+from art_style_search.prompt._parse import _parse_template, validate_template
 from art_style_search.prompt.experiments import (
     brainstorm_experiment_sketches,
     enforce_hypothesis_diversity,
@@ -58,19 +42,7 @@ __all__ = [
     "_format_metrics",
     "_format_style_profile",
     "_format_template",
-    "_parse_analysis",
-    "_parse_builds_on",
-    "_parse_changed_section",
-    "_parse_converged",
-    "_parse_experiment",
-    "_parse_hypothesis",
-    "_parse_initial_templates",
-    "_parse_lessons",
-    "_parse_open_problems",
-    "_parse_refinement_branches",
-    "_parse_target_category",
     "_parse_template",
-    "_parse_template_changes",
     "brainstorm_experiment_sketches",
     "brainstorm_initial_sketches",
     "enforce_hypothesis_diversity",

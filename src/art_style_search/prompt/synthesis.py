@@ -6,37 +6,40 @@ import logging
 
 from art_style_search.prompt._format import _format_metrics, _format_style_profile, _format_template
 from art_style_search.prompt.json_contracts import response_schema, schema_hint, validate_synthesis_payload
+from art_style_search.scoring import metric_deltas
 from art_style_search.types import AggregatedMetrics, IterationResult, PromptTemplate, StyleProfile
 from art_style_search.utils import ReasoningClient
 
 logger = logging.getLogger(__name__)
+
+# Human-friendly labels for the metric deltas shown in synthesis annotations.
+# Keys omitted (e.g. completion_rate, compliance) do not surface in this prompt.
+_SYNTHESIS_DELTA_LABELS: dict[str, str] = {
+    "dreamsim_similarity_mean": "DreamSim",
+    "color_histogram_mean": "Color histogram",
+    "ssim_mean": "SSIM",
+    "hps_score_mean": "HPS v2",
+    "aesthetics_score_mean": "Aesthetics",
+    "vision_style": "vision_style",
+    "vision_subject": "vision_subject",
+    "vision_composition": "vision_composition",
+    "style_consistency": "style_consistency",
+}
 
 
 def _metric_strength_annotations(exp: IterationResult, baseline: AggregatedMetrics | None) -> str:
     """Annotate which metrics this experiment improved vs baseline."""
     if baseline is None:
         return "No baseline available for comparison."
-    m = exp.aggregated
+    deltas = metric_deltas(exp.aggregated, baseline)
     strengths: list[str] = []
     weaknesses: list[str] = []
-
-    deltas = [
-        ("DreamSim", m.dreamsim_similarity_mean - baseline.dreamsim_similarity_mean),
-        ("Color histogram", m.color_histogram_mean - baseline.color_histogram_mean),
-        ("SSIM", m.ssim_mean - baseline.ssim_mean),
-        ("HPS v2", m.hps_score_mean - baseline.hps_score_mean),
-        ("Aesthetics", m.aesthetics_score_mean - baseline.aesthetics_score_mean),
-        ("vision_style", m.vision_style - baseline.vision_style),
-        ("vision_subject", m.vision_subject - baseline.vision_subject),
-        ("vision_composition", m.vision_composition - baseline.vision_composition),
-        ("style_consistency", m.style_consistency - baseline.style_consistency),
-    ]
-
-    for name, delta in deltas:
+    for attr, label in _SYNTHESIS_DELTA_LABELS.items():
+        delta = deltas[attr]
         if delta > 0.01:
-            strengths.append(f"{name} +{delta:.3f}")
+            strengths.append(f"{label} +{delta:.3f}")
         elif delta < -0.01:
-            weaknesses.append(f"{name} {delta:.3f}")
+            weaknesses.append(f"{label} {delta:.3f}")
 
     parts: list[str] = []
     if strengths:

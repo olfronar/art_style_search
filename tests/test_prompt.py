@@ -14,14 +14,7 @@ from art_style_search.prompt import (
     RefinementResult,
     _format_metrics,
     _format_template,
-    _parse_analysis,
-    _parse_builds_on,
-    _parse_changed_section,
-    _parse_converged,
-    _parse_initial_templates,
-    _parse_open_problems,
     _parse_template,
-    _parse_template_changes,
     propose_experiments,
     propose_initial_templates,
     rank_experiment_sketches,
@@ -123,141 +116,10 @@ class TestParseTemplate:
         assert tpl.sections[0].value == "value"
 
 
-# ---------------------------------------------------------------------------
-# _parse_analysis
-# ---------------------------------------------------------------------------
-
-
-class TestParseAnalysis:
-    def test_analysis_present(self) -> None:
-        text = "Some preamble\n<analysis>The DINO score improved by 0.05.</analysis>\nMore text"
-        assert _parse_analysis(text) == "The DINO score improved by 0.05."
-
-    def test_analysis_absent(self) -> None:
-        assert _parse_analysis("No analysis tags here") == ""
-
-    def test_analysis_multiline(self) -> None:
-        text = "<analysis>\nLine 1\nLine 2\nLine 3\n</analysis>"
-        result = _parse_analysis(text)
-        assert "Line 1" in result
-        assert "Line 3" in result
-
-    def test_analysis_empty(self) -> None:
-        assert _parse_analysis("<analysis>   </analysis>") == ""
-
-
 class TestPromptContracts:
     def test_prompt_reexports_contract_types_from_neutral_contracts_module(self) -> None:
         assert Lessons is contracts.Lessons
         assert RefinementResult is contracts.RefinementResult
-
-
-# ---------------------------------------------------------------------------
-# _parse_template_changes
-# ---------------------------------------------------------------------------
-
-
-class TestParseTemplateChanges:
-    def test_changes_present(self) -> None:
-        text = "<template_changes>Added a new technique section</template_changes>"
-        assert _parse_template_changes(text) == "Added a new technique section"
-
-    def test_changes_absent(self) -> None:
-        assert _parse_template_changes("No changes tags") == ""
-
-    def test_changes_none_value(self) -> None:
-        text = "<template_changes>none</template_changes>"
-        assert _parse_template_changes(text) == "none"
-
-    def test_changes_multiline(self) -> None:
-        text = "<template_changes>\nRemoved color section.\nAdded texture section.\n</template_changes>"
-        result = _parse_template_changes(text)
-        assert "Removed color section." in result
-        assert "Added texture section." in result
-
-
-# ---------------------------------------------------------------------------
-# _parse_converged
-# ---------------------------------------------------------------------------
-
-
-class TestParseConverged:
-    def test_converged_present(self) -> None:
-        assert _parse_converged("Some analysis text\n[CONVERGED]") is True
-
-    def test_converged_absent(self) -> None:
-        assert _parse_converged("Some analysis text, not converged yet") is False
-
-    def test_converged_in_middle(self) -> None:
-        assert _parse_converged("Blah [CONVERGED] blah") is True
-
-    def test_converged_substring_not_matched(self) -> None:
-        # "CONVERGED" without brackets should not match
-        assert _parse_converged("The model has CONVERGED on a solution") is False
-
-
-# ---------------------------------------------------------------------------
-# _parse_initial_templates
-# ---------------------------------------------------------------------------
-
-
-class TestParseInitialTemplates:
-    def test_multiple_branches(self) -> None:
-        text = (
-            "<branch>\n"
-            '<section name="style" description="style">bold lines</section>\n'
-            "</branch>\n"
-            "<branch>\n"
-            '<section name="mood" description="mood">calm atmosphere</section>\n'
-            "<negative>harsh lighting</negative>\n"
-            "</branch>"
-        )
-        templates = _parse_initial_templates(text, num_branches=2)
-        assert len(templates) == 2
-        assert templates[0].sections[0].value == "bold lines"
-        assert templates[1].sections[0].value == "calm atmosphere"
-        assert templates[1].negative_prompt == "harsh lighting"
-
-    def test_single_template_fallback(self) -> None:
-        # No <branch> tags: should fall back to parsing the whole text as one template
-        text = '<section name="style" description="style">watercolor wash</section>'
-        templates = _parse_initial_templates(text, num_branches=1)
-        assert len(templates) == 1
-        assert templates[0].sections[0].value == "watercolor wash"
-
-    def test_padding_to_num_branches(self) -> None:
-        # Only one branch provided but 3 requested: should pad by duplicating last
-        text = '<branch>\n<section name="style" description="style">oil painting</section>\n</branch>'
-        templates = _parse_initial_templates(text, num_branches=3)
-        assert len(templates) == 3
-        # The padded templates should be the same object as the last parsed one
-        assert templates[1] is templates[0]
-        assert templates[2] is templates[0]
-
-    def test_more_branches_than_requested(self) -> None:
-        text = (
-            "<branch>\n"
-            '<section name="a" description="a">val_a</section>\n'
-            "</branch>\n"
-            "<branch>\n"
-            '<section name="b" description="b">val_b</section>\n'
-            "</branch>\n"
-            "<branch>\n"
-            '<section name="c" description="c">val_c</section>\n'
-            "</branch>"
-        )
-        templates = _parse_initial_templates(text, num_branches=2)
-        assert len(templates) == 2
-        assert templates[0].sections[0].value == "val_a"
-        assert templates[1].sections[0].value == "val_b"
-
-    def test_fallback_pads_when_num_branches_gt_1(self) -> None:
-        # No <branch> tags, but num_branches=3: fallback gives 1, then pad to 3
-        text = '<section name="style" description="style">pencil sketch</section>'
-        templates = _parse_initial_templates(text, num_branches=3)
-        assert len(templates) == 3
-        for t in templates:
-            assert t.sections[0].value == "pencil sketch"
 
 
 # ---------------------------------------------------------------------------
@@ -348,86 +210,6 @@ class TestFormatMetrics:
         assert len(lines) == len(metrics.summary_dict())
         for line in lines:
             assert line.startswith("- ")
-
-
-# ---------------------------------------------------------------------------
-# _parse_builds_on
-# ---------------------------------------------------------------------------
-
-
-class TestParseBuildsOn:
-    def test_single_id(self) -> None:
-        text = "<builds_on>H3</builds_on>"
-        assert _parse_builds_on(text) == "H3"
-
-    def test_multiple_ids(self) -> None:
-        text = "<builds_on>H3, H5</builds_on>"
-        assert _parse_builds_on(text) == "H3, H5"
-
-    def test_none_value(self) -> None:
-        text = "<builds_on>none</builds_on>"
-        assert _parse_builds_on(text) is None
-
-    def test_none_case_insensitive(self) -> None:
-        text = "<builds_on>None</builds_on>"
-        assert _parse_builds_on(text) is None
-
-    def test_absent(self) -> None:
-        text = "Some text without builds_on tag"
-        assert _parse_builds_on(text) is None
-
-    def test_with_whitespace(self) -> None:
-        text = "<builds_on>  H7  </builds_on>"
-        assert _parse_builds_on(text) == "H7"
-
-
-# ---------------------------------------------------------------------------
-# _parse_open_problems
-# ---------------------------------------------------------------------------
-
-
-class TestParseOpenProblems:
-    def test_numbered_list(self) -> None:
-        text = (
-            "<open_problems>\n"
-            "1. Color matching on dark palettes\n"
-            "2. Fine texture detail\n"
-            "3. Mood consistency\n"
-            "</open_problems>"
-        )
-        result = _parse_open_problems(text)
-        assert len(result) == 3
-        assert result[0] == "Color matching on dark palettes"
-        assert result[1] == "Fine texture detail"
-        assert result[2] == "Mood consistency"
-
-    def test_absent(self) -> None:
-        assert _parse_open_problems("No tag here") == []
-
-    def test_empty(self) -> None:
-        assert _parse_open_problems("<open_problems>  </open_problems>") == []
-
-    def test_single_item(self) -> None:
-        text = "<open_problems>\n1. Only one problem\n</open_problems>"
-        result = _parse_open_problems(text)
-        assert len(result) == 1
-        assert result[0] == "Only one problem"
-
-
-# ---------------------------------------------------------------------------
-# _parse_changed_section
-# ---------------------------------------------------------------------------
-
-
-class TestParseChangedSection:
-    def test_present(self) -> None:
-        assert _parse_changed_section("<changed_section>colors_and_palette</changed_section>") == "colors_and_palette"
-
-    def test_absent(self) -> None:
-        assert _parse_changed_section("No tag here") == ""
-
-    def test_whitespace_trimmed(self) -> None:
-        assert _parse_changed_section("<changed_section>  mood_atmosphere  </changed_section>") == "mood_atmosphere"
 
 
 # ---------------------------------------------------------------------------
