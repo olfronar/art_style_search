@@ -32,11 +32,36 @@ CAPTION_SYSTEM = (
     "- When dense specifics help, use compact comma-delimited visual tokens.\n"
     "- Use precise color names (e.g. 'burnt sienna', 'cerulean blue'), never vague terms like 'warm colors' or 'dark tones'. "
     "If you cannot name a specific color, describe it by hue, saturation, and value (e.g. 'a muted orange-brown, medium saturation, mid-value').\n"
-    "- Use art terminology appropriate to the medium (e.g. 'impasto strokes' for oil painting, 'wet-on-wet blending' for watercolor, "
-    "'cel shading' for animation). Match your vocabulary to what you see.\n"
     "- Quantify when possible: 'occupies roughly the left third' not 'on the left side'; '3-4 visible characters' not 'several characters'.\n"
     "- Describe spatial relationships with concrete positions, not just 'near' or 'behind'.\n"
-    "- Never speculate about artist intent or historical context. Describe only what is visible."
+    "- Never speculate about artist intent or historical context. Describe only what is visible.\n\n"
+    "Medium-class discipline:\n"
+    "- Classify the medium as EXACTLY ONE of:\n"
+    "    A. hand-drawn 2D — visible medium grain (paper tooth, watercolor bleeds), hand-made line with pressure variation\n"
+    "    B. vector / flat 2D — uniform solid fills, bezier curves, zero grain, hard silhouette edges\n"
+    "    C. stylized 3D CGI — rounded bevels, subdivision-smooth gradients, ambient occlusion in creases, rim light, matte plastic/fondant surfaces, no outlines\n"
+    "    D. photoreal 3D CGI — PBR materials, physically plausible lighting, DoF bokeh, subsurface scattering, film grain, HDRI reflections\n"
+    "    E. mixed / 2.5D — 2D assets with parallax, or 3D model with hand-painted textures\n"
+    "- Use class-appropriate vocabulary ONLY. Never say 'brushstrokes' for C/D. Never say 'ambient occlusion' or "
+    "'subsurface scattering' for A/B. Never say 'cel shading' for C unless you also see hand-drawn ink lines.\n"
+    "- Correct 3D/CGI vocabulary: bevel, subdivision-smooth, ambient occlusion (AO), rim light, specular highlight, "
+    "global illumination (GI), subsurface scattering (SSS), PBR roughness, matte plastic, fondant surface.\n"
+    "- Correct 2D vocabulary: impasto, pigment pooling, paper tooth, ink bleed, pencil hatching, watercolor wash, "
+    "halftone (hand-drawn); uniform fills, bezier curves, stepped gradient, hard silhouette (vector).\n\n"
+    "Character-proportion discipline:\n"
+    "- For every named character, emit head-heights-tall (numeric, e.g. '3.2 heads tall') AND an archetype phrase "
+    "(chibi / stylized-youth / heroic / realistic-adult / elongated).\n"
+    "- Describe silhouette primitives: dominant shape of torso (teardrop, cylinder, triangle), head (sphere, "
+    "squashed sphere, egg), each limb (cylinder, tapered wedge, stubby nub).\n"
+    "- Name observable body ratios when visible: head-to-shoulder width, torso-to-leg length, eye-width-to-face-width, "
+    "hand-to-face size. Do not invent unobservable numbers.\n\n"
+    "Way-of-drawing discipline:\n"
+    "- Describe the construction recipe at the top of [Art Style]: silhouette primitives, construction order "
+    "(head → torso → limbs → props), line policy (none / thin uniform / variable ink / painterly / crease-only), "
+    "shading layers in order (base → AO → midtones → rim → specular), edge softness, texture grain, and one "
+    "signature rendering quirk.\n\n"
+    "Forbidden terms (never use unless quoting a named art movement):\n"
+    "  cartoon, cartoonish, stylised, stylized (as bare adjective), beautiful, epic, whimsical, charming, cinematic."
 )
 
 CAPTION_PROMPT = (
@@ -98,6 +123,7 @@ async def caption_single(
     cache_dir: Path | None,
     semaphore: asyncio.Semaphore,
     cache_key: str = "",
+    thinking_level: str = "MINIMAL",
 ) -> Caption:
     """Caption a single image, optionally using disk cache.
 
@@ -133,6 +159,7 @@ async def caption_single(
                     config=genai_types.GenerateContentConfig(
                         system_instruction=CAPTION_SYSTEM,
                         max_output_tokens=_CAPTIONER_MAX_OUTPUT_TOKENS,
+                        thinking_config=genai_types.ThinkingConfig(thinking_level=thinking_level),
                     ),
                 ),
                 timeout=90,
@@ -194,6 +221,7 @@ async def caption_references(
     semaphore: asyncio.Semaphore,
     prompt: str | None = None,
     cache_key: str = "",
+    thinking_level: str = "MINIMAL",
 ) -> list[Caption]:
     """Caption all reference images concurrently with disk caching.
 
@@ -210,6 +238,7 @@ async def caption_references(
             cache_dir=cache_dir,
             semaphore=semaphore,
             cache_key=cache_key,
+            thinking_level=thinking_level,
         )
         for path in reference_paths
     ]

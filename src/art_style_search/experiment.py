@@ -39,7 +39,12 @@ _MIN_COMPLETION_RATE = 0.5
 def _merge_vision(ms: MetricScores, vs: VisionScores) -> MetricScores:
     """Merge per-image vision scores into a MetricScores instance."""
     return replace(
-        ms, vision_style=vs.style.score, vision_subject=vs.subject.score, vision_composition=vs.composition.score
+        ms,
+        vision_style=vs.style.score,
+        vision_subject=vs.subject.score,
+        vision_composition=vs.composition.score,
+        vision_medium=vs.medium.score,
+        vision_proportions=vs.proportions.score,
     )
 
 
@@ -342,6 +347,8 @@ def _median_metric_scores(replicate_scores: list[list[MetricScores]]) -> list[Me
                 vision_style=statistics.median(s.vision_style for s in scores_across_reps),
                 vision_subject=statistics.median(s.vision_subject for s in scores_across_reps),
                 vision_composition=statistics.median(s.vision_composition for s in scores_across_reps),
+                vision_medium=statistics.median(s.vision_medium for s in scores_across_reps),
+                vision_proportions=statistics.median(s.vision_proportions for s in scores_across_reps),
             )
         )
     return result

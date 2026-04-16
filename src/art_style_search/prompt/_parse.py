@@ -80,11 +80,14 @@ def _parse_template(text: str) -> PromptTemplate:
 # ---------------------------------------------------------------------------
 
 # Align validation bounds with the prompt contract for model-produced templates.
-_MIN_SECTIONS = 8
+# Reasoning prompts still target 2000-8000 words / 8-20 sections; the lowered floor
+# below is a safety net that lets laconic experiments (the user's explicit principle)
+# pass validation without changing what the reasoner is asked to produce.
+_MIN_SECTIONS = 5
 _MAX_SECTIONS = 20
 _MIN_CAPTION_LENGTH = 500
-_MAX_CAPTION_LENGTH = 10000
-_MIN_RENDERED_WORDS = 2000
+_MAX_CAPTION_LENGTH = 6000
+_MIN_RENDERED_WORDS = 1000
 _MAX_RENDERED_WORDS = 8000
 
 # Ordered anchor requirements for sections and caption sections.  Adding a third
@@ -97,6 +100,45 @@ _REQUIRED_CAPTION_ANCHORS: tuple[tuple[int, str], ...] = (
     (0, "Art Style"),
     (1, "Subject"),
 )
+
+# Sub-block markers enforced inside the two required anchor sections' `value` text.
+# These operationalize the "way of drawing" + "forced proportions" discipline in every
+# reasoner-produced template so captions carry the procedural/anatomy spine.
+_STYLE_FOUNDATION_DRAWING_MARKER = "how to draw:"
+_SUBJECT_ANCHOR_PROPORTION_MARKER = "proportions:"
+_SUBJECT_ANCHOR_ARCHETYPE_TOKENS: tuple[str, ...] = (
+    "heads tall",
+    "heads-tall",
+    "chibi",
+    "stylized-youth",
+    "heroic",
+    "realistic-adult",
+    "elongated",
+)
+
+
+def _check_anchor_sub_blocks(template: PromptTemplate) -> list[str]:
+    """Enforce mandatory sub-blocks inside style_foundation / subject_anchor values."""
+    errors: list[str] = []
+    by_name = {s.name: s.value for s in template.sections}
+    foundation = (by_name.get("style_foundation") or "").lower()
+    if foundation and _STYLE_FOUNDATION_DRAWING_MARKER not in foundation:
+        errors.append(
+            "style_foundation.value must contain a 'How to Draw:' sub-block "
+            "(silhouette primitives, construction order, line policy, shading layers, signature quirk)"
+        )
+    subject = (by_name.get("subject_anchor") or "").lower()
+    if subject:
+        if _SUBJECT_ANCHOR_PROPORTION_MARKER not in subject:
+            errors.append(
+                "subject_anchor.value must contain a 'Proportions:' sub-block (heads-tall numeric + archetype)"
+            )
+        if not any(token in subject for token in _SUBJECT_ANCHOR_ARCHETYPE_TOKENS):
+            errors.append(
+                "subject_anchor.value must include at least one proportion archetype token: "
+                f"{list(_SUBJECT_ANCHOR_ARCHETYPE_TOKENS)}"
+            )
+    return errors
 
 
 def _check_anchors(actual: list[str], required: tuple[tuple[int, str], ...], label: str) -> list[str]:
@@ -129,6 +171,7 @@ def validate_template(
 
     errors.extend(_check_anchors([s.name for s in template.sections], _REQUIRED_SECTION_ANCHORS, "section"))
     errors.extend(_check_anchors(list(template.caption_sections), _REQUIRED_CAPTION_ANCHORS, "caption section"))
+    errors.extend(_check_anchor_sub_blocks(template))
 
     n = len(template.sections)
     if n < _MIN_SECTIONS or n > _MAX_SECTIONS:

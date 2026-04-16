@@ -45,24 +45,33 @@ _VISION_SINGLE_PROMPT = (
     "missing or added elements.\n"
     "- MISS: significant failure. Examples: different subject identity; wrong dominant "
     "palette; unrecognizable spatial arrangement.\n\n"
-    "Respond in EXACTLY this format:\n"
+    "Respond in EXACTLY this format (emit ALL five tags):\n"
     '<style verdict="MATCH|PARTIAL|MISS">1-sentence explanation</style>\n'
     '<subject verdict="MATCH|PARTIAL|MISS">1-sentence explanation about character/subject fidelity</subject>\n'
     '<composition verdict="MATCH|PARTIAL|MISS">1-sentence explanation about spatial layout</composition>\n'
+    '<medium verdict="MATCH|PARTIAL|MISS">1-sentence explanation naming both medium classes (A/B/C/D/E)</medium>\n'
+    '<proportions verdict="MATCH|PARTIAL|MISS">1-sentence explanation about character/subject proportions (heads-tall, body ratios)</proportions>\n'
 )
 _VISION_SYSTEM = (
     "You are a careful visual judge comparing a reference image to a generated reproduction. "
     "Use the rubric exactly as given and return only the requested pseudo-XML tags.\n\n"
+    "Medium classes (reference the letter when judging style):\n"
+    "  A hand-drawn 2D   B vector/flat 2D   C stylized 3D CGI   D photoreal 3D   E mixed/2.5D\n\n"
     "Calibration examples:\n"
-    "- MATCH (style): 'Oil painting with visible impasto strokes matching the reference's thick paint application and muted earth-tone palette.'\n"
-    "- PARTIAL (style): 'Correct oil medium but smoother blending than reference, missing the rough brushwork texture.'\n"
-    "- MISS (style): 'Watercolor wash technique where the reference uses dense oil impasto — fundamentally different medium.'\n"
+    "- MATCH (style, 2D): 'Oil painting with visible impasto strokes matching the reference's thick paint application and muted earth-tone palette.'\n"
+    "- PARTIAL (style, 2D): 'Correct oil medium but smoother blending than reference, missing the rough brushwork texture.'\n"
+    "- MISS (style, 2D): 'Watercolor wash technique where the reference uses dense oil impasto — fundamentally different medium.'\n"
+    "- MATCH (style, 3D CGI): 'Both stylized 3D CGI (class C) with matching matte plastic surfaces, baked ambient occlusion in creases, and rim-light intensity on the focal face.'\n"
+    "- MISS (style, class mismatch): 'Reference is stylized 3D CGI (class C — bevels, AO, rim light) but the reproduction is hand-drawn 2D (class A) with visible pencil hatching and no volumetric gradients — fundamentally different medium class.'\n"
+    "- PARTIAL (style, 3D): 'Right CGI class (C) but specular highlights sharper than reference and subsurface scattering on skin is absent.'\n"
     "- MATCH (subject): 'Same fox character with identical orange fur, white chest markings, and alert ear position as the reference.'\n"
     "- PARTIAL (subject): 'Correct fox species but different pose (sitting vs reference's standing) and missing the satchel prop.'\n"
     "- MISS (subject): 'A deer where the reference shows a fox — different species entirely.'\n"
+    "- PARTIAL (subject, proportions): 'Correct identity and palette but reproduction uses realistic-adult proportions (~7.5 heads tall) where reference is chibi (~3 heads tall) — subject identity matches, proportions miss.'\n"
     "- MATCH (composition): 'Same three-quarter view with subject centered and forest background extending to both edges.'\n"
     "- PARTIAL (composition): 'Subject correctly centered but cropped tighter, cutting off the lower background detail.'\n"
-    "- MISS (composition): 'Close-up portrait where reference shows a wide establishing shot with extensive landscape.'"
+    "- MISS (composition): 'Close-up portrait where reference shows a wide establishing shot with extensive landscape.'\n\n"
+    "When judging style, a medium-class mismatch (e.g., reference is C but reproduction is A) is a MISS regardless of palette agreement."
 )
 _VISION_CAPTION_CHAR_LIMIT = 40000
 
@@ -243,6 +252,9 @@ def _vision_caption_excerpt(caption: str) -> str:
     return excerpt[:_VISION_CAPTION_CHAR_LIMIT]
 
 
+_VISION_DIMENSIONS: tuple[str, ...] = ("style", "subject", "composition", "medium", "proportions")
+
+
 def _parse_vision_verdicts(text: str) -> VisionScores:
     """Parse ternary verdicts from per-image Gemini vision comparison."""
     scores: dict[str, VisionDimensionScore] = {}
@@ -250,14 +262,19 @@ def _parse_vision_verdicts(text: str) -> VisionScores:
         dim_name = match.group(1)
         verdict = match.group(2).upper()
         assessment = match.group(3).strip()
-        if dim_name in ("style", "subject", "composition"):
+        if dim_name in _VISION_DIMENSIONS:
             score = VISION_VERDICT_MAP.get(verdict, VISION_VERDICT_DEFAULT)
             scores[dim_name] = VisionDimensionScore(dimension=dim_name, score=score, assessment=assessment)
 
+    def _dim(name: str) -> VisionDimensionScore:
+        return scores.get(name, VisionDimensionScore(name, VISION_VERDICT_DEFAULT, ""))
+
     return VisionScores(
-        style=scores.get("style", VisionDimensionScore("style", VISION_VERDICT_DEFAULT, "")),
-        subject=scores.get("subject", VisionDimensionScore("subject", VISION_VERDICT_DEFAULT, "")),
-        composition=scores.get("composition", VisionDimensionScore("composition", VISION_VERDICT_DEFAULT, "")),
+        style=_dim("style"),
+        subject=_dim("subject"),
+        composition=_dim("composition"),
+        medium=_dim("medium"),
+        proportions=_dim("proportions"),
     )
 
 
@@ -830,6 +847,8 @@ def aggregate(scores: list[MetricScores], *, completion_rate: float = 1.0) -> Ag
     v_style = [s.vision_style for s in genuine]
     v_subject = [s.vision_subject for s in genuine]
     v_composition = [s.vision_composition for s in genuine]
+    v_medium = [s.vision_medium for s in genuine]
+    v_proportions = [s.vision_proportions for s in genuine]
 
     return AggregatedMetrics(
         dreamsim_similarity_mean=_mean(dreamsim_vals),
@@ -848,6 +867,10 @@ def aggregate(scores: list[MetricScores], *, completion_rate: float = 1.0) -> Ag
         vision_subject_std=_std(v_subject),
         vision_composition=_mean(v_composition),
         vision_composition_std=_std(v_composition),
+        vision_medium=_mean(v_medium),
+        vision_medium_std=_std(v_medium),
+        vision_proportions=_mean(v_proportions),
+        vision_proportions_std=_std(v_proportions),
         completion_rate=completion_rate,
     )
 
@@ -861,6 +884,8 @@ _ZERO_SCORES = MetricScores(
     vision_style=0.0,
     vision_subject=0.0,
     vision_composition=0.0,
+    vision_medium=0.0,
+    vision_proportions=0.0,
     is_fallback=True,
 )
 

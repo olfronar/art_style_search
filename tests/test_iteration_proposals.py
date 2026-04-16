@@ -24,8 +24,20 @@ from art_style_search.workflow.iteration_proposals import _propose_iteration_exp
 def _valid_template() -> PromptTemplate:
     return PromptTemplate(
         sections=[
-            PromptSection(name="style_foundation", description="rules", value="Shared style rules. " * 130),
-            PromptSection(name="subject_anchor", description="subject", value="Subject rules. " * 130),
+            PromptSection(
+                name="style_foundation",
+                description="rules",
+                value=(
+                    "How to Draw: silhouette primitives, construction order, line policy, "
+                    "shading layers, signature quirk. "
+                )
+                + "Shared style rules. " * 125,
+            ),
+            PromptSection(
+                name="subject_anchor",
+                description="subject",
+                value=("Proportions: 3.2 heads tall, chibi archetype, stubby limbs. ") + "Subject rules. " * 125,
+            ),
             PromptSection(name="composition_blueprint", description="layout", value="Layout rules. " * 130),
             PromptSection(name="lighting_rendering", description="light", value="Lighting rules. " * 130),
             PromptSection(name="environment_staging", description="environment", value="Environment rules. " * 130),
@@ -41,8 +53,20 @@ def _valid_template() -> PromptTemplate:
 def _current_template_with_face_hands_pose() -> PromptTemplate:
     return PromptTemplate(
         sections=[
-            PromptSection(name="style_foundation", description="rules", value="Shared style rules. " * 130),
-            PromptSection(name="subject_anchor", description="subject", value="Subject rules. " * 130),
+            PromptSection(
+                name="style_foundation",
+                description="rules",
+                value=(
+                    "How to Draw: silhouette primitives, construction order, line policy, "
+                    "shading layers, signature quirk. "
+                )
+                + "Shared style rules. " * 125,
+            ),
+            PromptSection(
+                name="subject_anchor",
+                description="subject",
+                value=("Proportions: 3.2 heads tall, chibi archetype, stubby limbs. ") + "Subject rules. " * 125,
+            ),
             PromptSection(name="face_hands_pose", description="anatomy", value="Pose rules. " * 130),
             PromptSection(name="global_layout_grid", description="layout", value="Layout rules. " * 130),
             PromptSection(name="palette_temperature", description="palette", value="Palette rules. " * 130),

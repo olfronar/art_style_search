@@ -53,6 +53,8 @@ uv tool install pre-commit                           # Install the pre-commit CL
 - `OPENAI_API_KEY` - OpenAI API key for GPT-5.4 (when using `--reasoning-provider openai`)
 - `XAI_API_KEY` - xAI API key for Grok (when using `--reasoning-provider xai` and/or `--comparison-provider xai`)
 - `--reasoning-base-url` - Base URL for local/remote OpenAI-compatible server (when using `--reasoning-provider local`)
+- `--caption-thinking-level` - Gemini Pro captioner extended-thinking level (MINIMAL/LOW/MEDIUM/HIGH, default MINIMAL). MEDIUM materially improves medium-class + proportion precision at 2-3x latency.
+- `--generation-thinking-level` - Gemini Flash generator extended-thinking level (MINIMAL/LOW/MEDIUM/HIGH, default MINIMAL).
 
 ## Module Map
 
@@ -123,10 +125,12 @@ Penalties subtracted from the weighted sum (result floor-clamped to 0.0):
 
 ## Meta-prompt structural contract
 
-- Meta-prompt is 2000-8000 words with 8-20 sections. `[Art Style]` and `[Subject]` caption blocks are expected to run roughly 1000-2000 words each; ancillary caption sections typically 150-400 words.
+- Meta-prompt is 2000-8000 words with 8-20 sections (the reasoning-model target). Validator floor is **1000 words / 5 sections** — a laconic safety net so compact experiments can validate without requiring the reasoner to produce short output. `[Art Style]` and `[Subject]` caption blocks are expected to run roughly 1000-2000 words each; ancillary caption sections typically 150-400 words.
 - The FIRST section must be `style_foundation` (fixed style rules from StyleProfile) and the SECOND section must be `subject_anchor` (detailed subject-fidelity instructions). The first two caption output labels must be `[Art Style]` and `[Subject]`. These required anchors are enforced by `_REQUIRED_SECTION_ANCHORS` / `_REQUIRED_CAPTION_ANCHORS` tables in `prompt/_parse.py`.
+- `style_foundation.value` must contain a `How to Draw:` sub-block (silhouette primitives, construction order, line policy, shading layers, signature quirk) and `subject_anchor.value` must contain a `Proportions:` sub-block with at least one archetype token (`heads tall`, `chibi`, `heroic`, `realistic-adult`, `elongated`, …). Enforced by `_check_anchor_sub_blocks` in `prompt/_parse.py`. These two sub-blocks operationalize the "way of drawing" + forced proportions discipline the captioner carries into every caption.
 - Captions have labeled output sections (e.g. `[Art Style]`, `[Subject]`, `[Color Palette]`). Beyond the two required anchors, the set of section names, their ordering, and the caption length target are all part of the optimization surface — the reasoning model experiments with these via `caption_sections` and `caption_length_target` on `PromptTemplate`. Before handing the caption to the generator, `build_generation_prompt` in `caption_sections.py` reorders the blocks so `[Subject]` leads, then `[Art Style]` as the style anchor, then the remaining sections.
 - Style consistency is measured via Jaccard word-overlap of [Art Style] blocks across captions and included in `composite_score` (4% weight).
+- Medium-class discipline: the captioner classifies every image as one of five classes (A hand-drawn 2D, B vector/flat 2D, C stylized 3D CGI, D photoreal 3D, E mixed/2.5D) and uses class-appropriate vocabulary. Class cues are seeded by `_GEMINI_ANALYSIS_PROMPT` (`analyze.py`) and enforced in `CAPTION_SYSTEM` (`caption.py`); the vision judge uses matching calibration examples in `_VISION_SYSTEM` (`evaluate.py`). `CATEGORY_SYNONYMS` (`taxonomy.py`) carries `rendering_dimensionality` and `proportions` categories so the optimizer can target these failures directly.
 
 ## Code Style
 

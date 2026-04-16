@@ -68,6 +68,8 @@ class TestToDict:
             "vision_style",
             "vision_subject",
             "vision_composition",
+            "vision_medium",
+            "vision_proportions",
             "is_fallback",
         }
         for k, v in d.items():

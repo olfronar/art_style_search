@@ -120,6 +120,8 @@ def _build_manifest(config: Config) -> RunManifest:
             "aspect_ratio": config.aspect_ratio,
             "num_fixed_refs": config.num_fixed_refs,
             "protocol": config.protocol,
+            "caption_thinking_level": config.caption_thinking_level,
+            "generation_thinking_level": config.generation_thinking_level,
         },
         model_names={
             "caption_model": config.caption_model,
@@ -236,12 +238,18 @@ async def _setup_run_context(config: Config) -> RunContext:
     registry = await asyncio.to_thread(ModelRegistry.load_all)
 
     services = RunServices(
-        captioning=CaptioningService(client=gemini_client, model=config.caption_model, semaphore=gemini_semaphore),
+        captioning=CaptioningService(
+            client=gemini_client,
+            model=config.caption_model,
+            semaphore=gemini_semaphore,
+            thinking_level=config.caption_thinking_level,
+        ),
         generation=GenerationService(
             client=gemini_client,
             model=config.generator_model,
             semaphore=gemini_semaphore,
             aspect_ratio=config.aspect_ratio,
+            thinking_level=config.generation_thinking_level,
         ),
         evaluation=EvaluationService(
             gemini_client=gemini_client,

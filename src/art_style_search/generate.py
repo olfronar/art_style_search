@@ -19,7 +19,9 @@ _REQUEST_TIMEOUT = 180  # seconds — per-request timeout to release semaphore o
 _GENERATION_SYSTEM = (
     "You generate a single image from the supplied prompt. "
     "Do not add watermarks, signatures, borders, captions, or other text overlays. "
-    "Match the described subject, style, and composition as faithfully as possible."
+    "Match the described subject, style, and composition as faithfully as possible. "
+    "If the prompt specifies proportion ratios (e.g. '3.2 heads tall', 'head-to-shoulder 1.8x', "
+    "'chibi proportions'), honor them literally; do not drift toward default realistic anatomy."
 )
 
 
@@ -48,6 +50,7 @@ async def generate_single(
     model: str,
     semaphore: asyncio.Semaphore,
     negative_prompt: str | None = None,
+    thinking_level: str = "MINIMAL",
 ) -> Path:
     """Generate a single image with semaphore gating and exponential backoff."""
     # Disk cache: skip API call if image already exists (e.g. crash+resume)
@@ -70,7 +73,7 @@ async def generate_single(
                     config=genai_types.GenerateContentConfig(
                         system_instruction=system_instruction,
                         response_modalities=["IMAGE"],
-                        thinking_config=genai_types.ThinkingConfig(thinking_level="MINIMAL"),
+                        thinking_config=genai_types.ThinkingConfig(thinking_level=thinking_level),
                         image_config=genai_types.ImageConfig(
                             aspect_ratio=aspect_ratio,
                             image_size="1K",

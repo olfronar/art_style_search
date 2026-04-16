@@ -282,6 +282,10 @@ class TestAggregatedMetricsSummaryDict:
             "vision_subject_std",
             "vision_composition",
             "vision_composition_std",
+            "vision_medium",
+            "vision_medium_std",
+            "vision_proportions",
+            "vision_proportions_std",
             "completion_rate",
             "compliance_topic_coverage",
             "compliance_marker_coverage",
@@ -321,7 +325,7 @@ class TestAggregatedMetricsSummaryDict:
         )
         assert isinstance(m.summary_dict(), dict)
 
-    def test_exactly_twenty_four_entries(self) -> None:
+    def test_expected_entry_count(self) -> None:
         m = AggregatedMetrics(
             dreamsim_similarity_mean=0.0,
             dreamsim_similarity_std=0.0,
@@ -330,7 +334,9 @@ class TestAggregatedMetricsSummaryDict:
             aesthetics_score_mean=0.0,
             aesthetics_score_std=0.0,
         )
-        assert len(m.summary_dict()) == 25
+        # 25 base metrics + 4 diagnostic vision dims (vision_medium + vision_medium_std
+        # + vision_proportions + vision_proportions_std).
+        assert len(m.summary_dict()) == 29
 
 
 # -- ConvergenceReason --------------------------------------------------------

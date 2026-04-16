@@ -62,6 +62,10 @@ class Config:
     comparison_model: str = ""
     raw_proposals: int = 9
 
+    # Gemini extended-thinking levels ("MINIMAL" | "LOW" | "MEDIUM" | "HIGH")
+    caption_thinking_level: str = "MINIMAL"
+    generation_thinking_level: str = "MINIMAL"
+
 
 def parse_args(argv: list[str] | None = None) -> Config:
     """Parse CLI arguments into a Config."""
@@ -152,6 +156,24 @@ def parse_args(argv: list[str] | None = None) -> Config:
     conc = parser.add_argument_group("Concurrency")
     conc.add_argument("--gemini-concurrency", type=int, default=50, help="Max concurrent Gemini API calls")
     conc.add_argument("--eval-concurrency", type=int, default=4, help="Max concurrent eval threads")
+
+    # Gemini extended-thinking (trades latency + tokens for quality)
+    thinking = parser.add_argument_group("Gemini Thinking")
+    thinking.add_argument(
+        "--caption-thinking-level",
+        choices=["MINIMAL", "LOW", "MEDIUM", "HIGH"],
+        default="MINIMAL",
+        help=(
+            "Gemini Pro captioner extended-thinking level (default MINIMAL — current behavior). "
+            "MEDIUM materially improves medium-class + proportion precision at 2-3x latency."
+        ),
+    )
+    thinking.add_argument(
+        "--generation-thinking-level",
+        choices=["MINIMAL", "LOW", "MEDIUM", "HIGH"],
+        default="MINIMAL",
+        help="Gemini Flash image-generation extended-thinking level (default MINIMAL).",
+    )
 
     # API keys
     keys = parser.add_argument_group("API Keys")
@@ -251,4 +273,6 @@ def _validate_and_build_config(args: argparse.Namespace, parser: argparse.Argume
         comparison_provider=comparison_provider,
         comparison_model=comparison_model,
         raw_proposals=args.raw_proposals,
+        caption_thinking_level=args.caption_thinking_level,
+        generation_thinking_level=args.generation_thinking_level,
     )

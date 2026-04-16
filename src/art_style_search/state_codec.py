@@ -70,6 +70,8 @@ def _metric_scores_from_dict(d: dict[str, Any]) -> MetricScores:
         vision_style=d.get("vision_style", 0.5),
         vision_subject=d.get("vision_subject", 0.5),
         vision_composition=d.get("vision_composition", 0.5),
+        vision_medium=d.get("vision_medium", 0.5),
+        vision_proportions=d.get("vision_proportions", 0.5),
         is_fallback=d.get("is_fallback", False),
     )
 
@@ -93,6 +95,10 @@ def _aggregated_metrics_from_dict(d: dict[str, Any]) -> AggregatedMetrics:
         vision_style_std=d.get("vision_style_std", 0.0),
         vision_subject_std=d.get("vision_subject_std", 0.0),
         vision_composition_std=d.get("vision_composition_std", 0.0),
+        vision_medium=d.get("vision_medium", 0.5),
+        vision_medium_std=d.get("vision_medium_std", 0.0),
+        vision_proportions=d.get("vision_proportions", 0.5),
+        vision_proportions_std=d.get("vision_proportions_std", 0.0),
         completion_rate=d.get("completion_rate", 1.0),
         compliance_topic_coverage=d.get("compliance_topic_coverage", 1.0),
         compliance_marker_coverage=d.get("compliance_marker_coverage", 1.0),

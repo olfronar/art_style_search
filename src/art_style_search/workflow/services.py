@@ -27,6 +27,7 @@ class CaptioningService:
     client: genai.Client
     model: str
     semaphore: asyncio.Semaphore
+    thinking_level: str = "MINIMAL"
 
     async def caption_single(
         self,
@@ -44,6 +45,7 @@ class CaptioningService:
             cache_dir=cache_dir,
             semaphore=self.semaphore,
             cache_key=cache_key,
+            thinking_level=self.thinking_level,
         )
 
     async def caption_references(
@@ -62,6 +64,7 @@ class CaptioningService:
             semaphore=self.semaphore,
             prompt=prompt,
             cache_key=cache_key,
+            thinking_level=self.thinking_level,
         )
 
 
@@ -73,6 +76,7 @@ class GenerationService:
     model: str
     semaphore: asyncio.Semaphore
     aspect_ratio: str
+    thinking_level: str = "MINIMAL"
 
     async def generate_single(
         self,
@@ -91,6 +95,7 @@ class GenerationService:
             model=self.model,
             semaphore=self.semaphore,
             negative_prompt=negative_prompt,
+            thinking_level=self.thinking_level,
         )
 
 

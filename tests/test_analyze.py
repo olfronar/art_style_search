@@ -72,8 +72,20 @@ class TestStyleCache:
     def _make_valid_template() -> PromptTemplate:
         return PromptTemplate(
             sections=[
-                PromptSection(name="style_foundation", description="rules", value="Shared rules. " * 130),
-                PromptSection(name="subject_anchor", description="subject rules", value="Subject guidance. " * 130),
+                PromptSection(
+                    name="style_foundation",
+                    description="rules",
+                    value=(
+                        "How to Draw: silhouette primitives, construction order, line policy, "
+                        "shading layers, signature quirk. "
+                    )
+                    + "Shared rules. " * 125,
+                ),
+                PromptSection(
+                    name="subject_anchor",
+                    description="subject rules",
+                    value=("Proportions: 3.2 heads tall, chibi archetype, stubby limbs. ") + "Subject guidance. " * 125,
+                ),
                 PromptSection(name="color_palette", description="colors", value="Palette guidance. " * 130),
                 PromptSection(name="composition", description="layout", value="Composition guidance. " * 130),
                 PromptSection(name="technique", description="medium", value="Technique guidance. " * 130),

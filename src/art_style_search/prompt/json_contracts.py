@@ -402,18 +402,29 @@ def _schema_word_block(token: str, *, words: int = 260) -> str:
     return " ".join([token] * words)
 
 
+_STYLE_FOUNDATION_DRAWING_PREFIX = (
+    "How to Draw: silhouette primitives, construction order (head -> torso -> limbs -> props), "
+    "line policy, shading layers (base -> AO -> midtones -> rim -> specular), edge softness, "
+    "texture grain, signature quirk. "
+)
+_SUBJECT_ANCHOR_PROPORTIONS_PREFIX = (
+    "Proportions: N.N heads tall, archetype (chibi / stylized-youth / heroic / realistic-adult / "
+    "elongated), eye-size bucket, limb-proportion bucket. "
+)
+
+
 def _schema_template_payload() -> dict[str, Any]:
     return {
         "sections": [
             {
                 "name": "style_foundation",
                 "description": "core style rules",
-                "value": _schema_word_block("style_dna"),
+                "value": _STYLE_FOUNDATION_DRAWING_PREFIX + _schema_word_block("style_dna", words=240),
             },
             {
                 "name": "subject_anchor",
                 "description": "subject fidelity instructions",
-                "value": _schema_word_block("subject_lock"),
+                "value": _SUBJECT_ANCHOR_PROPORTIONS_PREFIX + _schema_word_block("subject_lock", words=240),
             },
             {
                 "name": "color_palette",

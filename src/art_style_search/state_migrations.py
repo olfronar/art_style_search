@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 _SCHEMA_VERSION = (
-    4  # v1: dino_similarity era, v2: vision+KB+rigorous, v3: changed_section+target_category, v4: direction metadata
+    # v1: dino_similarity era, v2: vision+KB+rigorous, v3: changed_section+target_category, v4: direction metadata,
+    # v5: medium-class + proportions prompt contract (invalidates cached style analyses, adds diagnostic vision dims)
+    5
 )
 _ITERATION_LOG_SCHEMA_VERSION = 1
 _MANIFEST_SCHEMA_VERSION = 3
@@ -15,6 +17,9 @@ _PROMOTION_LOG_SCHEMA_VERSION = 1
 def _migrate_metric_scores_payload(data: dict[str, Any]) -> dict[str, Any]:
     if "dreamsim_similarity" not in data and "dino_similarity" in data:
         data["dreamsim_similarity"] = data.pop("dino_similarity")
+    # v5: diagnostic per-image vision dims
+    data.setdefault("vision_medium", 0.5)
+    data.setdefault("vision_proportions", 0.5)
     return data
 
 
@@ -23,6 +28,11 @@ def _migrate_aggregated_metrics_payload(data: dict[str, Any]) -> dict[str, Any]:
         data["dreamsim_similarity_mean"] = data.pop("dino_similarity_mean")
     if "dreamsim_similarity_std" not in data and "dino_similarity_std" in data:
         data["dreamsim_similarity_std"] = data.pop("dino_similarity_std")
+    # v5: diagnostic vision dims (neutral defaults preserve pre-upgrade semantics)
+    data.setdefault("vision_medium", 0.5)
+    data.setdefault("vision_medium_std", 0.0)
+    data.setdefault("vision_proportions", 0.5)
+    data.setdefault("vision_proportions_std", 0.0)
     return data
 
 

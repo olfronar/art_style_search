@@ -40,6 +40,9 @@ class MetricScores:
     vision_style: float = 0.5  # higher = better, ternary: MATCH=1.0, PARTIAL=0.5, MISS=0.0
     vision_subject: float = 0.5  # higher = better, ternary: MATCH=1.0, PARTIAL=0.5, MISS=0.0
     vision_composition: float = 0.5  # higher = better, ternary: MATCH=1.0, PARTIAL=0.5, MISS=0.0
+    # Diagnostic-only vision dims (populated by the judge; NOT yet in composite_score).
+    vision_medium: float = 0.5  # higher = better, ternary agreement on 2D/3D/CGI medium class
+    vision_proportions: float = 0.5  # higher = better, ternary agreement on character head-heights + archetype
     is_fallback: bool = False  # True for zero-score sentinels substituted on evaluation failure
 
 
@@ -65,11 +68,18 @@ class VisionDimensionScore:
 
 @dataclass(frozen=True)
 class VisionScores:
-    """Structured per-image scores from Gemini vision comparison."""
+    """Structured per-image scores from Gemini vision comparison.
+
+    `medium` and `proportions` are diagnostic dimensions emitted by the judge
+    alongside style/subject/composition. They are NOT yet folded into composite_score —
+    signal quality is measured first, then weighted in a follow-up.
+    """
 
     style: VisionDimensionScore
     subject: VisionDimensionScore
     composition: VisionDimensionScore
+    medium: VisionDimensionScore
+    proportions: VisionDimensionScore
 
     @classmethod
     def default(cls) -> VisionScores:
@@ -78,6 +88,8 @@ class VisionScores:
             style=VisionDimensionScore("style", 0.5, ""),
             subject=VisionDimensionScore("subject", 0.5, ""),
             composition=VisionDimensionScore("composition", 0.5, ""),
+            medium=VisionDimensionScore("medium", 0.5, ""),
+            proportions=VisionDimensionScore("proportions", 0.5, ""),
         )
 
 
@@ -142,6 +154,12 @@ class AggregatedMetrics:
     vision_subject_std: float = 0.0
     vision_composition: float = 0.5
     vision_composition_std: float = 0.0
+    # Diagnostic vision dims — emitted by the judge, surfaced to reasoning model + report,
+    # but NOT yet weighted into composite_score (see plan: gated on signal-quality smoke test).
+    vision_medium: float = 0.5
+    vision_medium_std: float = 0.0
+    vision_proportions: float = 0.5
+    vision_proportions_std: float = 0.0
 
     # Structured caption-compliance signals [0, 1]
     compliance_topic_coverage: float = 1.0

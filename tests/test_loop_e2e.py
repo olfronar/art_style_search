@@ -167,6 +167,8 @@ def _make_vision_scores() -> VisionScores:
         style=VisionDimensionScore("style", 0.5, "partial match"),
         subject=VisionDimensionScore("subject", 0.5, "partial match"),
         composition=VisionDimensionScore("composition", 0.5, "partial match"),
+        medium=VisionDimensionScore("medium", 0.5, "partial match"),
+        proportions=VisionDimensionScore("proportions", 0.5, "partial match"),
     )
 
 

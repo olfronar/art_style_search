@@ -201,6 +201,8 @@ class TestReplicateExperiment:
                         style=VisionDimensionScore("style", 1.0, ""),
                         subject=VisionDimensionScore("subject", 1.0, ""),
                         composition=VisionDimensionScore("composition", 1.0, ""),
+                        medium=VisionDimensionScore("medium", 1.0, ""),
+                        proportions=VisionDimensionScore("proportions", 1.0, ""),
                     )
                     for _ in pairs
                 ]

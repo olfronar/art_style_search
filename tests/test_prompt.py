@@ -220,8 +220,19 @@ class TestFormatMetrics:
 def _make_valid_template() -> PromptTemplate:
     """Build a minimal valid template for validation tests."""
     sections = [
-        PromptSection(name="style_foundation", description="Style rules", value="Foundation rules. " * 130),
-        PromptSection(name="subject_anchor", description="Subject rules", value="Subject rules. " * 130),
+        PromptSection(
+            name="style_foundation",
+            description="Style rules",
+            value=(
+                "How to Draw: silhouette primitives, construction order, line policy, shading layers, signature quirk. "
+            )
+            + "Foundation rules. " * 125,
+        ),
+        PromptSection(
+            name="subject_anchor",
+            description="Subject rules",
+            value=("Proportions: 3.2 heads tall, chibi archetype, stubby limbs. ") + "Subject rules. " * 125,
+        ),
         PromptSection(name="color_palette", description="Colors", value="Color rules. " * 130),
         PromptSection(name="composition", description="Layout", value="Comp rules. " * 130),
         PromptSection(name="technique", description="Technique", value="Tech rules. " * 130),
@@ -268,7 +279,7 @@ class TestValidateTemplate:
 
     def test_too_few_sections(self) -> None:
         t = _make_valid_template()
-        t.sections = t.sections[:7]
+        t.sections = t.sections[:4]
         errors = validate_template(t)
         assert any("Section count" in e for e in errors)
 
