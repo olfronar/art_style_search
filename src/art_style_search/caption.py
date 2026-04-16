@@ -147,6 +147,16 @@ async def caption_single(
     # Cache miss — call Gemini with retry on transient errors
     logger.info("Captioning %s via %s", image_path.name, model)
 
+    # Gemini 3.1 Pro rejects thinking_level="MINIMAL" (only LOW/MEDIUM/HIGH are valid).
+    # Leave thinking_config unset for MINIMAL — restores the pre-flag behavior and
+    # lets the model pick its own default thinking depth.
+    config_kwargs: dict[str, object] = {
+        "system_instruction": CAPTION_SYSTEM,
+        "max_output_tokens": _CAPTIONER_MAX_OUTPUT_TOKENS,
+    }
+    if thinking_level != "MINIMAL":
+        config_kwargs["thinking_config"] = genai_types.ThinkingConfig(thinking_level=thinking_level)
+
     async def _call() -> str:
         async with semaphore:
             resp = await asyncio.wait_for(
@@ -156,11 +166,7 @@ async def caption_single(
                         image_to_gemini_part(image_path),
                         prompt,
                     ],
-                    config=genai_types.GenerateContentConfig(
-                        system_instruction=CAPTION_SYSTEM,
-                        max_output_tokens=_CAPTIONER_MAX_OUTPUT_TOKENS,
-                        thinking_config=genai_types.ThinkingConfig(thinking_level=thinking_level),
-                    ),
+                    config=genai_types.GenerateContentConfig(**config_kwargs),
                 ),
                 timeout=90,
             )
