@@ -258,6 +258,7 @@ async def run_experiment(
         section_names,
         captions,
         caption_sections=template.caption_sections,
+        meta_prompt=meta_prompt,
     )
 
     # Merge vision scores in original order (aligned with pairs/captions/paths)
@@ -277,6 +278,7 @@ async def run_experiment(
         section_ordering_rate=compliance_stats.section_ordering_rate,
         section_balance_rate=compliance_stats.section_balance_rate,
         subject_specificity_rate=compliance_stats.subject_specificity_rate,
+        style_boilerplate_purity=compliance_stats.style_boilerplate_purity,
         requested_ref_count=config.num_fixed_refs,
         actual_ref_count=n_attempted,
     )
@@ -424,6 +426,7 @@ async def replicate_experiment(
             [s.name for s in template.sections],
             captions,
             caption_sections=template.caption_sections,
+            meta_prompt=meta_prompt,
         )
         return scores, replace(
             aggregated,
@@ -433,6 +436,7 @@ async def replicate_experiment(
             section_ordering_rate=compliance_stats.section_ordering_rate,
             section_balance_rate=compliance_stats.section_balance_rate,
             subject_specificity_rate=compliance_stats.subject_specificity_rate,
+            style_boilerplate_purity=compliance_stats.style_boilerplate_purity,
             requested_ref_count=config.num_fixed_refs,
             actual_ref_count=len(fixed_refs),
         )
@@ -465,6 +469,7 @@ async def replicate_experiment(
         section_ordering_rate=statistics.median(agg.section_ordering_rate for agg in all_replicate_agg),
         section_balance_rate=statistics.median(agg.section_balance_rate for agg in all_replicate_agg),
         subject_specificity_rate=statistics.median(agg.subject_specificity_rate for agg in all_replicate_agg),
+        style_boilerplate_purity=statistics.median(agg.style_boilerplate_purity for agg in all_replicate_agg),
         requested_ref_count=config.num_fixed_refs,
         actual_ref_count=len(fixed_refs),
     )

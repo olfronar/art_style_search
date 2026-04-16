@@ -22,8 +22,9 @@ from openai import AsyncOpenAI
 
 from art_style_search.config import Config
 from art_style_search.models import ModelRegistry
-from art_style_search.scoring import per_image_composite
+from art_style_search.scoring import composite_score, per_image_composite
 from art_style_search.state import load_manifest, save_manifest, save_state
+from art_style_search.state_codec import _Encoder, to_dict
 from art_style_search.types import IterationResult, LoopState, RunManifest
 from art_style_search.utils import IMAGE_EXTENSIONS, ReasoningClient
 from art_style_search.workflow.services import (
@@ -60,6 +61,48 @@ def _save_best_prompt(state: LoopState, log_dir: Path) -> None:
     prompt_file = log_dir / "best_prompt.txt"
     prompt_file.write_text(state.global_best_prompt, encoding="utf-8")
     logger.info("Best meta-prompt saved to %s", prompt_file)
+
+
+def _save_best_prompt_md(state: LoopState, log_dir: Path, manifest: RunManifest | None) -> None:
+    """Write the best meta-prompt as structured markdown with a YAML front-matter header.
+
+    The body is ``state.global_best_prompt`` — already markdown-formatted by
+    ``PromptTemplate.render()``. The front-matter captures run provenance
+    (iteration, composite score, seed, git SHA, protocol, timestamp) so the
+    file is readable standalone and diffable across iterations.
+    """
+    if not state.global_best_prompt:
+        return
+    front_matter: list[str] = ["---"]
+    front_matter.append(f"iteration: {state.iteration}")
+    if state.global_best_metrics is not None:
+        front_matter.append(f"composite_score: {composite_score(state.global_best_metrics):.4f}")
+    if manifest is not None:
+        front_matter.append(f"seed: {manifest.seed}")
+        front_matter.append(f"protocol: {manifest.protocol_version}")
+        if manifest.git_sha:
+            front_matter.append(f"git_sha: {manifest.git_sha}")
+        front_matter.append(f"timestamp_utc: {manifest.timestamp_utc}")
+    front_matter.append("---")
+    prompt_file = log_dir / "best_prompt.md"
+    prompt_file.write_text("\n".join(front_matter) + "\n\n" + state.global_best_prompt, encoding="utf-8")
+    logger.info("Best meta-prompt (markdown) saved to %s", prompt_file)
+
+
+def _save_best_prompt_json(state: LoopState, log_dir: Path) -> None:
+    """Write the structured best template as JSON so it can be re-ingested as a seed."""
+    if not state.best_template.sections:
+        return
+    payload = {
+        "template": to_dict(state.best_template),
+        "iteration": state.iteration,
+        "composite_score": (
+            composite_score(state.global_best_metrics) if state.global_best_metrics is not None else None
+        ),
+    }
+    prompt_file = log_dir / "best_prompt.json"
+    prompt_file.write_text(json.dumps(payload, cls=_Encoder, indent=2, ensure_ascii=False), encoding="utf-8")
+    logger.info("Best template (json) saved to %s", prompt_file)
 
 
 def _log_experiment_results(results: list[IterationResult], log_dir: Path, save_iteration_log) -> None:
@@ -317,6 +360,9 @@ def _finalize_run(state: LoopState, ctx: RunContext) -> LoopState:
     """Persist final state, write best prompt, and log the summary banner."""
     save_state(state, ctx.config.state_file)
     _save_best_prompt(state, ctx.config.log_dir)
+    manifest = load_manifest(ctx.config.run_dir / "run_manifest.json")
+    _save_best_prompt_md(state, ctx.config.log_dir, manifest)
+    _save_best_prompt_json(state, ctx.config.log_dir)
     _write_holdout_summary(state, ctx)
     if ctx.config.protocol == "rigorous" and state.silent_refs:
         holdout_path = ctx.config.run_dir / "holdout_summary.json"

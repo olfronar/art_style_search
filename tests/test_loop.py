@@ -30,6 +30,8 @@ from art_style_search.workflow.context import (
     _discover_images,
     _finalize_run,
     _sample,
+    _save_best_prompt_json,
+    _save_best_prompt_md,
     _setup_run_context,
     _split_information_barrier,
 )
@@ -91,6 +93,99 @@ class TestDiscoverImages:
 
         result = _discover_images(tmp_path)
         assert len(result) == 2
+
+
+class TestSaveBestPromptArtefacts:
+    """Both best_prompt.md and best_prompt.json writers should be crash-safe and content-rich."""
+
+    def test_md_writer_includes_front_matter_and_body(self, tmp_path: Path) -> None:
+        state = make_loop_state(global_best_metrics=make_aggregated_metrics(seed=0.5))
+        state.iteration = 7
+        template = make_prompt_template(n_sections=3)
+        state.best_template = template
+        state.global_best_prompt = template.render()
+        from art_style_search.types import RunManifest
+
+        manifest = RunManifest(
+            protocol_version="classic",
+            seed=42,
+            cli_args={},
+            model_names={},
+            reasoning_provider="anthropic",
+            comparison_provider="gemini",
+            git_sha="abc1234",
+            python_version="3.12",
+            platform="darwin",
+            timestamp_utc="2026-04-16T00:00:00+00:00",
+            reference_image_hashes={},
+            num_fixed_refs=20,
+            discovered_reference_count=20,
+            uv_lock_hash=None,
+        )
+
+        _save_best_prompt_md(state, tmp_path, manifest)
+
+        md_path = tmp_path / "best_prompt.md"
+        assert md_path.exists()
+        content = md_path.read_text()
+        # Front-matter
+        assert content.startswith("---\n")
+        assert "iteration: 7" in content
+        assert "composite_score:" in content
+        assert "seed: 42" in content
+        assert "git_sha: abc1234" in content
+        assert "protocol: classic" in content
+        # Body — rendered template has markdown headers and section content
+        assert "## medium" in content or "## palette" in content or "## composition" in content
+
+    def test_md_writer_skips_when_prompt_empty(self, tmp_path: Path) -> None:
+        state = make_loop_state()
+        state.global_best_prompt = ""
+
+        _save_best_prompt_md(state, tmp_path, None)
+
+        assert not (tmp_path / "best_prompt.md").exists()
+
+    def test_md_writer_handles_missing_manifest(self, tmp_path: Path) -> None:
+        state = make_loop_state(global_best_metrics=make_aggregated_metrics())
+        state.global_best_prompt = "## style\n\nflat body\n"
+
+        _save_best_prompt_md(state, tmp_path, None)
+
+        md_path = tmp_path / "best_prompt.md"
+        assert md_path.exists()
+        content = md_path.read_text()
+        assert "iteration:" in content
+        # No manifest → no seed line
+        assert "seed:" not in content
+
+    def test_json_writer_round_trips_via_prompt_template_from_dict(self, tmp_path: Path) -> None:
+        from art_style_search.state import prompt_template_from_dict
+
+        state = make_loop_state(global_best_metrics=make_aggregated_metrics(seed=0.5))
+        state.iteration = 3
+        state.best_template = make_prompt_template(n_sections=3)
+
+        _save_best_prompt_json(state, tmp_path)
+
+        json_path = tmp_path / "best_prompt.json"
+        assert json_path.exists()
+        payload = json.loads(json_path.read_text())
+        assert payload["iteration"] == 3
+        assert payload["composite_score"] is not None
+        assert isinstance(payload["template"], dict)
+        # Round-trip check
+        template = prompt_template_from_dict(payload["template"])
+        assert len(template.sections) == 3
+        assert template.sections[0].name == state.best_template.sections[0].name
+
+    def test_json_writer_skips_when_template_empty(self, tmp_path: Path) -> None:
+        state = make_loop_state()
+        state.best_template = PromptTemplate(sections=[])
+
+        _save_best_prompt_json(state, tmp_path)
+
+        assert not (tmp_path / "best_prompt.json").exists()
 
 
 class TestRunAccounting:

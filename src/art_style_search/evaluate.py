@@ -645,16 +645,62 @@ def _subject_specificity_from_parsed(parsed: dict[str, str]) -> str:
     return "OK"
 
 
+_STYLE_PURITY_TRIGRAM_SAMPLE_TOKENS = 500
+_STYLE_PURITY_MIN_CAPTION_TOKENS = 20
+
+
+def compute_prompt_copying_score(caption_text: str, meta_prompt: str) -> float:
+    """Return style-DNA purity of the caption's [Art Style] block vs the meta-prompt.
+
+    Returns a value in [0, 1]:
+    - 1.0 = the [Art Style] block is paraphrased in the captioner's own voice
+      (low overlap with the meta-prompt).
+    - 0.0 = the [Art Style] block is a near-verbatim copy of meta-prompt sentences
+      (high trigram overlap).
+
+    Uses token-trigram Jaccard on the first
+    ``_STYLE_PURITY_TRIGRAM_SAMPLE_TOKENS`` tokens of the [Art Style] block.
+    Short blocks (<20 tokens) or missing [Art Style] return 1.0 (no signal,
+    don't penalize). Short/empty meta-prompts also return 1.0.
+    """
+    if not caption_text or not meta_prompt:
+        return 1.0
+    parsed = parse_labeled_sections(caption_text)
+    art_style = parsed.get("Art Style", "").strip()
+    if not art_style:
+        return 1.0
+    caption_tokens = art_style.split()[:_STYLE_PURITY_TRIGRAM_SAMPLE_TOKENS]
+    if len(caption_tokens) < _STYLE_PURITY_MIN_CAPTION_TOKENS:
+        return 1.0
+    caption_trigrams = {tuple(caption_tokens[i : i + 3]) for i in range(len(caption_tokens) - 2)}
+    if not caption_trigrams:
+        return 1.0
+    meta_tokens = meta_prompt.split()
+    if len(meta_tokens) < 3:
+        return 1.0
+    meta_trigrams = {tuple(meta_tokens[i : i + 3]) for i in range(len(meta_tokens) - 2)}
+    if not meta_trigrams:
+        return 1.0
+    overlap = len(caption_trigrams & meta_trigrams) / len(caption_trigrams)
+    return max(0.0, min(1.0, 1.0 - overlap))
+
+
 def compute_caption_compliance(
     section_names: list[str],
     captions: list[Caption],
     caption_sections: list[str] | None = None,
+    meta_prompt: str | None = None,
 ) -> tuple[CaptionComplianceStats, str]:
     """Parse every caption once and produce both structured stats and prose.
 
     Captions are parsed a single time via ``parse_labeled_sections`` and the
     ordering / length / subject checks all share that result.  Returns
     ``(stats, prose)`` — callers wanting only one piece discard the other.
+
+    When *meta_prompt* is provided, the structured stats also include
+    ``style_boilerplate_purity`` — the mean per-caption
+    :func:`compute_prompt_copying_score` — to flag captioners that copy the
+    meta-prompt's style rules verbatim instead of observing the image.
     """
     has_subject = bool(caption_sections and "Subject" in caption_sections)
     if not captions or not section_names:
@@ -711,12 +757,19 @@ def compute_caption_compliance(
 
     subject_specificity_rate = sum(1 for r in subject_results if r == "OK") / total if has_subject else 1.0
 
+    if meta_prompt:
+        purity_scores = [compute_prompt_copying_score(c.text, meta_prompt) for c in captions]
+        style_boilerplate_purity = sum(purity_scores) / len(purity_scores)
+    else:
+        style_boilerplate_purity = 1.0
+
     stats = CaptionComplianceStats(
         section_topic_coverage=topic_coverage,
         section_marker_coverage=marker_coverage,
         section_ordering_rate=ordering_rate,
         section_balance_rate=balance_rate,
         subject_specificity_rate=subject_specificity_rate,
+        style_boilerplate_purity=style_boilerplate_purity,
     )
 
     # Prose summary — same per-caption results drive the human-readable report
@@ -764,18 +817,20 @@ def compute_caption_compliance_stats(
     section_names: list[str],
     captions: list[Caption],
     caption_sections: list[str] | None = None,
+    meta_prompt: str | None = None,
 ) -> CaptionComplianceStats:
     """Structured caption-compliance rates — thin wrapper over :func:`compute_caption_compliance`."""
-    return compute_caption_compliance(section_names, captions, caption_sections)[0]
+    return compute_caption_compliance(section_names, captions, caption_sections, meta_prompt=meta_prompt)[0]
 
 
 def check_caption_compliance(
     section_names: list[str],
     captions: list[Caption],
     caption_sections: list[str] | None = None,
+    meta_prompt: str | None = None,
 ) -> str:
     """Human-readable compliance summary — thin wrapper over :func:`compute_caption_compliance`."""
-    return compute_caption_compliance(section_names, captions, caption_sections)[1]
+    return compute_caption_compliance(section_names, captions, caption_sections, meta_prompt=meta_prompt)[1]
 
 
 def compute_style_consistency(captions: list[Caption]) -> float:

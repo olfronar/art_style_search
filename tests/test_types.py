@@ -198,14 +198,22 @@ class TestImprovementEpsilon:
 
 
 class TestPromptTemplateRender:
-    def test_basic_sections(self) -> None:
+    def test_basic_sections_emit_markdown_headers(self) -> None:
         t = PromptTemplate(
             sections=[
                 PromptSection(name="style", description="overall style", value="watercolor painting"),
                 PromptSection(name="color", description="palette", value="muted earth tones"),
             ]
         )
-        assert t.render() == "watercolor painting muted earth tones"
+        out = t.render()
+        assert "## style" in out
+        assert "_overall style_" in out
+        assert "watercolor painting" in out
+        assert "## color" in out
+        assert "_palette_" in out
+        assert "muted earth tones" in out
+        # Section headers appear in declaration order
+        assert out.index("## style") < out.index("## color")
 
     def test_with_negative_prompt(self) -> None:
         t = PromptTemplate(
@@ -214,7 +222,23 @@ class TestPromptTemplateRender:
             ],
             negative_prompt="blurry, low quality",
         )
-        assert t.render() == "oil painting Do NOT include: blurry, low quality"
+        out = t.render()
+        assert "## style" in out
+        assert "oil painting" in out
+        assert "## Negative Prompt" in out
+        assert "Do NOT include: blurry, low quality" in out
+
+    def test_caption_sections_and_length_emitted_as_blocks(self) -> None:
+        t = PromptTemplate(
+            sections=[PromptSection(name="s", description="d", value="body")],
+            caption_sections=["Art Style", "Subject"],
+            caption_length_target=3600,
+        )
+        out = t.render()
+        assert "## Caption Sections (in order)" in out
+        assert "[Art Style], [Subject]" in out
+        assert "## Caption Length Target" in out
+        assert "approximately 3600 words" in out
 
     def test_empty_sections(self) -> None:
         t = PromptTemplate(sections=[])
@@ -222,7 +246,9 @@ class TestPromptTemplateRender:
 
     def test_empty_template_with_negative_prompt(self) -> None:
         t = PromptTemplate(sections=[], negative_prompt="noise")
-        assert t.render() == "Do NOT include: noise"
+        out = t.render()
+        assert "## Negative Prompt" in out
+        assert "Do NOT include: noise" in out
 
     def test_sections_with_empty_values_are_skipped(self) -> None:
         t = PromptTemplate(
@@ -232,22 +258,33 @@ class TestPromptTemplateRender:
                 PromptSection(name="c", description="desc", value=""),
             ]
         )
-        assert t.render() == "keep me"
+        out = t.render()
+        assert "## a" not in out
+        assert "## b" in out
+        assert "keep me" in out
+        assert "## c" not in out
 
     def test_none_negative_prompt_is_omitted(self) -> None:
         t = PromptTemplate(
             sections=[PromptSection(name="s", description="d", value="hello")],
             negative_prompt=None,
         )
-        assert "Avoid" not in t.render()
+        assert "## Negative Prompt" not in t.render()
 
     def test_empty_string_negative_prompt_is_omitted(self) -> None:
         t = PromptTemplate(
             sections=[PromptSection(name="s", description="d", value="hello")],
             negative_prompt="",
         )
-        # Empty string is falsy, so it should not appear
-        assert "Avoid" not in t.render()
+        assert "## Negative Prompt" not in t.render()
+
+    def test_section_without_description_omits_italic_line(self) -> None:
+        t = PromptTemplate(
+            sections=[PromptSection(name="bare", description="", value="body text")],
+        )
+        out = t.render()
+        assert "## bare" in out
+        assert "_" not in out.split("body text")[0].split("## bare")[1].strip()
 
 
 # -- AggregatedMetrics.summary_dict ------------------------------------------
@@ -292,6 +329,7 @@ class TestAggregatedMetricsSummaryDict:
             "section_ordering_rate",
             "section_balance_rate",
             "subject_specificity_rate",
+            "style_boilerplate_purity",
             "requested_ref_count",
             "actual_ref_count",
         }
@@ -335,8 +373,8 @@ class TestAggregatedMetricsSummaryDict:
             aesthetics_score_std=0.0,
         )
         # 25 base metrics + 4 diagnostic vision dims (vision_medium + vision_medium_std
-        # + vision_proportions + vision_proportions_std).
-        assert len(m.summary_dict()) == 29
+        # + vision_proportions + vision_proportions_std) + 1 style-DNA purity compliance field.
+        assert len(m.summary_dict()) == 30
 
 
 # -- ConvergenceReason --------------------------------------------------------

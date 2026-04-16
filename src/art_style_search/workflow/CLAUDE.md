@@ -2,7 +2,7 @@
 
 ## Module map
 
-- `context.py` - `RunContext`, `_setup_run_context`, `_finalize_run`, image discovery, manifest handling, logging.
+- `context.py` - `RunContext`, `_setup_run_context`, `_finalize_run`, image discovery, manifest handling, logging. `_finalize_run` writes three parallel best-prompt artefacts via `_save_best_prompt` (flat `.txt`), `_save_best_prompt_md` (structured markdown with YAML front-matter from the manifest — iter/score/seed/sha/protocol/timestamp), and `_save_best_prompt_json` (full `PromptTemplate` dataclass via `state_codec._Encoder`, re-ingestable as a seed).
 - `iteration.py` - Façade re-exporting the per-iteration phase modules below.
 - `iteration_context.py` - Phase 0: builds `(vision_fb, roundtrip_fb, caption_diffs)` from the previous iteration; `_filter_feedback_by_refs` honors the information barrier.
 - `iteration_proposals.py` - Phase 1: `_propose_iteration_experiments` — calls the reasoner, dedups by `target_category`, produces `ExperimentProposal` list.

@@ -82,7 +82,7 @@ Sub-packages have their own CLAUDE.md:
 - `reference_images/` - User-provided reference art (not committed)
 - `runs/` - All run data, each run in its own subdirectory (not committed):
   - `runs/<name>/outputs/` - Generated images by iteration/experiment
-  - `runs/<name>/logs/` - Iteration logs (`iter_NNN_branch_M.json`), captions cache, style profile, `best_prompt.txt`
+  - `runs/<name>/logs/` - Iteration logs (`iter_NNN_branch_M.json`), captions cache, style profile, and the best meta-prompt in three parallel forms: `best_prompt.txt` (legacy flat string), `best_prompt.md` (structured markdown with YAML front-matter — iter/score/seed/sha), `best_prompt.json` (full `PromptTemplate` dataclass dump, re-ingestable as seed)
   - `runs/<name>/state.json` - Resume state
   - `runs/<name>/report.html` - Post-run HTML report (generated on demand via `report` subcommand)
 
@@ -103,7 +103,7 @@ Each metric compares a generated image against its specific paired original (not
 Penalties subtracted from the weighted sum (result floor-clamped to 0.0):
 - **Variance penalty** (×0.30): mean of per-image DreamSim and color-histogram std.
 - **Completion penalty** (×0.15): `(1 - completion_rate)`.
-- **Compliance penalty** (×0.08): `(1 - compliance_components_mean(...))` over topic coverage, marker coverage, section ordering, section balance, subject specificity.
+- **Compliance penalty** (×0.08): `(1 - compliance_components_mean(...))` over topic coverage, marker coverage, section ordering, section balance, subject specificity, and style-DNA purity (trigram overlap between caption `[Art Style]` and meta-prompt — 1.0 = captioner paraphrases in own voice, 0.0 = near-verbatim copy).
 - **Ref-shortfall penalty** (×0.04): `max(requested - actual, 0) / requested`.
 - **Subject-floor penalty** (×0.05): active only when `vision_subject < 0.35`; scales linearly toward the floor.
 
@@ -129,7 +129,9 @@ Penalties subtracted from the weighted sum (result floor-clamped to 0.0):
 - The FIRST section must be `style_foundation` (fixed style rules from StyleProfile) and the SECOND section must be `subject_anchor` (detailed subject-fidelity instructions). The first two caption output labels must be `[Art Style]` and `[Subject]`. These required anchors are enforced by `_REQUIRED_SECTION_ANCHORS` / `_REQUIRED_CAPTION_ANCHORS` tables in `prompt/_parse.py`.
 - `style_foundation.value` must contain a `How to Draw:` sub-block (silhouette primitives, construction order, line policy, shading layers, signature quirk) and `subject_anchor.value` must contain a `Proportions:` sub-block with at least one archetype token (`heads tall`, `chibi`, `heroic`, `realistic-adult`, `elongated`, …). Enforced by `_check_anchor_sub_blocks` in `prompt/_parse.py`. These two sub-blocks operationalize the "way of drawing" + forced proportions discipline the captioner carries into every caption.
 - Captions have labeled output sections (e.g. `[Art Style]`, `[Subject]`, `[Color Palette]`). Beyond the two required anchors, the set of section names, their ordering, and the caption length target are all part of the optimization surface — the reasoning model experiments with these via `caption_sections` and `caption_length_target` on `PromptTemplate`. Before handing the caption to the generator, `build_generation_prompt` in `caption_sections.py` reorders the blocks so `[Subject]` leads, then `[Art Style]` as the style anchor, then the remaining sections.
-- Style consistency is measured via Jaccard word-overlap of [Art Style] blocks across captions and included in `composite_score` (4% weight).
+- `PromptTemplate.render()` emits **section-delimited markdown** (not flat prose): `## <section.name>` header, italic `_<description>_` line, then the `value` body — per section. Trailing `## Negative Prompt`, `## Caption Sections (in order)`, `## Caption Length Target` blocks preserve the structural surface. The captioner sees this structure as its user turn, and the cache key `p{sha256(meta_prompt)[:12]}` hashes it, so structural changes to caption_sections/length also invalidate stale cache entries.
+- `CAPTION_SYSTEM` (`caption.py`) additionally enforces an *audit-block discipline* — in downstream audit blocks (Medium Class Verification, Ambient Occlusion Map, Rim Light Policy, Specular Allocation, Surface Cleanliness, etc.) the captioner must cite meta-prompt rule names by reference (e.g. "Bevel Rule applies") rather than re-stating rule content — and an *output-format discipline* that forbids markdown bolding of `[Section]` labels.
+- Style consistency is measured via Jaccard word-overlap of [Art Style] blocks across captions and included in `composite_score` (4% weight). Prompt-copying is measured separately via `compute_prompt_copying_score` (trigram overlap of the caption's first 500 `[Art Style]` tokens vs the meta-prompt) and contributes to the compliance penalty.
 - Medium-class discipline: the captioner classifies every image as one of five classes (A hand-drawn 2D, B vector/flat 2D, C stylized 3D CGI, D photoreal 3D, E mixed/2.5D) and uses class-appropriate vocabulary. Class cues are seeded by `_GEMINI_ANALYSIS_PROMPT` (`analyze.py`) and enforced in `CAPTION_SYSTEM` (`caption.py`); the vision judge uses matching calibration examples in `_VISION_SYSTEM` (`evaluate.py`). `CATEGORY_SYNONYMS` (`taxonomy.py`) carries `rendering_dimensionality` and `proportions` categories so the optimizer can target these failures directly.
 
 ## Code Style

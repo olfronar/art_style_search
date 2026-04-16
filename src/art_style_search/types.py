@@ -102,6 +102,10 @@ class CaptionComplianceStats:
     section_ordering_rate: float = 1.0
     section_balance_rate: float = 1.0
     subject_specificity_rate: float = 1.0
+    # Style-DNA purity: 1.0 = captioner paraphrases the meta-prompt in its own voice; 0.0 = near-verbatim
+    # copy of meta-prompt style rules in the [Art Style] block. Measured via trigram overlap between the
+    # caption's Art Style block and the meta-prompt. 1.0 default keeps legacy callers compliant.
+    style_boilerplate_purity: float = 1.0
 
     @property
     def overall(self) -> float:
@@ -111,6 +115,7 @@ class CaptionComplianceStats:
             self.section_ordering_rate,
             self.section_balance_rate,
             self.subject_specificity_rate,
+            self.style_boilerplate_purity,
         )
 
 
@@ -167,6 +172,7 @@ class AggregatedMetrics:
     section_ordering_rate: float = 1.0
     section_balance_rate: float = 1.0
     subject_specificity_rate: float = 1.0
+    style_boilerplate_purity: float = 1.0
 
     # Requested-vs-actual accounting for scoring/reporting
     requested_ref_count: int = 0
@@ -221,20 +227,41 @@ class PromptTemplate:
     caption_length_target: int = 0
 
     def render(self) -> str:
-        """Combine all section values into the final captioning meta-prompt."""
-        parts = [s.value for s in self.sections if s.value]
+        """Render the template as a section-delimited markdown meta-prompt.
+
+        Every ``PromptSection`` becomes a ``## <name>`` block with its
+        description as an italic hint line and its value as body text. The
+        structural surface (``negative_prompt``, ``caption_sections`` order,
+        ``caption_length_target``) becomes its own trailing ``## ...`` block
+        so the captioner can see section boundaries and the optimization
+        surface stays diffable.
+        """
+        lines: list[str] = []
+        for section in self.sections:
+            if not section.value:
+                continue
+            lines.append(f"## {section.name}")
+            if section.description:
+                lines.append(f"_{section.description}_")
+            lines.append("")
+            lines.append(section.value.strip())
+            lines.append("")
         if self.negative_prompt:
-            parts.append(f"Do NOT include: {self.negative_prompt}")
-        main_block = " ".join(parts)
-        caption_parts: list[str] = []
+            lines.append("## Negative Prompt")
+            lines.append("")
+            lines.append(f"Do NOT include: {self.negative_prompt}")
+            lines.append("")
         if self.caption_sections:
-            section_list = ", ".join(f"[{s}]" for s in self.caption_sections)
-            caption_parts.append(f"Format your response with these labeled sections in this order: {section_list}.")
+            lines.append("## Caption Sections (in order)")
+            lines.append("")
+            lines.append(", ".join(f"[{s}]" for s in self.caption_sections))
+            lines.append("")
         if self.caption_length_target > 0:
-            caption_parts.append(f"Target length: approximately {self.caption_length_target} words.")
-        if caption_parts:
-            return main_block + "\n\n" + " ".join(caption_parts)
-        return main_block
+            lines.append("## Caption Length Target")
+            lines.append("")
+            lines.append(f"Target length: approximately {self.caption_length_target} words.")
+            lines.append("")
+        return "\n".join(lines).rstrip() + "\n" if lines else ""
 
 
 class ConvergenceReason(enum.Enum):

@@ -51,13 +51,14 @@ def improvement_epsilon(baseline: float) -> float:
 
 
 def compliance_mean(m: AggregatedMetrics) -> float:
-    """Unweighted mean of the five compliance components on an AggregatedMetrics."""
+    """Unweighted mean of the six compliance components on an AggregatedMetrics."""
     return compliance_components_mean(
         m.compliance_topic_coverage,
         m.compliance_marker_coverage,
         m.section_ordering_rate,
         m.section_balance_rate,
         m.subject_specificity_rate,
+        m.style_boilerplate_purity,
     )
 
 
@@ -119,6 +120,7 @@ def composite_score(m: AggregatedMetrics) -> float:
         m.section_ordering_rate,
         m.section_balance_rate,
         m.subject_specificity_rate,
+        m.style_boilerplate_purity,
     )
     compliance_penalty = (1.0 - compliance_score) * _W_COMPLIANCE_PENALTY
 
@@ -170,6 +172,7 @@ def adaptive_composite_score(
             r.section_ordering_rate,
             r.section_balance_rate,
             r.subject_specificity_rate,
+            r.style_boilerplate_purity,
         ),
     ]
 

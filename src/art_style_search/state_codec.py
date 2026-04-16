@@ -105,6 +105,7 @@ def _aggregated_metrics_from_dict(d: dict[str, Any]) -> AggregatedMetrics:
         section_ordering_rate=d.get("section_ordering_rate", 1.0),
         section_balance_rate=d.get("section_balance_rate", 1.0),
         subject_specificity_rate=d.get("subject_specificity_rate", 1.0),
+        style_boilerplate_purity=d.get("style_boilerplate_purity", 1.0),
         requested_ref_count=d.get("requested_ref_count", 0),
         actual_ref_count=d.get("actual_ref_count", 0),
     )

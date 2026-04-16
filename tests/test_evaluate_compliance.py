@@ -10,6 +10,7 @@ from art_style_search.evaluate import (
     _ordering_from_parsed,
     check_caption_compliance,
     compute_caption_compliance_stats,
+    compute_prompt_copying_score,
     compute_style_consistency,
 )
 from art_style_search.types import Caption
@@ -278,3 +279,63 @@ class TestComputeCaptionComplianceStats:
         )
 
         assert stats.subject_specificity_rate == 0.0
+
+
+# -- compute_prompt_copying_score --------------------------------------------
+
+
+class TestComputePromptCopyingScore:
+    def test_no_caption_returns_perfect_purity(self) -> None:
+        assert compute_prompt_copying_score("", "some meta prompt") == 1.0
+
+    def test_no_meta_prompt_returns_perfect_purity(self) -> None:
+        caption = "[Art Style] dense observation in my own voice describing the image at length " + ("foo bar " * 50)
+        assert compute_prompt_copying_score(caption, "") == 1.0
+
+    def test_missing_art_style_block_returns_perfect_purity(self) -> None:
+        caption = "[Subject] a character with a red hat. [Composition] centered framing."
+        assert compute_prompt_copying_score(caption, "some meta prompt words here") == 1.0
+
+    def test_short_art_style_block_returns_perfect_purity(self) -> None:
+        caption = "[Art Style] tiny block."
+        meta = "long meta prompt " * 100
+        assert compute_prompt_copying_score(caption, meta) == 1.0
+
+    def test_verbatim_copy_returns_low_purity(self) -> None:
+        meta = (
+            "## style_foundation\n"
+            "The medium class is exactly C stylized 3D CGI. The visual vocabulary is defined by modeled masses, "
+            "subdivision-smooth forms, beveled edges, shaders, ambient occlusion, diffuse gradients, rim lighting, "
+            "roughness, satin specular, global illumination, focal separation, and render polish. Exclude "
+            "class-A and class-B terms such as brushwork, ink contour, cel fill, vector path."
+        )
+        caption = (
+            "[Art Style] "
+            "The medium class is exactly C stylized 3D CGI. The visual vocabulary is defined by modeled masses, "
+            "subdivision-smooth forms, beveled edges, shaders, ambient occlusion, diffuse gradients, rim lighting, "
+            "roughness, satin specular, global illumination, focal separation, and render polish. Exclude "
+            "class-A and class-B terms such as brushwork, ink contour, cel fill, vector path. "
+            "[Subject] a character."
+        )
+        score = compute_prompt_copying_score(caption, meta)
+        assert score < 0.3, f"near-verbatim copy should score low, got {score}"
+
+    def test_original_voice_returns_high_purity(self) -> None:
+        meta = (
+            "## style_foundation\n"
+            "Medium-Class Rule: exactly C stylized 3D CGI. Bevel Rule: rounded primitive masses. "
+            "Fondant Surface Rule: matte plastic finish. AO-First Depth Rule: clean crease occlusion. "
+            "Cool Rim Rule: thin cyan silhouette. Restricted Specular Rule: permission-based highlights. "
+            "Chromatic Saturation Rule: luminous local colors. Telephoto Readability Rule: central hero clarity."
+        )
+        caption = (
+            "[Art Style] "
+            "This rendering reads as a polished toy-resin sculpt, where every shape feels inflated into a soft, "
+            "almost pillowy mass. Contact creases darken gently without ever tipping into dirt. A single muted "
+            "cyan edge catches the top silhouette, detaching the figure from its background, while flat broad "
+            "gradients roll across the cheeks and shoulders without turning glossy. Local palette leans into "
+            "juicy saturated complementaries rather than realistic desaturation. "
+            "[Subject] the child character."
+        )
+        score = compute_prompt_copying_score(caption, meta)
+        assert score > 0.7, f"original-voice caption should score high, got {score}"
