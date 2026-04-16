@@ -385,9 +385,14 @@ def _schema_word_block(token: str, *, words: int = 260) -> str:
 
 
 _STYLE_FOUNDATION_DRAWING_PREFIX = (
-    "How to Draw: silhouette primitives, construction order (head -> torso -> limbs -> props), "
-    "line policy, shading layers (base -> AO -> midtones -> rim -> specular), edge softness, "
-    "texture grain, signature quirk. "
+    "How to Draw: medium class A, hand-made line with pressure variation, silhouette primitives, "
+    "construction order (silhouette -> forms -> details), line policy. "
+    "Shading & Light: base -> AO -> midtones -> rim -> specular stack, feathered edges, warm key + cool rim. "
+    "Color Principle: saturated complementary blues, mid-key with moderate contrast, selective chroma on focal subjects. "
+    "Surface & Texture: paper tooth, watercolor wash vocabulary (class-appropriate). "
+    "Stylization Attitude: subtle body elongation, halftone signature quirk, playful-earnest mood. "
+    "Level of Detail: mid-density, illustrative abstraction. "
+    "Anti-name preamble: no genre labels inside [Art Style] — describe HOW it is rendered, not NAMES. "
 )
 _SUBJECT_ANCHOR_PROPORTIONS_PREFIX = (
     "Proportions: N.N heads tall, archetype (chibi / stylized-youth / heroic / realistic-adult / "
