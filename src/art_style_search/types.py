@@ -40,7 +40,8 @@ class MetricScores:
     vision_style: float = 0.5  # higher = better, ternary: MATCH=1.0, PARTIAL=0.5, MISS=0.0
     vision_subject: float = 0.5  # higher = better, ternary: MATCH=1.0, PARTIAL=0.5, MISS=0.0
     vision_composition: float = 0.5  # higher = better, ternary: MATCH=1.0, PARTIAL=0.5, MISS=0.0
-    # Diagnostic-only vision dims (populated by the judge; NOT yet in composite_score).
+    # Medium-class + proportions dims from the judge — now weighted into composite_score
+    # (see scoring._W_VISION_MEDIUM / _W_VISION_PROPORTIONS).
     vision_medium: float = 0.5  # higher = better, ternary agreement on 2D/3D/CGI medium class
     vision_proportions: float = 0.5  # higher = better, ternary agreement on character head-heights + archetype
     is_fallback: bool = False  # True for zero-score sentinels substituted on evaluation failure
@@ -70,9 +71,9 @@ class VisionDimensionScore:
 class VisionScores:
     """Structured per-image scores from Gemini vision comparison.
 
-    `medium` and `proportions` are diagnostic dimensions emitted by the judge
-    alongside style/subject/composition. They are NOT yet folded into composite_score —
-    signal quality is measured first, then weighted in a follow-up.
+    All five dimensions (style, subject, composition, medium, proportions) are
+    emitted by the judge and now contribute to ``composite_score`` (see
+    ``scoring.py`` for the weight constants).
     """
 
     style: VisionDimensionScore
@@ -159,8 +160,8 @@ class AggregatedMetrics:
     vision_subject_std: float = 0.0
     vision_composition: float = 0.5
     vision_composition_std: float = 0.0
-    # Diagnostic vision dims — emitted by the judge, surfaced to reasoning model + report,
-    # but NOT yet weighted into composite_score (see plan: gated on signal-quality smoke test).
+    # Medium-class + proportions dims — weighted into composite_score alongside the other vision
+    # dims (see scoring._W_VISION_MEDIUM / _W_VISION_PROPORTIONS).
     vision_medium: float = 0.5
     vision_medium_std: float = 0.0
     vision_proportions: float = 0.5

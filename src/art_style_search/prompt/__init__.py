@@ -3,7 +3,7 @@
 The package is organised as:
 
 - ``_format`` — rendering dataclasses into text blocks
-- ``_parse`` — XML template parser (fallback) + ``validate_template``
+- ``_parse`` — ``validate_template`` structural invariants
 - ``json_contracts`` — JSON payload validators used by every per-iteration call
 - ``initial`` — zero-step: propose N diverse initial templates
 - ``experiments`` — per-iteration: propose N experiment branches, dedup by category
@@ -16,7 +16,7 @@ All public symbols are re-exported here so existing callers can continue to
 
 from art_style_search.contracts import ExperimentSketch, InitialTemplateSketch, Lessons, RefinementResult
 from art_style_search.prompt._format import _format_metrics, _format_style_profile, _format_template
-from art_style_search.prompt._parse import _parse_template, validate_template
+from art_style_search.prompt._parse import validate_template
 from art_style_search.prompt.experiments import (
     brainstorm_experiment_sketches,
     enforce_hypothesis_diversity,
@@ -42,7 +42,6 @@ __all__ = [
     "_format_metrics",
     "_format_style_profile",
     "_format_template",
-    "_parse_template",
     "brainstorm_experiment_sketches",
     "brainstorm_initial_sketches",
     "enforce_hypothesis_diversity",

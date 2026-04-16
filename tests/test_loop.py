@@ -35,7 +35,7 @@ from art_style_search.workflow.context import (
     _setup_run_context,
     _split_information_barrier,
 )
-from art_style_search.workflow.iteration import (
+from art_style_search.workflow.iteration_execution import (
     IterationRanking,
     _confirmatory_validation,
     _run_synthesis_experiment,

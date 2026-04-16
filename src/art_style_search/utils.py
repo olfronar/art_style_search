@@ -16,7 +16,6 @@ from art_style_search.retry import (
     CircuitBreaker,
     async_retry,
     caption_circuit_breaker,
-    gemini_circuit_breaker,
     generation_circuit_breaker,
     vision_circuit_breaker,
 )
@@ -33,7 +32,6 @@ __all__ = [
     "caption_circuit_breaker",
     "extract_text",
     "extract_xml_tag",
-    "gemini_circuit_breaker",
     "generation_circuit_breaker",
     "image_to_gemini_part",
     "image_to_xai_data_url",

@@ -12,7 +12,7 @@ from art_style_search.utils import CATEGORY_SYNONYMS
 if TYPE_CHECKING:
     from art_style_search.config import Config
     from art_style_search.workflow.context import RunContext
-    from art_style_search.workflow.iteration import IterationRanking
+    from art_style_search.workflow.iteration_execution import IterationRanking
 
 from art_style_search.scoring import composite_score
 

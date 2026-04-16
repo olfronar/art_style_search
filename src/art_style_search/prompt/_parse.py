@@ -1,79 +1,14 @@
-"""Response parsing — section regexes, XML-tag extraction, and template validation.
+"""Template validation shared by the JSON payload validators.
 
-Only the XML-based template parser survives here.  Per-iteration flows consume
-reasoning-model JSON via ``prompt.json_contracts`` directly.
+Reasoning-model exchanges travel as JSON via ``prompt.json_contracts``; this
+module now carries only the structural invariants that validate a parsed
+``PromptTemplate`` (required anchors, section-count bounds, rendered-word
+bounds, and changed-section rules per risk level).
 """
 
 from __future__ import annotations
 
-import logging
-import re
-
-from art_style_search.types import PromptSection, PromptTemplate
-from art_style_search.utils import extract_xml_tag
-
-logger = logging.getLogger(__name__)
-
-
-# Primary regex: strict name then description order
-_SECTION_RE = re.compile(
-    r'<section\s+name="(?P<name>[^"]+)"\s+description="(?P<desc>[^"]+)"\s*>'
-    r"(?P<value>.*?)"
-    r"</section>",
-    re.DOTALL,
-)
-# Fallback regex: allows attributes in any order
-_SECTION_RE_LOOSE = re.compile(
-    r"<section\s+(?=.*?name=\"(?P<name>[^\"]+)\")(?=.*?description=\"(?P<desc>[^\"]+)\")"
-    r"[^>]*>(?P<value>.*?)</section>",
-    re.DOTALL,
-)
-
-
-def _parse_template(text: str) -> PromptTemplate:
-    """Extract a PromptTemplate from the model's XML-style response.
-
-    Tries strict regex first (name then description order), then falls back
-    to a loose regex that accepts attributes in any order.
-    """
-    sections: list[PromptSection] = []
-    for m in _SECTION_RE.finditer(text):
-        sections.append(
-            PromptSection(
-                name=m.group("name").strip(),
-                description=m.group("desc").strip(),
-                value=m.group("value").strip(),
-            )
-        )
-    # Fallback: try loose regex if strict found nothing
-    if not sections:
-        for m in _SECTION_RE_LOOSE.finditer(text):
-            sections.append(
-                PromptSection(
-                    name=m.group("name").strip(),
-                    description=m.group("desc").strip(),
-                    value=m.group("value").strip(),
-                )
-            )
-        if sections:
-            logger.warning("Parsed %d sections with loose regex fallback", len(sections))
-
-    neg_raw = extract_xml_tag(text, "negative")
-    negative = neg_raw or None
-
-    cs_raw = extract_xml_tag(text, "caption_sections")
-    caption_sections = [s.strip() for s in cs_raw.split(",") if s.strip()] if cs_raw else []
-
-    cl_raw = extract_xml_tag(text, "caption_length")
-    caption_length_target = int(cl_raw) if cl_raw.isdigit() else 0
-
-    return PromptTemplate(
-        sections=sections,
-        negative_prompt=negative,
-        caption_sections=caption_sections,
-        caption_length_target=caption_length_target,
-    )
-
+from art_style_search.types import PromptTemplate
 
 # ---------------------------------------------------------------------------
 # Template validation

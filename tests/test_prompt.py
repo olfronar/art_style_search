@@ -14,7 +14,6 @@ from art_style_search.prompt import (
     RefinementResult,
     _format_metrics,
     _format_template,
-    _parse_template,
     propose_experiments,
     propose_initial_templates,
     rank_experiment_sketches,
@@ -24,9 +23,9 @@ from art_style_search.prompt import (
 )
 from art_style_search.prompt.json_contracts import (
     schema_hint,
+    template_to_payload,
     validate_brainstorm_payload,
     validate_expansion_payload,
-    validate_experiment_batch_payload,
     validate_initial_brainstorm_payload,
     validate_initial_expansion_payload,
     validate_ranking_payload,
@@ -44,77 +43,6 @@ from art_style_search.types import (
 )
 from tests.conftest import make_style_profile
 
-# ---------------------------------------------------------------------------
-# _parse_template
-# ---------------------------------------------------------------------------
-
-
-class TestParseTemplate:
-    def test_valid_sections(self) -> None:
-        xml = (
-            "<template>\n"
-            '  <section name="style" description="overall style">impressionist painting</section>\n'
-            '  <section name="color" description="color palette">warm earth tones</section>\n'
-            "</template>"
-        )
-        tpl = _parse_template(xml)
-        assert len(tpl.sections) == 2
-        assert tpl.sections[0].name == "style"
-        assert tpl.sections[0].description == "overall style"
-        assert tpl.sections[0].value == "impressionist painting"
-        assert tpl.sections[1].name == "color"
-        assert tpl.sections[1].description == "color palette"
-        assert tpl.sections[1].value == "warm earth tones"
-
-    def test_negative_prompt_present(self) -> None:
-        xml = (
-            '<section name="style" description="overall style">watercolor</section>\n'
-            "<negative>photorealistic, 3d render</negative>"
-        )
-        tpl = _parse_template(xml)
-        assert tpl.negative_prompt == "photorealistic, 3d render"
-
-    def test_negative_prompt_absent(self) -> None:
-        xml = '<section name="style" description="overall style">watercolor</section>'
-        tpl = _parse_template(xml)
-        assert tpl.negative_prompt is None
-
-    def test_negative_prompt_empty(self) -> None:
-        xml = '<section name="style" description="overall style">watercolor</section>\n<negative>  </negative>'
-        tpl = _parse_template(xml)
-        # Empty whitespace-only negative should become None
-        assert tpl.negative_prompt is None
-
-    def test_no_sections(self) -> None:
-        tpl = _parse_template("just some random text with no XML")
-        assert tpl.sections == []
-        assert tpl.negative_prompt is None
-
-    def test_malformed_section_missing_closing_tag(self) -> None:
-        xml = '<section name="style" description="overall style">watercolor'
-        tpl = _parse_template(xml)
-        assert tpl.sections == []
-
-    def test_multiline_section_value(self) -> None:
-        xml = (
-            '<section name="mood" description="mood and atmosphere">\n'
-            "  Dreamy, ethereal quality\n"
-            "  with soft diffused lighting\n"
-            "  and gentle gradients\n"
-            "</section>"
-        )
-        tpl = _parse_template(xml)
-        assert len(tpl.sections) == 1
-        assert "Dreamy, ethereal quality" in tpl.sections[0].value
-        assert "gentle gradients" in tpl.sections[0].value
-
-    def test_whitespace_stripped_from_names_and_values(self) -> None:
-        xml = '<section name="  style  " description="  desc  ">  value  </section>'
-        tpl = _parse_template(xml)
-        assert tpl.sections[0].name == "style"
-        assert tpl.sections[0].description == "desc"
-        assert tpl.sections[0].value == "value"
-
 
 class TestPromptContracts:
     def test_prompt_reexports_contract_types_from_neutral_contracts_module(self) -> None:
@@ -128,24 +56,23 @@ class TestPromptContracts:
 
 
 class TestFormatTemplate:
-    def test_round_trip(self) -> None:
-        """A formatted template should re-parse into an equivalent template."""
-        original = PromptTemplate(
+    def test_output_contains_sections_and_negative(self) -> None:
+        """The XML context string surfaces every section plus the negative prompt."""
+        tpl = PromptTemplate(
             sections=[
                 PromptSection(name="style", description="overall style", value="impressionist painting"),
                 PromptSection(name="color", description="color palette", value="warm earth tones"),
             ],
             negative_prompt="photorealistic, 3d render",
         )
-        xml = _format_template(original)
-        parsed = _parse_template(xml)
-
-        assert len(parsed.sections) == len(original.sections)
-        for orig_sec, parsed_sec in zip(original.sections, parsed.sections, strict=True):
-            assert orig_sec.name == parsed_sec.name
-            assert orig_sec.description == parsed_sec.description
-            assert orig_sec.value == parsed_sec.value
-        assert parsed.negative_prompt == original.negative_prompt
+        xml = _format_template(tpl)
+        assert xml.startswith("<template>")
+        assert xml.endswith("</template>")
+        for section in tpl.sections:
+            assert f'name="{section.name}"' in xml
+            assert f'description="{section.description}"' in xml
+            assert section.value in xml
+        assert "<negative>photorealistic, 3d render</negative>" in xml
 
     def test_no_negative_prompt(self) -> None:
         tpl = PromptTemplate(
@@ -154,23 +81,6 @@ class TestFormatTemplate:
         )
         xml = _format_template(tpl)
         assert "<negative>" not in xml
-        parsed = _parse_template(xml)
-        assert parsed.negative_prompt is None
-
-    def test_output_contains_template_tags(self) -> None:
-        tpl = PromptTemplate(
-            sections=[PromptSection(name="x", description="y", value="z")],
-        )
-        xml = _format_template(tpl)
-        assert xml.startswith("<template>")
-        assert xml.endswith("</template>")
-
-    def test_empty_sections(self) -> None:
-        tpl = PromptTemplate(sections=[], negative_prompt="avoid noise")
-        xml = _format_template(tpl)
-        parsed = _parse_template(xml)
-        assert parsed.sections == []
-        assert parsed.negative_prompt == "avoid noise"
 
 
 # ---------------------------------------------------------------------------
@@ -603,7 +513,7 @@ class TestJsonContracts:
                     "why": "Reduce early token competition.",
                 }
             },
-            "template": _format_template(valid_template),
+            "template": template_to_payload(valid_template),
         }
 
         result = validate_expansion_payload(payload)
@@ -639,126 +549,6 @@ class TestJsonContracts:
         assert sketches[0].approach_summary == "subject-first strict checklist"
         assert sketches[1].caption_length_target == 700
         assert sketches[0].caption_sections[:2] == ["Art Style", "Subject"]
-
-    def test_experiment_batch_payload_reads_converged_flag(self) -> None:
-        payload = {
-            "experiments": [
-                {
-                    "analysis": "Need better palette control",
-                    "lessons": {"confirmed": "", "rejected": "", "new_insight": "Color drifts on dark images"},
-                    "hypothesis": "Strengthen palette anchoring",
-                    "builds_on": "H3",
-                    "experiment": "Tighten the color section",
-                    "changed_sections": ["color_palette"],
-                    "target_category": "color_palette",
-                    "direction_id": "D1",
-                    "direction_summary": "Palette localization",
-                    "failure_mechanism": "Large background fields and tiny accents are described at the same priority.",
-                    "intervention_type": "information_priority",
-                    "risk_level": "targeted",
-                    "expected_primary_metric": "color_histogram",
-                    "expected_tradeoff": "May reduce caption naturalness if the section becomes too rigid.",
-                    "open_problems": ["Dark palettes drift"],
-                    "template_changes": "none",
-                    "template": {
-                        "sections": [
-                            {"name": "style_foundation", "description": "rules", "value": "Shared rules"},
-                            {"name": "subject_anchor", "description": "subject rules", "value": "Subject guidance"},
-                            {"name": "color_palette", "description": "colors", "value": "Detailed palette guidance"},
-                            {"name": "composition", "description": "layout", "value": "Layout guidance"},
-                        ],
-                        "negative_prompt": "avoid blur",
-                        "caption_sections": ["Art Style", "Subject", "Color Palette"],
-                        "caption_length_target": 500,
-                    },
-                }
-            ],
-            "converged": True,
-        }
-        results, converged = validate_experiment_batch_payload(payload, num_experiments=2)
-        assert converged is True
-        assert len(results) == 1
-        assert results[0].builds_on == "H3"
-        assert results[0].target_category == "color_palette"
-        assert results[0].direction_id == "D1"
-        assert results[0].direction_summary == "Palette localization"
-        assert results[0].failure_mechanism.startswith("Large background fields")
-        assert results[0].intervention_type == "information_priority"
-        assert results[0].risk_level == "targeted"
-        assert results[0].expected_primary_metric == "color_histogram"
-        assert results[0].expected_tradeoff.startswith("May reduce caption naturalness")
-        assert results[0].changed_sections == ["color_palette"]
-        assert results[0].changed_section == "color_palette"
-
-    def test_experiment_batch_payload_backfills_changed_sections_from_changed_section(self) -> None:
-        payload = {
-            "experiments": [
-                {
-                    "analysis": "Need a bolder schema change",
-                    "lessons": {"confirmed": "", "rejected": "", "new_insight": ""},
-                    "hypothesis": "Try a two-section schema shift",
-                    "builds_on": None,
-                    "experiment": "Rewrite subject and scene geometry together",
-                    "changed_section": "subject_anchor",
-                    "target_category": "subject_anchor",
-                    "risk_level": "bold",
-                    "template_changes": "none",
-                    "template": {
-                        "sections": [
-                            {"name": "style_foundation", "description": "rules", "value": "Shared rules"},
-                            {"name": "subject_anchor", "description": "subject rules", "value": "Subject guidance"},
-                            {"name": "scene_geometry", "description": "layout", "value": "Layout guidance"},
-                            {"name": "texture_vocabulary", "description": "texture", "value": "Texture guidance"},
-                        ],
-                        "caption_sections": ["Art Style", "Subject", "Scene Geometry"],
-                        "caption_length_target": 500,
-                    },
-                }
-            ]
-        }
-
-        results, converged = validate_experiment_batch_payload(payload, num_experiments=1)
-        assert converged is False
-        assert results[0].changed_sections == ["subject_anchor"]
-        assert results[0].changed_section == "subject_anchor"
-
-    def test_experiment_batch_payload_prefers_changed_sections_when_legacy_field_mismatches(self) -> None:
-        payload = {
-            "experiments": [
-                {
-                    "analysis": "Repair output mixed the legacy and list fields",
-                    "lessons": {"confirmed": "", "rejected": "", "new_insight": ""},
-                    "hypothesis": "Keep the multi-section metadata authoritative",
-                    "builds_on": None,
-                    "experiment": "Tune composition and environment together",
-                    "changed_section": "subject_anchor",
-                    "changed_sections": ["composition", "environment_staging"],
-                    "target_category": "composition",
-                    "risk_level": "bold",
-                    "template_changes": "none",
-                    "template": {
-                        "sections": [
-                            {"name": "style_foundation", "description": "rules", "value": "Shared rules"},
-                            {"name": "subject_anchor", "description": "subject rules", "value": "Subject guidance"},
-                            {"name": "composition", "description": "layout", "value": "Layout guidance"},
-                            {
-                                "name": "environment_staging",
-                                "description": "scene staging",
-                                "value": "Environment guidance",
-                            },
-                        ],
-                        "caption_sections": ["Art Style", "Subject", "Composition"],
-                        "caption_length_target": 500,
-                    },
-                }
-            ]
-        }
-
-        results, converged = validate_experiment_batch_payload(payload, num_experiments=1)
-
-        assert converged is False
-        assert results[0].changed_sections == ["composition", "environment_staging"]
-        assert results[0].changed_section == "composition"
 
     def test_synthesis_payload_accepts_negative_prompt_key(self) -> None:
         template, rationale = validate_synthesis_payload(

@@ -29,20 +29,22 @@ from art_style_search.workflow.context import (
     _setup_run_context,
     ensure_manifest,
 )
-from art_style_search.workflow.iteration import (
+from art_style_search.workflow.iteration_context import _build_iteration_context
+from art_style_search.workflow.iteration_execution import (
     IterationRanking,
-    _build_iteration_context,
     _confirmatory_validation,
-    _propose_iteration_experiments,
-    _record_iteration_state,
     _run_experiments_parallel,
     _run_independent_review,
     _run_pairwise_comparison,
     _run_synthesis_experiment,
     _score_and_rank,
     _synthesize_reasoning,
+)
+from art_style_search.workflow.iteration_persistence import (
+    _record_iteration_state,
     _update_knowledge_base_for_iteration,
 )
+from art_style_search.workflow.iteration_proposals import _propose_iteration_experiments
 from art_style_search.workflow.policy import (
     _apply_iteration_result,
     _check_plateau_convergence,

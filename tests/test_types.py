@@ -161,7 +161,10 @@ class TestCompositeScore:
             aesthetics_score_std=0.0,
             vision_subject=0.0,
         )
-        expected = (0.08 * 0.5 + 0.04 * 0.5) - 0.05
+        # Base contribution from default 0.5 on the four non-subject vision dims:
+        # style (0.06) + composition (0.04) + medium (0.02) + proportions (0.03) = 0.15 * 0.5 = 0.075.
+        # Subject floor penalty at vision_subject=0.0 is 0.05.
+        expected = (0.06 * 0.5 + 0.04 * 0.5 + 0.02 * 0.5 + 0.03 * 0.5) - 0.05
         assert abs(composite_score(m) - expected) < 1e-9
 
 

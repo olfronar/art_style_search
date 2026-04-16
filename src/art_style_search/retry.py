@@ -68,9 +68,6 @@ caption_circuit_breaker = CircuitBreaker(failure_threshold=15, cooldown=60.0)
 generation_circuit_breaker = CircuitBreaker(failure_threshold=15, cooldown=60.0)
 vision_circuit_breaker = CircuitBreaker(failure_threshold=15, cooldown=60.0)
 
-# Deprecated alias — use the per-surface breakers above.
-gemini_circuit_breaker = caption_circuit_breaker
-
 
 async def async_retry(
     coro_fn: Callable[[], Awaitable[T]],

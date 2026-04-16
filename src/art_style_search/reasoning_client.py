@@ -397,11 +397,19 @@ class ReasoningClient:
         else:
             thinking_block = {"type": "adaptive"}
 
+        # Enable prompt caching: system prompts in this project are stable across calls within a run
+        # (brainstorm/expand share a ~150-line system prompt fired many times per iteration; synthesis
+        # and review each fire their own ~100-line prompts every iteration). Wrap as a single cached
+        # block so calls within the 5-minute TTL read from cache instead of reprocessing the prefix.
+        system_blocks: list[dict[str, object]] = [
+            {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+        ]
+
         kwargs: dict[str, object] = {
             "model": model,
             "max_tokens": max_tokens,
             "thinking": thinking_block,
-            "system": system,
+            "system": system_blocks,
             "messages": [{"role": "user", "content": user}],
         }
         if temperature is not None and reasoning_effort == "low":

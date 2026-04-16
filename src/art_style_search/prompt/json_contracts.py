@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 from art_style_search.contracts import ExperimentSketch, InitialTemplateSketch, Lessons, RefinementResult
-from art_style_search.prompt._parse import _parse_template, validate_template
+from art_style_search.prompt._parse import validate_template
 from art_style_search.types import PromptSection, PromptTemplate, ReviewResult, StyleProfile
 from art_style_search.utils import CATEGORY_SYNONYMS
 
@@ -153,12 +153,6 @@ def style_profile_to_payload(profile: StyleProfile) -> dict[str, Any]:
 
 
 def payload_to_template(data: object, *, label: str = "template") -> PromptTemplate:
-    if isinstance(data, str):
-        template = _parse_template(data)
-        if template.sections:
-            return template
-        msg = f"{label} must be a JSON object"
-        raise ValueError(msg)
     obj = _require_dict(data, label=label)
     sections_raw = _require_list(obj.get("sections") or [], label=f"{label}.sections")
     sections: list[PromptSection] = []
@@ -329,18 +323,6 @@ def validate_ranking_payload(data: object, *, num_sketches: int) -> list[int]:
         ranked.append(idx)
     ranked.extend(idx for idx in range(num_sketches) if idx not in seen)
     return ranked
-
-
-def validate_experiment_batch_payload(data: object, *, num_experiments: int) -> tuple[list[RefinementResult], bool]:
-    obj = _require_dict(data, label="experiment_batch_response")
-    experiments = _require_list(obj.get("experiments") or [], label="experiments")
-    results = [_refinement_result_from_payload(item, label=f"experiments[{i}]") for i, item in enumerate(experiments)]
-
-    if len(results) > num_experiments:
-        results = results[:num_experiments]
-
-    converged = bool(obj.get("converged", False))
-    return results, converged
 
 
 def validate_expansion_payload(data: object) -> RefinementResult:

@@ -25,9 +25,15 @@ _W_AESTHETICS = 0.06
 _W_COLOR = 0.17
 _W_SSIM = 0.10
 _W_STYLE_CON = 0.04
-_W_VISION_STYLE = 0.08
-_W_VISION_SUBJECT = 0.10
+# Vision slice rebalanced to make room for the medium-class + proportions dims.
+# The medium verdict diagnoses a root cause of many style misses (2D/3D misclassification)
+# and the proportions verdict diagnoses subject-fidelity misses at the anatomy level, so
+# weight reductions on vision_style (-0.02) and vision_subject (-0.03) fund them cleanly.
+_W_VISION_STYLE = 0.06
+_W_VISION_SUBJECT = 0.07
 _W_VISION_COMP = 0.04
+_W_VISION_MEDIUM = 0.02
+_W_VISION_PROPORTIONS = 0.03
 _W_VARIANCE_PENALTY = 0.30
 _W_COMPLETION_PENALTY = 0.15
 _W_COMPLIANCE_PENALTY = 0.08
@@ -73,6 +79,8 @@ _METRIC_DELTA_ATTRS: tuple[tuple[str, str], ...] = (
     ("vision_style", "vision_style"),
     ("vision_subject", "vision_subject"),
     ("vision_composition", "vision_composition"),
+    ("vision_medium", "vision_medium"),
+    ("vision_proportions", "vision_proportions"),
     ("style_consistency", "style_consistency"),
     ("completion_rate", "completion_rate"),
 )
@@ -95,8 +103,9 @@ def composite_score(m: AggregatedMetrics) -> float:
 
     All metrics normalized to ~[0, 1] before weighting.
     Weights: DreamSim 34%, HPS 7%, Aesthetics 6%, Color 17%, SSIM 10%,
-    StyleConsistency 4%, Vision(style) 8%, Vision(subject) 10%,
-    Vision(composition) 4%. Total = 1.00.
+    StyleConsistency 4%, Vision(style) 6%, Vision(subject) 7%,
+    Vision(composition) 4%, Vision(medium) 2%, Vision(proportions) 3%.
+    Total = 1.00.
     Includes a consistency penalty based on per-image score variance.
     """
     base = (
@@ -109,6 +118,8 @@ def composite_score(m: AggregatedMetrics) -> float:
         + _W_VISION_STYLE * m.vision_style
         + _W_VISION_SUBJECT * m.vision_subject
         + _W_VISION_COMP * m.vision_composition
+        + _W_VISION_MEDIUM * m.vision_medium
+        + _W_VISION_PROPORTIONS * m.vision_proportions
     )
     # Penalize inconsistency: high std across images means unreliable reproduction
     variance_penalty = _W_VARIANCE_PENALTY * (m.dreamsim_similarity_std + m.color_histogram_std) / 2.0
@@ -166,6 +177,8 @@ def adaptive_composite_score(
         lambda r: r.vision_style,
         lambda r: r.vision_subject,
         lambda r: r.vision_composition,
+        lambda r: r.vision_medium,
+        lambda r: r.vision_proportions,
         lambda r: compliance_components_mean(
             r.compliance_topic_coverage,
             r.compliance_marker_coverage,
@@ -255,6 +268,8 @@ def per_image_composite(s: MetricScores) -> float:
         + _W_VISION_STYLE * s.vision_style
         + _W_VISION_SUBJECT * s.vision_subject
         + _W_VISION_COMP * s.vision_composition
+        + _W_VISION_MEDIUM * s.vision_medium
+        + _W_VISION_PROPORTIONS * s.vision_proportions
     )
 
 

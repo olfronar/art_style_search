@@ -61,7 +61,7 @@ uv tool install pre-commit                           # Install the pre-commit CL
 Top-level modules in `src/art_style_search/`:
 
 - `__main__.py` - Entry point with `list`, `clean`, `report` subcommands; default runs `loop.run(config)`.
-- `loop.py` - Thin façade re-exporting `run` from the `workflow` package (kept for a stable import surface).
+- `loop.py` - Main orchestration loop: zero-step setup, per-iteration phase calls (`_build_iteration_context` → `_propose_iteration_experiments` → `_run_experiments_parallel` → `_score_and_rank` → `asyncio.gather` over synthesis/pairwise/review → `_run_synthesis_experiment` → `_confirmatory_validation` → `_apply_iteration_result` → `_update_knowledge_base_for_iteration` → `_record_iteration_state`), plus plateau-convergence check. Phase helpers live in `workflow/`.
 - `config.py` - CLI argument parsing → `Config` dataclass. Includes `--seed`, `--protocol {classic, rigorous}`, `--reasoning-provider`, `--comparison-provider`, etc.
 - `types.py` / `contracts.py` / `taxonomy.py` - Shared dataclasses, transient workflow contracts, `CATEGORY_SYNONYMS` map. See `src/art_style_search/CLAUDE.md` for the full data shape notes.
 - `analyze.py`, `caption.py`, `caption_sections.py`, `generate.py`, `experiment.py`, `evaluate.py`, `scoring.py`, `knowledge.py`, `models.py` - Pipeline: caption → generate → evaluate. See `src/art_style_search/CLAUDE.md`.
@@ -92,13 +92,15 @@ Each metric compares a generated image against its specific paired original (not
 
 - **DreamSim** (34%): Human-aligned perceptual similarity capturing semantic content, layout, color, pose (replaces DINO + LPIPS). Higher = better.
 - **Color histogram** (17%): HSV histogram intersection. Higher = better.
-- **Vision subject** (10%): Per-image Gemini ternary comparison of subject fidelity. Subject fidelity was up-weighted alongside the new `subject_anchor` section; paired with a floor penalty (see below). Higher = better.
 - **SSIM** (10%): Structural similarity index for pixel-level comparison. Higher = better.
-- **Vision style** (8%): Per-image Gemini ternary comparison of style fidelity (MATCH=1.0, PARTIAL=0.5, MISS=0.0). Higher = better.
 - **HPS v2** (7%): Caption-image alignment (normalized: raw / 0.35, clamped to 1.0). Higher = better.
+- **Vision subject** (7%): Per-image Gemini ternary comparison of subject fidelity. Paired with a floor penalty (see below). Higher = better.
+- **Vision style** (6%): Per-image Gemini ternary comparison of style fidelity (MATCH=1.0, PARTIAL=0.5, MISS=0.0). Higher = better.
 - **LAION Aesthetics** (6%): Aesthetic quality predictor (1-10 scale, normalized /10). Higher = better.
 - **Vision composition** (4%): Per-image Gemini ternary comparison of spatial layout. Higher = better.
 - **Style consistency** (4%): Jaccard word-overlap of [Art Style] blocks across captions (experiment-level, omitted from `per_image_composite`). Higher = more consistent shared style guidance.
+- **Vision proportions** (3%): Per-image Gemini ternary comparison of head-heights + character archetype. Higher = better.
+- **Vision medium** (2%): Per-image Gemini ternary agreement on 2D/3D/CGI medium class (A/B/C/D/E). A medium-class mismatch is a style MISS in the vision judge, so this dim catches that failure explicitly. Higher = better.
 
 Penalties subtracted from the weighted sum (result floor-clamped to 0.0):
 - **Variance penalty** (×0.30): mean of per-image DreamSim and color-histogram std.
