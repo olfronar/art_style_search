@@ -182,7 +182,8 @@ class TestAnalyzePrompts:
         assert '"caption_sections"' in _COMPILATION_PROMPT
         assert '"caption_length_target"' in _COMPILATION_PROMPT
         assert "2000-8000 words" in _COMPILATION_PROMPT
-        assert "1000-2000 words" in _COMPILATION_PROMPT
+        assert "800-2000 words" in _COMPILATION_PROMPT  # [Subject] target
+        assert "400-800 words" in _COMPILATION_PROMPT  # [Art Style] target
 
     @pytest.mark.asyncio
     async def test_reasoning_compile_uses_larger_output_budget(self) -> None:

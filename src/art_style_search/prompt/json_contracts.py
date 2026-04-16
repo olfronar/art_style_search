@@ -388,10 +388,10 @@ _STYLE_FOUNDATION_DRAWING_PREFIX = (
     "How to Draw: medium class A, hand-made line with pressure variation, silhouette primitives, "
     "construction order (silhouette -> forms -> details), line policy. "
     "Shading & Light: base -> AO -> midtones -> rim -> specular stack, feathered edges, warm key + cool rim. "
-    "Color Principle: saturated complementary blues, mid-key with moderate contrast, selective chroma on focal subjects. "
+    "Color Principle: saturated complementary blues, mid-key with moderate contrast, selective chroma. "
     "Surface & Texture: paper tooth, watercolor wash vocabulary (class-appropriate). "
-    "Stylization Attitude: subtle body elongation, halftone signature quirk, playful-earnest mood. "
-    "Level of Detail: mid-density, illustrative abstraction. "
+    "Style Invariants: MUST every character have exactly one exaggerated feature; NEVER more than three saturated hues in one frame. "
+    "Observations-vs-rules: [Art Style] holds RULES only; per-image observations live in [Subject] / [Color Palette] / [Composition] / [Lighting & Atmosphere]. "
     "Anti-name preamble: no genre labels inside [Art Style] — describe HOW it is rendered, not NAMES. "
 )
 _SUBJECT_ANCHOR_PROPORTIONS_PREFIX = (
@@ -451,11 +451,10 @@ def _schema_template_payload() -> dict[str, Any]:
             "Color Palette",
             "Accent Colors",
             "Lighting",
-            "Material Finish",
             "Environment",
             "Negative Cues",
         ],
-        "caption_length_target": 4000,
+        "caption_length_target": 3000,
     }
 
 

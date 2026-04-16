@@ -16,8 +16,12 @@ class TestBootstrapCaptionPrompt:
         assert "[Art Style]" in CAPTION_PROMPT
         assert "[Subject]" in CAPTION_PROMPT
         assert "**Subjects**" not in CAPTION_PROMPT
-        assert "Target 2000-6000 words" in CAPTION_PROMPT
-        assert "[Subject] and [Art Style] each 800-2000 words" in CAPTION_PROMPT
+        assert "Target 1500-4000 words total" in CAPTION_PROMPT
+        assert "[Subject] is the longest section, 800-2000 words" in CAPTION_PROMPT
+        assert "[Art Style] holds generic rules only, 400-800 words" in CAPTION_PROMPT
+        # Post-distillation: Technique + Textures dropped from default caption_sections
+        assert "[Technique]:" not in CAPTION_PROMPT
+        assert "[Textures]:" not in CAPTION_PROMPT
 
 
 class TestCaptionSingle:
