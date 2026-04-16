@@ -121,7 +121,7 @@ uv run python -m art_style_search clean --all
 | `--caption-model` | `gemini-3.1-pro-preview` | Gemini model for captioning |
 | `--generator-model` | `gemini-3.1-flash-image-preview` | Gemini model for generation |
 | `--reasoning-provider` | `anthropic` | Reasoning provider: `anthropic`, `zai`, `openai`, `xai`, or `local` |
-| `--reasoning-model` | auto | Model name (default: `claude-sonnet-4-6` / `glm-5.1` / `gpt-5.4` / `grok-4.20-reasoning-latest`) |
+| `--reasoning-model` | auto | Model name (default: `claude-opus-4-7` / `glm-5.1` / `gpt-5.4` / `grok-4.20-reasoning-latest`) |
 | `--comparison-provider` | `gemini` | Image comparison provider: `gemini` or `xai` |
 | `--comparison-model` | auto | Comparison model name (default: caption model for `gemini`, `grok-4.20-reasoning-latest` for `xai`) |
 | `--reasoning-base-url` | none | Required with `--reasoning-provider local`; base URL for an OpenAI-compatible server |

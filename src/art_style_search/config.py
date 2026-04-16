@@ -123,7 +123,7 @@ def parse_args(argv: list[str] | None = None) -> Config:
     models.add_argument(
         "--reasoning-model",
         default=None,
-        help="Reasoning model name (default: claude-sonnet-4-6 / glm-5.1 / gpt-5.4 / grok-4.20-reasoning-latest)",
+        help="Reasoning model name (default: claude-opus-4-7 / glm-5.1 / gpt-5.4 / grok-4.20-reasoning-latest)",
     )
     models.add_argument(
         "--comparison-provider",
@@ -219,7 +219,7 @@ def _validate_and_build_config(args: argparse.Namespace, parser: argparse.Argume
 
     # Default model based on provider
     default_models = {
-        "anthropic": "claude-sonnet-4-6",
+        "anthropic": "claude-opus-4-7",
         "zai": "glm-5.1",
         "openai": "gpt-5.4",
         "xai": "grok-4.20-reasoning-latest",

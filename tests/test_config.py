@@ -136,7 +136,7 @@ class TestDefaults:
         assert cfg.generator_model == "gemini-3.1-flash-image-preview"
 
     def test_reasoning_model(self, cfg: Config) -> None:
-        assert cfg.reasoning_model == "claude-sonnet-4-6"
+        assert cfg.reasoning_model == "claude-opus-4-7"
         assert cfg.reasoning_provider == "anthropic"
 
     def test_comparison_model(self, cfg: Config) -> None:
