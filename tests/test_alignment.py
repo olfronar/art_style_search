@@ -67,13 +67,30 @@ class TestPerImageScoreForAlignment:
             assert score is not None
             assert score.dreamsim_similarity == pytest.approx(0.1 * (i + 1))
 
-    def test_out_of_range_returns_none(self) -> None:
+    def test_unknown_path_returns_none(self) -> None:
         result = _make_result(3)
         assert _per_image_score_for(result, Path("/out/99.png")) is None
 
-    def test_non_integer_stem_returns_none(self) -> None:
+    def test_non_integer_stem_returns_score_by_position(self) -> None:
+        """Position-based lookup: filename stem is irrelevant as long as the
+        exact Path is present in ``image_paths``."""
         result = _make_result(3)
-        assert _per_image_score_for(result, Path("/out/abc.png")) is None
+        result.image_paths[1] = Path("/out/abc.png")
+        score = _per_image_score_for(result, Path("/out/abc.png"))
+        assert score is not None
+        assert score.dreamsim_similarity == pytest.approx(0.55)
+
+    def test_score_with_dropped_generations(self) -> None:
+        """Reproduces the homescapes bug: filename stems skip dropped slots
+        (10, 15) but per_image_scores is pruned to surviving positions.
+        Using the stem as an index returned the score for the *next* slot.
+        """
+        result = _make_result(3, dreamsim_values=[0.1, 0.2, 0.3])
+        # Emulate slots 0, 11, 16 surviving from a 20-ref batch.
+        result.image_paths = [Path("/out/00.png"), Path("/out/11.png"), Path("/out/16.png")]
+
+        assert _per_image_score_for(result, Path("/out/11.png")).dreamsim_similarity == pytest.approx(0.2)  # type: ignore[union-attr]
+        assert _per_image_score_for(result, Path("/out/16.png")).dreamsim_similarity == pytest.approx(0.3)  # type: ignore[union-attr]
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +165,12 @@ class TestBuildRefGenPairs:
             assert gen == Path(f"/out/{i:02d}.png")
 
     def test_with_gaps(self) -> None:
-        """Simulate dropped images: stems [00, 02, 05] with captions for all 6."""
+        """Dropped generations prune image_paths AND iteration_captions in
+        lockstep. Filename stems preserve the original fixed-refs slot; list
+        position is what pairs them. Reproduces the homescapes-run bug where
+        a ref_slot==10 drop caused every later pair to shift by one."""
+        # Simulates fixed_refs of 6 where slots 1, 3, 4 failed generation.
+        # Surviving slots: 0, 2, 5 → filenames 00, 02, 05.
         result = IterationResult(
             branch_id=0,
             iteration=1,
@@ -161,53 +183,35 @@ class TestBuildRefGenPairs:
             template_changes="",
             kept=True,
             iteration_captions=[
-                Caption(image_path=Path(f"/ref/img_{i:03d}.png"), text=f"Caption {i}") for i in range(6)
+                Caption(image_path=Path("/ref/img_000.png"), text="Caption 0"),
+                Caption(image_path=Path("/ref/img_002.png"), text="Caption 2"),
+                Caption(image_path=Path("/ref/img_005.png"), text="Caption 5"),
             ],
         )
         pairs = build_ref_gen_pairs(result)
-        assert len(pairs) == 3
-        assert pairs[0] == (Path("/ref/img_000.png"), Path("/out/00.png"))
-        assert pairs[1] == (Path("/ref/img_002.png"), Path("/out/02.png"))
-        assert pairs[2] == (Path("/ref/img_005.png"), Path("/out/05.png"))
+        assert pairs == [
+            (Path("/ref/img_000.png"), Path("/out/00.png")),
+            (Path("/ref/img_002.png"), Path("/out/02.png")),
+            (Path("/ref/img_005.png"), Path("/out/05.png")),
+        ]
 
-    def test_non_integer_stems_skipped(self) -> None:
+    def test_empty_captions(self) -> None:
+        """Older or migrated state may have empty iteration_captions; no pairs
+        can be reconstructed and we must not raise."""
         result = IterationResult(
             branch_id=0,
             iteration=1,
             template=make_prompt_template(),
             rendered_prompt="test",
-            image_paths=[Path("/out/abc.png"), Path("/out/00.png")],
+            image_paths=[Path("/out/00.png"), Path("/out/01.png")],
             per_image_scores=[_make_scores(0.5)] * 2,
             aggregated=make_aggregated_metrics(),
             claude_analysis="",
             template_changes="",
             kept=True,
-            iteration_captions=[
-                Caption(image_path=Path("/ref/img_000.png"), text="Caption 0"),
-            ],
+            iteration_captions=[],
         )
-        pairs = build_ref_gen_pairs(result)
-        assert len(pairs) == 1
-        assert pairs[0] == (Path("/ref/img_000.png"), Path("/out/00.png"))
-
-    def test_out_of_range_index_skipped(self) -> None:
-        result = IterationResult(
-            branch_id=0,
-            iteration=1,
-            template=make_prompt_template(),
-            rendered_prompt="test",
-            image_paths=[Path("/out/00.png"), Path("/out/99.png")],
-            per_image_scores=[_make_scores(0.5)] * 2,
-            aggregated=make_aggregated_metrics(),
-            claude_analysis="",
-            template_changes="",
-            kept=True,
-            iteration_captions=[
-                Caption(image_path=Path("/ref/img_000.png"), text="Caption 0"),
-            ],
-        )
-        pairs = build_ref_gen_pairs(result)
-        assert len(pairs) == 1
+        assert build_ref_gen_pairs(result) == []
 
 
 # ---------------------------------------------------------------------------

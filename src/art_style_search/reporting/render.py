@@ -151,12 +151,13 @@ def _metric_scores_tooltip(scores: MetricScores) -> str:
 
 
 def _per_image_score_for(result: IterationResult, gen_path: Path) -> MetricScores | None:
-    try:
-        idx = int(gen_path.stem)
-    except ValueError:
-        return None
-    if 0 <= idx < len(result.per_image_scores):
-        return result.per_image_scores[idx]
+    # image_paths[i] and per_image_scores[i] are position-aligned; filename stems
+    # encode the original fixed-refs slot and diverge from position after drops.
+    for i, p in enumerate(result.image_paths):
+        if p == gen_path:
+            if 0 <= i < len(result.per_image_scores):
+                return result.per_image_scores[i]
+            return None
     return None
 
 
@@ -393,16 +394,16 @@ def _render_image_grid(winner: IterationResult, report_dir: Path) -> str:
     if not winner.image_paths:
         return "<p class='empty'>No generated images recorded for the winning experiment.</p>"
 
-    caption_by_idx = {i: caption.image_path for i, caption in enumerate(winner.iteration_captions)}
+    # image_paths[i] and iteration_captions[i] are position-aligned (pruned in
+    # lockstep when generations fail). Filename stems encode the original
+    # fixed-refs slot and are only used for display, not for pairing.
     pairs: list[tuple[int, Path, Path]] = []
-    for gen_path in winner.image_paths:
+    for gen_path, caption in zip(winner.image_paths, winner.iteration_captions, strict=False):
         try:
             idx = int(gen_path.stem)
         except ValueError:
-            continue
-        ref = caption_by_idx.get(idx)
-        if ref is not None:
-            pairs.append((idx, ref, gen_path))
+            idx = len(pairs)
+        pairs.append((idx, caption.image_path, gen_path))
 
     if not pairs:
         return "<p class='empty'>Could not reconstruct reference/generated pairs.</p>"

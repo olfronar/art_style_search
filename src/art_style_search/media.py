@@ -60,15 +60,11 @@ def image_to_xai_data_url(path: Path) -> str:
 
 
 def build_ref_gen_pairs(result: IterationResult) -> list[tuple[Path, Path]]:
-    """Reconstruct (reference, generated) pairs from an IterationResult."""
-    caption_by_idx = {i: c.image_path for i, c in enumerate(result.iteration_captions)}
-    pairs: list[tuple[Path, Path]] = []
-    for gen_path in result.image_paths:
-        try:
-            idx = int(gen_path.stem)
-        except ValueError:
-            continue
-        ref = caption_by_idx.get(idx)
-        if ref is not None:
-            pairs.append((ref, gen_path))
-    return pairs
+    """Reconstruct (reference, generated) pairs from an IterationResult.
+
+    Relies on the ``IterationResult`` alignment invariant: ``image_paths[i]`` and
+    ``iteration_captions[i]`` refer to the same image. Filename stems cannot be
+    used as positional keys — they encode the original fixed-refs slot and skip
+    gaps whenever a generation fails.
+    """
+    return [(c.image_path, gen) for gen, c in zip(result.image_paths, result.iteration_captions, strict=False)]
