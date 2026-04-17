@@ -7,13 +7,13 @@ import logging
 import shutil
 from pathlib import Path
 
-from art_style_search.analyze import analyze_style
+from art_style_search.analyze import _reasoning_compile, _save_cache, analyze_style
 from art_style_search.experiment import collect_experiment_results, run_experiment
 from art_style_search.prompt._parse import validate_template
 from art_style_search.prompt.initial import propose_initial_templates
 from art_style_search.scoring import composite_score
 from art_style_search.state import save_iteration_log, save_state
-from art_style_search.types import KnowledgeBase, LoopState, PromptTemplate
+from art_style_search.types import KnowledgeBase, LoopState, PromptTemplate, StyleProfile
 from art_style_search.workflow.context import (
     RunContext,
     _log_experiment_results,
@@ -26,6 +26,8 @@ from art_style_search.workflow.policy import _apply_best_result
 
 logger = logging.getLogger(__name__)
 
+_CANON_REBUILD_ERROR_MARKER = "must read as third-person declarative assertions"
+
 
 def _validate_template_or_raise(template: PromptTemplate, *, context: str) -> None:
     """Raise a RuntimeError when a model-produced template violates required invariants."""
@@ -34,6 +36,57 @@ def _validate_template_or_raise(template: PromptTemplate, *, context: str) -> No
         return
     msg = f"{context} produced invalid template: {'; '.join(errors)}"
     raise RuntimeError(msg)
+
+
+async def maybe_rebuild_canon_on_resume(state: LoopState, ctx: RunContext) -> bool:
+    """Rebuild ``state.current_template`` / ``best_template`` when their canon drifted to methodology.
+
+    Older runs (before the canon-as-content contract was enforced) persisted
+    ``style_foundation.value`` strings that read as captioner methodology
+    ("Begin the caption with...", "SLOT N", "target 400-800 words"). The new
+    validator rejects those strings. On resume, rather than failing the next
+    iteration, rebuild the canon from the cached ``StyleProfile`` (no new
+    captioning + no new Gemini vision call required — the raw analyses are
+    already persisted on the StyleProfile).
+
+    Returns True when a rebuild happened.
+    """
+    errors = validate_template(state.current_template)
+    if not any(_CANON_REBUILD_ERROR_MARKER in err for err in errors):
+        return False
+
+    config = ctx.config
+    style_profile: StyleProfile = state.style_profile
+    gemini_raw = style_profile.gemini_raw_analysis
+    claude_raw = style_profile.claude_raw_analysis
+    if not gemini_raw or not claude_raw:
+        msg = (
+            "Cannot rebuild canon on resume: style_profile is missing the raw Gemini/reasoning "
+            "analyses. Please run `clean --run <name>` and restart the run."
+        )
+        raise RuntimeError(msg)
+
+    logger.warning(
+        "Resumed state carries style_foundation shaped as captioner methodology — "
+        "rebuilding canon from cached StyleProfile (no captioning re-run)"
+    )
+    fresh_profile, fresh_template = await _reasoning_compile(
+        gemini_raw,
+        claude_raw,
+        client=ctx.reasoning_client,
+        model=config.reasoning_model,
+    )
+    _validate_template_or_raise(fresh_template, context="Canon rebuild")
+
+    state.current_template = fresh_template
+    state.best_template = fresh_template
+    state.best_metrics = None  # force re-evaluation of the incumbent baseline
+    state.style_profile = fresh_profile
+
+    shared_cache = config.run_dir.parent / ".cache" / f"style_{_ref_cache_key(state.fixed_references)}.json"
+    _save_cache(fresh_profile, fresh_template, shared_cache)
+    logger.info("Canon rebuild complete — installed fresh style_foundation as incumbent")
+    return True
 
 
 def _sanitize_initial_templates(

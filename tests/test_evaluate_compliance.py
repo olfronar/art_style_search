@@ -354,6 +354,30 @@ class TestComputeCanonFidelity:
         score = compute_canon_fidelity(caption, _CANON_FOUNDATION)
         assert score < 0.3, f"paraphrased voice should score low (bad), got {score}"
 
+    def test_partial_copy_scores_in_proportion(self) -> None:
+        """LCS ratio: copying roughly the first half of the canon should land around 0.5."""
+        half = _CANON_FOUNDATION[: len(_CANON_FOUNDATION) // 2]
+        caption = f"[Art Style] {half} plus captioner paraphrase here. [Subject] child."
+        score = compute_canon_fidelity(caption, _CANON_FOUNDATION)
+        assert 0.3 < score < 0.7, f"half-copy should land mid-range, got {score}"
+
+    def test_whitespace_variation_does_not_break_verbatim_match(self) -> None:
+        """Whitespace normalization: extra newlines / double spaces in the caption shouldn't
+        knock a verbatim copy off the >0.7 bar."""
+        rewrapped = _CANON_FOUNDATION.replace(". ", ".\n\n").replace(" ", "  ")
+        caption = f"[Art Style] {rewrapped} [Subject] something."
+        score = compute_canon_fidelity(caption, _CANON_FOUNDATION)
+        assert score > 0.7, f"whitespace-rewrapped verbatim copy should still score high, got {score}"
+
+    def test_vocabulary_coincidence_without_contiguity_scores_low(self) -> None:
+        """Paraphrase that uses ALL of the canon's key vocabulary — but scrambles word order —
+        must not fake a high score. Trigram-coverage metrics were vulnerable to this."""
+        vocab = _CANON_FOUNDATION.split()
+        shuffled = " ".join(reversed(vocab))
+        caption = f"[Art Style] {shuffled} [Subject] child."
+        score = compute_canon_fidelity(caption, _CANON_FOUNDATION)
+        assert score < 0.3, f"shuffled vocabulary should score low despite 100% token overlap, got {score}"
+
 
 class TestComputeObservationBoilerplatePurity:
     def test_empty_caption_returns_neutral(self) -> None:

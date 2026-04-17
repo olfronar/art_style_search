@@ -53,19 +53,39 @@ _SUBJECT_ANCHOR_ARCHETYPE_TOKENS: tuple[str, ...] = (
     "elongated",
 )
 
-# Style canon anti-methodology lint. The canon (``style_foundation.value``) must hold concrete
-# assertive style content, not instructions to the captioner. These patterns catch the drift
-# mode we observed in prior runs where the reasoner wrapped canon content in imperative/audit
-# scaffolding (slot numbers, checkboxes, "Write the block as…", "Target N-M words", etc.).
-# Each pattern is line-anchored where practical; a single hit is grounds to reject.
+# Style canon anti-methodology lint. The canon (``style_foundation.value``) IS the literal
+# [Art Style] block content — declarative third-person assertions ABOUT the style that the
+# captioner pastes verbatim and the image generator reads as the style descriptor. It must
+# NOT read as instructions TO a captioner. These patterns catch the drift modes we've observed:
+# (1) sentence-initial imperatives addressed to a reader, (2) direct address ("the captioner",
+# "this block"), (3) audit scaffolding (SLOT N, checkboxes, MANDATORY), (4) meta-vocabulary
+# about reproduction ("verbatim", "paraphrase", "REUSABLE DNA"), (5) word-count targets.
+# A single hit rejects the value.
 _CANON_METHODOLOGY_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # Audit scaffolding
     re.compile(r"^\s*slot\s+\d+\b", re.IGNORECASE | re.MULTILINE),
     re.compile(r"^\s*-\s*\[\s*\]", re.MULTILINE),
-    re.compile(r"\bwrite\s+the\s+(?:\[art\s+style\]|block|canon)\b", re.IGNORECASE),
-    re.compile(r"\btarget\s+\d+\s*[-\u2013]\s*\d+\s+words?\b", re.IGNORECASE),
-    re.compile(r"\bbegin\s+the\s+block\b", re.IGNORECASE),
     re.compile(r"^\s*mandatory\b", re.IGNORECASE | re.MULTILINE),
+    # Specific imperative phrases addressed to a captioner
+    re.compile(r"\bwrite\s+the\s+(?:\[art\s+style\]|block|canon)\b", re.IGNORECASE),
     re.compile(r"\bdeclare\s+the\s+medium\b", re.IGNORECASE),
+    re.compile(r"\bbegin\s+the\s+block\b", re.IGNORECASE),
+    # Sentence-initial imperative verbs addressed to a reader. `never|always|ensure` are
+    # deliberately excluded — they legitimately open MUST/NEVER style invariants.
+    re.compile(
+        r"^\s*(?:begin|write|declare|target|avoid|follow|before|after|do\s+not|don['\u2019]t|use|include)\b",
+        re.IGNORECASE | re.MULTILINE,
+    ),
+    # Direct address to the captioner
+    re.compile(r"\bthe\s+caption(?:er)?\b", re.IGNORECASE),
+    # Meta-references to the canon structure instead of asserting the style
+    re.compile(r"\bthis\s+(?:block|section|slot|canon|skeleton)\b", re.IGNORECASE),
+    re.compile(r"\beach\s+slot\b", re.IGNORECASE),
+    # Meta-vocabulary about reproduction
+    re.compile(r"\b(?:verbatim|paraphrase)\b", re.IGNORECASE),
+    re.compile(r"\breusable\s+(?:style\s+)?dna\b", re.IGNORECASE),
+    # Any word-count target (generalizes the old "target N-M words" pattern)
+    re.compile(r"\b\d+\s*[-\u2013]\s*\d+\s+words?\b", re.IGNORECASE),
 )
 
 
@@ -84,9 +104,12 @@ def _check_anchor_sub_blocks(template: PromptTemplate) -> list[str]:
         methodology_hits = [p.pattern for p in _CANON_METHODOLOGY_PATTERNS if p.search(foundation_raw)]
         if methodology_hits:
             errors.append(
-                "style_foundation.value reads as captioner methodology, not style canon — drop "
-                "imperative/audit markers and assert the style directly "
-                f"(matched {len(methodology_hits)} methodology patterns: {methodology_hits[:3]})"
+                "style_foundation.value must read as third-person declarative assertions ABOUT this style "
+                "(e.g. 'This style renders as lit 3D volumes with uniformly beveled edges. Shadows hue-shift "
+                "cooler...'), NOT as imperatives to a captioner. Drop imperative verbs, audit scaffolding "
+                "(SLOT N, checkboxes, MANDATORY), meta-references ('this block', 'each slot'), word-count "
+                "targets, and reproduction vocabulary ('verbatim', 'paraphrase', 'REUSABLE DNA') "
+                f"(matched {len(methodology_hits)} methodology patterns: {methodology_hits[:5]})"
             )
     subject = (by_name.get("subject_anchor") or "").lower()
     if subject:

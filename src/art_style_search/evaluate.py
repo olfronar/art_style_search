@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import logging
 import random
 import re
@@ -770,31 +771,40 @@ def _trigram_overlap(sample_tokens: list[str], reference_tokens: list[str]) -> f
     return len(sample_trigrams & ref_trigrams) / len(sample_trigrams)
 
 
+_CANON_FIDELITY_MIN_CANON_CHARS = 200
+_CANON_FIDELITY_MIN_BLOCK_CHARS = 50
+
+
+def _normalize_whitespace(text: str) -> str:
+    return " ".join(text.split())
+
+
 def compute_canon_fidelity(caption_text: str, style_canon_text: str) -> float:
     """Return canon fidelity of the caption's [Art Style] block vs ``style_foundation`` content.
 
-    Returns a value in [0, 1]:
-    - 1.0 = the [Art Style] block is a verbatim (or near-verbatim) copy of the canon
-      (shared style DNA carried forward — the desired behavior).
-    - 0.0 = the [Art Style] block has been paraphrased into the captioner's own voice
-      (no shared DNA; each caption reinvents the style).
+    Measures the longest contiguous run of the canon that appears in the caption's
+    [Art Style] block, as a fraction of the canon's length. Verbatim copy → 1.0;
+    paraphrase breaks character-level contiguity → typically <0.2; vocabulary
+    coincidence doesn't produce a long contiguous run so it can't fake a high score.
 
-    Uses token-trigram coverage on the first ``_STYLE_PURITY_TRIGRAM_SAMPLE_TOKENS`` tokens
-    of the caption's [Art Style] block. Short blocks, missing [Art Style], or empty canon
-    return 1.0 (no signal, don't penalize).
+    Returns 1.0 (neutral, no meaningful signal) when: empty caption / canon, missing
+    [Art Style] block, canon shorter than ``_CANON_FIDELITY_MIN_CANON_CHARS``, or
+    [Art Style] block shorter than ``_CANON_FIDELITY_MIN_BLOCK_CHARS``. Short-block
+    captions are rejected upstream by the caption length floor; the guard here is
+    defensive for test / partial-failure paths.
     """
     if not caption_text or not style_canon_text:
         return 1.0
     parsed = parse_labeled_sections(caption_text)
-    art_style = parsed.get("Art Style", "").strip()
-    if not art_style:
+    art_style = _normalize_whitespace(parsed.get("Art Style", ""))
+    canon = _normalize_whitespace(style_canon_text)
+    if len(canon) < _CANON_FIDELITY_MIN_CANON_CHARS:
         return 1.0
-    caption_tokens = art_style.split()[:_STYLE_PURITY_TRIGRAM_SAMPLE_TOKENS]
-    canon_tokens = style_canon_text.split()
-    overlap = _trigram_overlap(caption_tokens, canon_tokens)
-    if overlap is None:
+    if len(art_style) < _CANON_FIDELITY_MIN_BLOCK_CHARS:
         return 1.0
-    return max(0.0, min(1.0, overlap))
+    matcher = difflib.SequenceMatcher(None, art_style, canon, autojunk=False)
+    longest = matcher.find_longest_match(0, len(art_style), 0, len(canon)).size
+    return max(0.0, min(1.0, longest / len(canon)))
 
 
 def compute_observation_boilerplate_purity(caption_text: str, style_canon_text: str) -> float:

@@ -385,14 +385,16 @@ def _schema_word_block(token: str, *, words: int = 260) -> str:
 
 
 _STYLE_FOUNDATION_DRAWING_PREFIX = (
-    "How to Draw: hand-painted 2D with visible brushwork and paper tooth, hand-made line with pressure variation, "
-    "silhouette primitives, construction order (silhouette -> forms -> details), line policy. "
-    "Shading & Light: base -> AO -> midtones -> rim -> specular stack, feathered edges, warm key + cool rim. "
-    "Color Principle: saturated complementary blues, mid-key with moderate contrast, selective chroma. "
-    "Surface & Texture: paper tooth, watercolor wash vocabulary that matches the observed medium. "
-    "Style Invariants: MUST every character have exactly one exaggerated feature; NEVER more than three saturated hues in one frame. "
-    "Observations-vs-rules: [Art Style] holds RULES only; per-image observations live in [Subject] / [Color Palette] / [Composition] / [Lighting & Atmosphere]. "
-    "Anti-name preamble: no genre labels inside [Art Style] — describe HOW it is rendered, not NAMES. "
+    "How to Draw: this style is hand-painted 2D with visible brushwork and paper tooth. Lines are hand-made with "
+    "pressure variation; forms build from silhouette primitives through construction order silhouette-forms-details. "
+    "Shading & Light: surfaces carry a base-AO-midtones-rim-specular stack with feathered edges and a warm key "
+    "paired with a cool rim. "
+    "Color Principle: the palette locks to saturated complementary blues in the mid-key with moderate contrast and "
+    "selective chroma; shadows hue-shift cooler rather than desaturating. "
+    "Surface & Texture: every surface reads as paper tooth and watercolor wash; material vocabulary stays consistent "
+    "with the observed medium and does not mix with incompatible media. "
+    "Style Invariants: MUST give every character exactly one exaggerated feature; MUST hue-shift shadows; "
+    "NEVER allow more than three saturated hues in one frame; NEVER introduce photographic grain. "
 )
 _SUBJECT_ANCHOR_PROPORTIONS_PREFIX = (
     "Proportions: N.N heads tall, archetype (chibi / stylized-youth / heroic / realistic-adult / "
@@ -405,7 +407,7 @@ def _schema_template_payload() -> dict[str, Any]:
         "sections": [
             {
                 "name": "style_foundation",
-                "description": "core style rules",
+                "description": "the literal [Art Style] canon — copied verbatim into every caption and read by the image generator as the style descriptor",
                 "value": _STYLE_FOUNDATION_DRAWING_PREFIX + _schema_word_block("style_dna", words=240),
             },
             {

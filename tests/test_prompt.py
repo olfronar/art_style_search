@@ -308,6 +308,37 @@ class TestValidateTemplate:
         errors = validate_template(t)
         assert any("methodology" in e for e in errors), errors
 
+    def test_rejects_canon_addressed_to_captioner(self) -> None:
+        """Captioner-addressing preambles ('Begin the caption with...', 'This block is...')
+        are the dominant drift shape observed post-9277be7. The tightened validator must
+        reject them even without the older SLOT/MANDATORY markers."""
+        t = _make_valid_template()
+        t.sections[0].value = (
+            "How to Draw: the style renders as lit 3D volumes with beveled edges. "
+            "Begin the caption with an [Art Style] block 400-800 words long. "
+            "This block is the reusable style DNA the captioner must copy verbatim. "
+            "Each slot is a dense paragraph of rules that applies to every image.\n"
+        ) + "Filler rules. " * 120
+        errors = validate_template(t)
+        assert any("methodology" in e for e in errors), errors
+
+    def test_rejects_canon_referencing_the_captioner_directly(self) -> None:
+        t = _make_valid_template()
+        t.sections[0].value = (
+            "How to Draw: style renders as soft-beveled volumes with chromatic shadows. "
+            "The captioner must paraphrase these assertions into the [Art Style] block verbatim."
+        ) + "Filler rules. " * 120
+        errors = validate_template(t)
+        assert any("methodology" in e for e in errors), errors
+
+    def test_rejects_canon_with_reusable_dna_phrase(self) -> None:
+        t = _make_valid_template()
+        t.sections[0].value = (
+            "How to Draw: style renders as soft volumes.\nThis is the REUSABLE style DNA repeated across captions.\n"
+        ) + "Filler rules. " * 120
+        errors = validate_template(t)
+        assert any("methodology" in e for e in errors), errors
+
     def test_accepts_canon_of_concrete_style_assertions(self) -> None:
         t = _make_valid_template()
         t.sections[0].value = (

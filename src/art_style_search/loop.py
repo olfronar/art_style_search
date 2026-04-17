@@ -49,7 +49,7 @@ from art_style_search.workflow.policy import (
     _apply_iteration_result,
     _check_plateau_convergence,
 )
-from art_style_search.workflow.zero_step import _zero_step
+from art_style_search.workflow.zero_step import _zero_step, maybe_rebuild_canon_on_resume
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +85,10 @@ async def run(config: Config) -> LoopState:
         if state.converged:
             logger.info("Previous run already converged (%s) — skipping loop", state.convergence_reason)
             return _finalize_run(state, ctx)
+        if await maybe_rebuild_canon_on_resume(state, ctx):
+            from art_style_search.state import save_state
+
+            save_state(state, config.state_file)
     else:
         state = await _zero_step(ctx, all_ref_paths)
 
