@@ -230,7 +230,7 @@ async def _gemini_analyze(
                 contents=contents,
                 config=genai_types.GenerateContentConfig(system_instruction=_ANALYSIS_SYSTEM),
             ),
-            timeout=120,
+            timeout=180,
         )
         return response.text
 

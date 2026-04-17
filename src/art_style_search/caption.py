@@ -182,7 +182,7 @@ async def caption_single(
                     ],
                     config=genai_types.GenerateContentConfig(**config_kwargs),
                 ),
-                timeout=90,
+                timeout=180,
             )
         return resp.text
 

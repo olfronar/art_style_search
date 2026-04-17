@@ -314,7 +314,7 @@ async def _compare_vision_single_gemini(
                     contents=contents,
                     config=genai.types.GenerateContentConfig(system_instruction=_VISION_SYSTEM),
                 ),
-                timeout=90,
+                timeout=180,
             )
         text = response.text or ""
         return text, _parse_vision_verdicts(text)
@@ -361,7 +361,7 @@ async def _compare_vision_single_xai(
                     max_output_tokens=1000,
                     store=False,
                 ),
-                timeout=90,
+                timeout=180,
             )
         text = response.output_text or ""
         return text, _parse_vision_verdicts(text)
@@ -523,7 +523,7 @@ async def pairwise_compare_experiments(
                         contents=contents,
                         config=genai.types.GenerateContentConfig(system_instruction=_PAIRWISE_SYSTEM),
                     ),
-                    timeout=120,
+                    timeout=180,
                 )
             return _parse_pairwise_response(response.text or "")
     elif provider == "xai":
@@ -559,7 +559,7 @@ async def pairwise_compare_experiments(
                         max_output_tokens=1000,
                         store=False,
                     ),
-                    timeout=120,
+                    timeout=180,
                 )
             return _parse_pairwise_response(response.output_text or "")
     else:
