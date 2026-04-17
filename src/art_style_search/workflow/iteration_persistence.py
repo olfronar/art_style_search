@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from art_style_search.contracts import ExperimentProposal, Lessons
 from art_style_search.experiment import best_kept_result
-from art_style_search.knowledge import IterationDecision, update_knowledge_base
+from art_style_search.knowledge import IterationDecision, append_kb_style_gap_observations, update_knowledge_base
 from art_style_search.state import save_iteration_log, save_state
 from art_style_search.types import AggregatedMetrics, LoopState
 from art_style_search.workflow.context import RunContext, _log_experiment_results, _save_best_prompt
@@ -34,6 +34,12 @@ def _update_knowledge_base_for_iteration(
     selected = next((result for result in ranking.exp_results if result.kept), None)
     if selected is not None:
         decision_by_id[selected.branch_id] = decision
+
+    # Append the frontier experiment's style-gap observations (from the vision judge) to the KB
+    # ring buffer so the next iteration's reasoner sees concrete canon-improvement feedstock.
+    source = selected or (ranking.exp_results[0] if ranking.exp_results else None)
+    if source is not None:
+        append_kb_style_gap_observations(state.knowledge_base, source.aggregated.style_gap_notes)
 
     for exp_result, proposal in zip(ranking.exp_results, proposals, strict=False):
         update_knowledge_base(

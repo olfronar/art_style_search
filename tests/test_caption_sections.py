@@ -42,3 +42,25 @@ class TestBuildGenerationPrompt:
     def test_falls_back_to_raw_caption_when_art_style_block_missing(self) -> None:
         caption = "[Subject] A red fox with a satchel.\n[Color Palette] Ochre and slate blue."
         assert build_generation_prompt(caption) == caption
+
+    def test_canon_fallback_injects_style_when_art_style_missing(self) -> None:
+        caption = "[Subject] A red fox with a satchel, alert ears, amber eyes.\n[Color Palette] Ochre and slate blue."
+        canon = "Lineless 2D digital illustration with soft airbrush gradients. " + (
+            "Bevel all edges; no outlines; saturated candy palette; "
+            "hue-shift shadows cool; rim light opposite key. " * 20
+        )
+        prompt = build_generation_prompt(caption, style_canon=canon)
+
+        assert prompt.startswith("[Subject]\nA red fox")
+        assert "Render in this style:\n[Art Style]\n" + canon.strip() in prompt
+
+    def test_canon_fallback_ignored_when_caption_art_style_is_long_enough(self) -> None:
+        # "Shared watercolor rules" = 3 words; 40 repetitions = 120 words, above the 100-word floor.
+        art_style = "Shared watercolor rules " * 40
+        caption = f"[Subject] A red fox.\n[Art Style] {art_style}\n[Color Palette] Ochre and slate blue."
+        canon = "DIFFERENT canon text that should NOT appear " * 20
+
+        prompt = build_generation_prompt(caption, style_canon=canon)
+
+        assert canon.strip() not in prompt
+        assert "Shared watercolor rules" in prompt

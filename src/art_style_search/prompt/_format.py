@@ -101,6 +101,17 @@ def format_knowledge_base(kb: KnowledgeBase, max_words: int = 3000) -> str:
             lines.append(f"{i}. [{prob.priority}] {prob.text}{gap_str}")
         problems_text = "\n".join(lines)
 
+    # --- Section 1b: Style-Gap Observations (from vision judge — canon-edit feedstock) ---
+    style_gap_text = ""
+    if kb.style_gap_observations:
+        lines = [
+            "### Style-Gap Observations (vision judge — canon-edit feedstock)",
+            "Each canon edit you propose should name which observation below it addresses.",
+        ]
+        for i, obs in enumerate(kb.style_gap_observations, 1):
+            lines.append(f"{i}. {obs}")
+        style_gap_text = "\n".join(lines)
+
     # --- Section 2: Per-Category Status (compact: count + latest insight) ---
     cat_lines = ["### Per-Category Status"]
     for cat_name in sorted(kb.categories):
@@ -166,6 +177,12 @@ def format_knowledge_base(kb: KnowledgeBase, max_words: int = 3000) -> str:
         pw = len(problems_text.split())
         result_parts.append(problems_text)
         budget_remaining -= pw
+
+    if style_gap_text:
+        sgw = len(style_gap_text.split())
+        if sgw <= budget_remaining:
+            result_parts.append("\n" + style_gap_text)
+            budget_remaining -= sgw
 
     cw = len(cat_text.split())
     if cw <= budget_remaining:

@@ -8,6 +8,8 @@ bounds, and changed-section rules per risk level).
 
 from __future__ import annotations
 
+import re
+
 from art_style_search.types import PromptTemplate
 
 # ---------------------------------------------------------------------------
@@ -51,17 +53,41 @@ _SUBJECT_ANCHOR_ARCHETYPE_TOKENS: tuple[str, ...] = (
     "elongated",
 )
 
+# Style canon anti-methodology lint. The canon (``style_foundation.value``) must hold concrete
+# assertive style content, not instructions to the captioner. These patterns catch the drift
+# mode we observed in prior runs where the reasoner wrapped canon content in imperative/audit
+# scaffolding (slot numbers, checkboxes, "Write the block as…", "Target N-M words", etc.).
+# Each pattern is line-anchored where practical; a single hit is grounds to reject.
+_CANON_METHODOLOGY_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^\s*slot\s+\d+\b", re.IGNORECASE | re.MULTILINE),
+    re.compile(r"^\s*-\s*\[\s*\]", re.MULTILINE),
+    re.compile(r"\bwrite\s+the\s+(?:\[art\s+style\]|block|canon)\b", re.IGNORECASE),
+    re.compile(r"\btarget\s+\d+\s*[-\u2013]\s*\d+\s+words?\b", re.IGNORECASE),
+    re.compile(r"\bbegin\s+the\s+block\b", re.IGNORECASE),
+    re.compile(r"^\s*mandatory\b", re.IGNORECASE | re.MULTILINE),
+    re.compile(r"\bdeclare\s+the\s+medium\b", re.IGNORECASE),
+)
+
 
 def _check_anchor_sub_blocks(template: PromptTemplate) -> list[str]:
     """Enforce mandatory sub-blocks inside style_foundation / subject_anchor values."""
     errors: list[str] = []
     by_name = {s.name: s.value for s in template.sections}
-    foundation = (by_name.get("style_foundation") or "").lower()
+    foundation_raw = by_name.get("style_foundation") or ""
+    foundation = foundation_raw.lower()
     if foundation and _STYLE_FOUNDATION_DRAWING_MARKER not in foundation:
         errors.append(
             "style_foundation.value must contain a 'How to Draw:' sub-block "
             "(silhouette primitives, construction order, line policy, shading layers, signature quirk)"
         )
+    if foundation_raw:
+        methodology_hits = [p.pattern for p in _CANON_METHODOLOGY_PATTERNS if p.search(foundation_raw)]
+        if methodology_hits:
+            errors.append(
+                "style_foundation.value reads as captioner methodology, not style canon — drop "
+                "imperative/audit markers and assert the style directly "
+                f"(matched {len(methodology_hits)} methodology patterns: {methodology_hits[:3]})"
+            )
     subject = (by_name.get("subject_anchor") or "").lower()
     if subject:
         if _SUBJECT_ANCHOR_PROPORTION_MARKER not in subject:

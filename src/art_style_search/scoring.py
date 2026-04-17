@@ -18,13 +18,18 @@ _HPS_CEILING = 0.35  # default empirical max for HPS v2 scores; used to normaliz
 
 # Fixed metric weights for composite scoring.
 # Base weights sum to 1.00 for composite_score (experiment-level).
-# per_image_composite omits _W_STYLE_CON → its weights sum to 0.96 (max output 0.96).
+# per_image_composite omits _W_STYLE_CON → its weights sum to 0.92 (max output 0.92).
+# Rebalanced for the canon-first regime: since every caption's [Art Style] block is expected
+# to be a verbatim copy of the meta-prompt's ``style_foundation`` canon, ``style_consistency``
+# (Jaccard across [Art Style] blocks) is now a regression alarm — divergence means the canon
+# contract is slipping. Funded by halving the pixel-level SSIM weight, which is already
+# largely subsumed by DreamSim (perceptual) + color_histogram (color).
 _W_DREAMSIM = 0.34
 _W_HPS = 0.07
 _W_AESTHETICS = 0.06
 _W_COLOR = 0.17
-_W_SSIM = 0.10
-_W_STYLE_CON = 0.04
+_W_SSIM = 0.06
+_W_STYLE_CON = 0.08
 # Vision slice rebalanced to make room for the medium-class + proportions dims.
 # The medium verdict diagnoses a root cause of many style misses (2D/3D misclassification)
 # and the proportions verdict diagnoses subject-fidelity misses at the anatomy level, so
@@ -64,7 +69,8 @@ def compliance_mean(m: AggregatedMetrics) -> float:
         m.section_ordering_rate,
         m.section_balance_rate,
         m.subject_specificity_rate,
-        m.style_boilerplate_purity,
+        m.style_canon_fidelity,
+        m.observation_boilerplate_purity,
     )
 
 
@@ -131,7 +137,8 @@ def composite_score(m: AggregatedMetrics) -> float:
         m.section_ordering_rate,
         m.section_balance_rate,
         m.subject_specificity_rate,
-        m.style_boilerplate_purity,
+        m.style_canon_fidelity,
+        m.observation_boilerplate_purity,
     )
     compliance_penalty = (1.0 - compliance_score) * _W_COMPLIANCE_PENALTY
 
@@ -185,7 +192,8 @@ def adaptive_composite_score(
             r.section_ordering_rate,
             r.section_balance_rate,
             r.subject_specificity_rate,
-            r.style_boilerplate_purity,
+            r.style_canon_fidelity,
+            r.observation_boilerplate_purity,
         ),
     ]
 

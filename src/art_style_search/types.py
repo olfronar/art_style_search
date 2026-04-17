@@ -44,6 +44,10 @@ class MetricScores:
     # (see scoring._W_VISION_MEDIUM / _W_VISION_PROPORTIONS).
     vision_medium: float = 0.5  # higher = better, ternary agreement on the observed rendering medium (described in plain observable vocabulary)
     vision_proportions: float = 0.5  # higher = better, ternary agreement on character head-heights + archetype
+    # Canon-actionable style-gap observation from the vision judge (2-4 sentences describing what the
+    # generated image lacks relative to the reference, phrased as observations the canon could sharpen).
+    # Aggregated across the experiment into ``AggregatedMetrics.style_gap_notes``.
+    style_gap: str = ""
     is_fallback: bool = False  # True for zero-score sentinels substituted on evaluation failure
 
 
@@ -72,8 +76,10 @@ class VisionScores:
     """Structured per-image scores from Gemini vision comparison.
 
     All five dimensions (style, subject, composition, medium, proportions) are
-    emitted by the judge and now contribute to ``composite_score`` (see
-    ``scoring.py`` for the weight constants).
+    emitted by the judge and contribute to ``composite_score`` (see ``scoring.py``
+    for the weight constants). ``style_gap`` carries 2-4 sentences of canon-actionable
+    observations about the style delta between reference and reproduction — feedstock
+    for the reasoner's next canon edit.
     """
 
     style: VisionDimensionScore
@@ -81,6 +87,7 @@ class VisionScores:
     composition: VisionDimensionScore
     medium: VisionDimensionScore
     proportions: VisionDimensionScore
+    style_gap: str = ""
 
     @classmethod
     def default(cls) -> VisionScores:
@@ -91,6 +98,7 @@ class VisionScores:
             composition=VisionDimensionScore("composition", 0.5, ""),
             medium=VisionDimensionScore("medium", 0.5, ""),
             proportions=VisionDimensionScore("proportions", 0.5, ""),
+            style_gap="",
         )
 
 
@@ -103,10 +111,16 @@ class CaptionComplianceStats:
     section_ordering_rate: float = 1.0
     section_balance_rate: float = 1.0
     subject_specificity_rate: float = 1.0
-    # Style-DNA purity: 1.0 = captioner paraphrases the meta-prompt in its own voice; 0.0 = near-verbatim
-    # copy of meta-prompt style rules in the [Art Style] block. Measured via trigram overlap between the
-    # caption's Art Style block and the meta-prompt. 1.0 default keeps legacy callers compliant.
-    style_boilerplate_purity: float = 1.0
+    # Canon fidelity: 1.0 = caption's [Art Style] block copies the meta-prompt's style_foundation canon
+    # verbatim (shared style DNA carried forward); 0.0 = captioner paraphrased into its own voice
+    # (no shared DNA). Measured via trigram overlap between the caption's [Art Style] block and the
+    # meta-prompt's style_foundation.value. 1.0 default keeps legacy callers compliant.
+    style_canon_fidelity: float = 1.0
+    # Observation-block purity: 1.0 = observation sections ([Subject], [Color Palette], [Composition],
+    # [Lighting & Atmosphere], …) carry per-image content only; 0.0 = captioner pasted the canon into
+    # observation blocks (boilerplate pollution). Measured as 1 - trigram overlap between those blocks
+    # and style_foundation.value.
+    observation_boilerplate_purity: float = 1.0
 
     @property
     def overall(self) -> float:
@@ -116,7 +130,8 @@ class CaptionComplianceStats:
             self.section_ordering_rate,
             self.section_balance_rate,
             self.subject_specificity_rate,
-            self.style_boilerplate_purity,
+            self.style_canon_fidelity,
+            self.observation_boilerplate_purity,
         )
 
 
@@ -173,15 +188,30 @@ class AggregatedMetrics:
     section_ordering_rate: float = 1.0
     section_balance_rate: float = 1.0
     subject_specificity_rate: float = 1.0
-    style_boilerplate_purity: float = 1.0
+    style_canon_fidelity: float = 1.0
+    observation_boilerplate_purity: float = 1.0
 
     # Requested-vs-actual accounting for scoring/reporting
     requested_ref_count: int = 0
     actual_ref_count: int = 0
 
+    # Deduplicated per-experiment style-gap observations (canon-actionable deltas between generated and
+    # reference images, emitted by the vision judge). Fed to the reasoner as hypothesis feedstock for
+    # the next iteration's canon edits. Non-numeric — excluded from ``summary_dict``.
+    style_gap_notes: tuple[str, ...] = ()
+
     def summary_dict(self) -> dict[str, float]:
-        """Flat dict for JSON serialization and reasoning model consumption."""
-        return {f.name: float(getattr(self, f.name)) for f in fields(self)}
+        """Flat dict for JSON serialization and reasoning model consumption.
+
+        Only includes numeric fields — tuple-of-string signals like ``style_gap_notes``
+        are carried separately on the dataclass and are not part of the metric summary.
+        """
+        out: dict[str, float] = {}
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if isinstance(value, bool | int | float):
+                out[f.name] = float(value)
+        return out
 
 
 @dataclass(frozen=True)
@@ -346,6 +376,11 @@ class KnowledgeBase:
     hypotheses: list[Hypothesis] = field(default_factory=list)
     categories: dict[str, CategoryProgress] = field(default_factory=dict)
     open_problems: list[OpenProblem] = field(default_factory=list)
+    # Per-iteration style-gap observations from the vision judge, deduplicated and bounded.
+    # Each entry is a short canon-actionable observation the reasoner can use when proposing
+    # the next canon edit. Newest observations are appended; oldest are dropped once the list
+    # exceeds the bound (managed in knowledge.py).
+    style_gap_observations: list[str] = field(default_factory=list)
     next_id: int = 1
 
     def add_hypothesis(

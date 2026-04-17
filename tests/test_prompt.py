@@ -292,10 +292,38 @@ class TestValidateTemplate:
         t.caption_length_target = 0
         assert validate_template(t) == []
 
+    def test_rejects_canon_shaped_as_methodology(self) -> None:
+        t = _make_valid_template()
+        t.sections[0].value = (
+            "How to Draw: describe the medium in plain vocabulary.\n"
+            "\n"
+            "SLOT 1 — How to Draw (medium + construction + line policy):\n"
+            "- [ ] Declare the medium in plain observable vocabulary.\n"
+            "- [ ] Construction order: silhouette → forms → details.\n"
+            "\n"
+            "Write the [Art Style] block as a dense, compact ruleset.\n"
+            "Target 400-800 words across the 5 slots.\n"
+            "Begin the block with the Medium reminder line.\n"
+        ) + "Filler rules. " * 120
+        errors = validate_template(t)
+        assert any("methodology" in e for e in errors), errors
 
-# ---------------------------------------------------------------------------
-# JSON contract validation
-# ---------------------------------------------------------------------------
+    def test_accepts_canon_of_concrete_style_assertions(self) -> None:
+        t = _make_valid_template()
+        t.sections[0].value = (
+            "How to Draw: lineless 2D digital illustration mimicking stylized PBR 3D rendering. "
+            "Construction: silhouette primitives (spheres, capsules) merged into beveled volumes. "
+            "Line policy: absolute zero linework; separation via value, hue, and occlusion.\n"
+            "Shading & Light: saturated flat albedo, tight AO crevices, broad feathered midtones, "
+            "soft specular bloom, crisp cool rim light opposite a warm key.\n"
+            "Color Principle: high-key candy-spectrum palette; complementary/triadic anchoring; "
+            "shadows hue-shift cooler at equal-or-higher chroma, never desaturated.\n"
+            "Surface & Texture: zero grain of any kind; uniform matte-fondant / polished-clay "
+            "material vocabulary; every edge beveled and rounded.\n"
+            "Style Invariants: MUST bevel every edge; MUST hue-shift shadows cooler; NEVER outline "
+            "or cel-band any form; NEVER pure black or white outside pupils and pinpoint speculars.\n"
+        ) + "Further concrete style assertions. " * 60
+        assert validate_template(t) == []
 
 
 class TestJsonContracts:

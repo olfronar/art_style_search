@@ -70,11 +70,14 @@ class TestToDict:
             "vision_composition",
             "vision_medium",
             "vision_proportions",
+            "style_gap",
             "is_fallback",
         }
         for k, v in d.items():
             if k == "is_fallback":
                 assert isinstance(v, bool)
+            elif k == "style_gap":
+                assert isinstance(v, str)
             else:
                 assert isinstance(v, float)
 

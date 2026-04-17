@@ -58,34 +58,28 @@ CAPTION_SYSTEM = (
     "subdivision / ambient occlusion / rim light / PBR roughness / etc.) that match the observed surface — don't "
     "mix vocabulary from incompatible media in the same image (no PBR roughness on a flat vector fill; no "
     "brushwork on a mathematically smooth CGI surface).\n\n"
-    "Observations-vs-rules rule (the single most important rule):\n"
-    "- [Art Style] holds RULES that apply to every image in this style. Per-image observations — specific body parts, "
-    "named objects, proper nouns, actual colors, pose details — belong in [Subject], [Color Palette], [Composition], "
-    "or [Lighting & Atmosphere], NEVER in [Art Style]. A sentence inside [Art Style] is well-formed only if it would "
-    "still be true of a DIFFERENT image in the same style. When an upstream rule is named in the meta-prompt, "
-    "cite it by name in downstream sections; never restate its content.\n\n"
-    "[Art Style] 5-slot skeleton (describe HOW the style is rendered; never NAME the genre). "
-    "Phrases like '3D CGI of X', 'cel-shaded anime', '{Artist}-style', 'watercolor illustration' are forbidden. "
-    "Cover each slot in 2-4 sentences, tie-break shorter. Paraphrase slot labels in your own voice; do not echo headings.\n"
-    "  1. How to Draw: medium identification (plain observable vocabulary — e.g. 'hand-painted 2D with soft "
-    "gradient shading', 'stylized CGI render with beveled volumes and matte-plastic surfaces') + 3-5 cues; "
-    "construction order (silhouette → forms → details); line policy (none / thin uniform / variable ink / painterly / crease-only).\n"
-    "  2. Shading & Light: shading-layer stack in order (base → AO → midtones → rim → specular; omit absent); "
-    "edge softness (hard / feathered / graduated); key-fill-rim direction and temperature. No specific body parts or objects.\n"
-    "  3. Color Principle: palette family in generic terms ('saturated complementary blues'); value structure; "
-    "saturation policy. No actual colors named; image-specific hues go in [Color Palette].\n"
-    "  4. Surface & Texture: grain type (paper tooth / film grain / stippling / zero grain); material vocabulary "
-    "(matte plastic / fondant / PBR roughness / impasto / watercolor wash) — class-appropriate only. No specific objects.\n"
-    "  5. Style Invariants: 3-5 MUST/NEVER rules that every image in this style obeys — e.g. 'MUST: every character "
-    "has exactly one exaggerated feature'; 'NEVER: more than three saturated hues in one frame'. Generative rules: "
-    "they describe what a NEW image in this style would have to do, not what THIS image does.\n"
-    "Character proportions (heads-tall, archetype, silhouette primitives) belong in the [Subject] Proportions sub-block, NOT here. "
-    "[Art Style] length target: 400-800 words across the 5 slots.\n\n"
+    "[Art Style] is the STYLE CANON — shared style DNA, copied verbatim into every caption.\n"
+    "- The meta-prompt's `style_foundation` section already contains the canon: concrete assertive rules about this "
+    "specific art style (medium, shading stack, color principle, surfaces, invariants). Your job is to **reproduce "
+    "that canon content verbatim (or near-verbatim) as the body of [Art Style]** — do not paraphrase it, do not "
+    "rewrite it in your own voice, do not invent new rules, do not drop slots. Preserve the `How to Draw:` / "
+    "`Shading & Light:` / `Color Principle:` / `Surface & Texture:` / `Style Invariants:` markers if the canon has them.\n"
+    "- Your per-image writing freedom lives entirely in the observation blocks ([Subject], [Color Palette], "
+    "[Composition], [Lighting & Atmosphere], and any other per-image sections the meta-prompt defines).\n"
+    "- Observations-vs-rules: specific body parts, named objects, proper nouns, actual colors, pose details NEVER "
+    "appear in [Art Style]. A sentence inside [Art Style] is well-formed only if it would still be true of a "
+    "DIFFERENT image in the same style. Character proportions (heads-tall, archetype, silhouette primitives) "
+    "belong in the [Subject] Proportions sub-block, not here.\n"
+    "- Anti-name: phrases like '3D CGI of X', 'cel-shaded anime', '{Artist}-style', 'watercolor illustration' are "
+    "forbidden inside [Art Style]. Describe the technique from observable surface cues, not from genre labels.\n"
+    "- If the meta-prompt's `style_foundation` does not yet cover a slot, leave that slot's canonical marker in "
+    "place and keep the section compact — do not fabricate rules that are not in the canon.\n"
+    "- [Art Style] length target: the same 400-800 words that the canon itself targets.\n\n"
     "Output-format discipline:\n"
     "- Write section labels as PLAIN TEXT: `[Art Style]`, `[Subject]`. Never wrap in markdown bolding, backticks, or angle brackets.\n"
     "- Emit labeled blocks in the exact order the meta-prompt's ## Caption Sections block specifies. "
     "Target the word count in ## Caption Length Target. Let [Subject] carry the per-image weight; "
-    "keep [Art Style] at 400-800 words of rule content only.\n\n"
+    "keep [Art Style] as the verbatim style canon from `style_foundation`.\n\n"
     "Forbidden terms (never use — no exceptions):\n"
     "  cartoon, cartoonish, stylised, stylized (as bare adjective), beautiful, epic, whimsical, charming, cinematic."
 )
@@ -188,6 +182,8 @@ async def caption_single(
     if thinking_level != "MINIMAL":
         config_kwargs["thinking_config"] = genai_types.ThinkingConfig(thinking_level=thinking_level)
 
+    min_caption_length = _minimum_caption_chars(prompt)
+
     async def _call() -> str:
         async with semaphore:
             resp = await asyncio.wait_for(
@@ -208,7 +204,38 @@ async def caption_single(
                 stage="caption",
                 max_tokens=_CAPTIONER_MAX_OUTPUT_TOKENS,
             )
-        return resp.text
+        text = resp.text or ""
+        # Validate caption quality inside the retry loop — empty/too-short responses and
+        # section-floor/ceiling violations are transient captioner misbehavior (truncated
+        # output, dropped sections); raising from here lets ``async_retry`` re-issue the
+        # API call up to its configured max_retries (default 5) before giving up.
+        if not text or len(text.strip()) < min_caption_length:
+            msg = (
+                f"Captioning {image_path.name} produced empty or too-short caption "
+                f"({len(text.strip())} chars, min {min_caption_length})"
+            )
+            raise RuntimeError(msg)
+        parsed_sections = parse_labeled_sections(text)
+        if parsed_sections:
+            section_violations: list[str] = []
+            for section_name, min_words in _ANCHOR_SECTION_MIN_WORDS.items():
+                if section_name not in parsed_sections:
+                    continue
+                actual_words = len(parsed_sections[section_name].split())
+                if actual_words < min_words:
+                    section_violations.append(f"[{section_name}]={actual_words}w (min {min_words})")
+            for section_name, max_words in _ANCHOR_SECTION_MAX_WORDS.items():
+                if section_name not in parsed_sections:
+                    continue
+                actual_words = len(parsed_sections[section_name].split())
+                if actual_words > max_words:
+                    section_violations.append(f"[{section_name}]={actual_words}w (max {max_words})")
+            if section_violations:
+                msg = f"Captioning {image_path.name} produced out-of-bounds anchor sections: " + "; ".join(
+                    section_violations
+                )
+                raise RuntimeError(msg)
+        return text
 
     started = time.monotonic()
     try:
@@ -234,39 +261,6 @@ async def caption_single(
         max_tokens=_CAPTIONER_MAX_OUTPUT_TOKENS,
         thinking_level=thinking_level,
     )
-
-    # Validate caption quality — empty or very short captions waste downstream cycles
-    min_caption_length = _minimum_caption_chars(prompt)
-    if not caption_text or len(caption_text.strip()) < min_caption_length:
-        msg = (
-            f"Captioning {image_path.name} produced empty or too-short caption "
-            f"({len(caption_text.strip()) if caption_text else 0} chars, min {min_caption_length})"
-        )
-        raise RuntimeError(msg)
-
-    # Validate per-section anchor bounds — catches catastrophic section collapses
-    # (e.g. 9-word [Art Style]) that pass the total-length check and poison downstream
-    # scoring, as well as runaway sections that dilute the optimizer's feedback signal.
-    parsed_sections = parse_labeled_sections(caption_text)
-    if parsed_sections:
-        section_violations: list[str] = []
-        for section_name, min_words in _ANCHOR_SECTION_MIN_WORDS.items():
-            if section_name not in parsed_sections:
-                continue
-            actual_words = len(parsed_sections[section_name].split())
-            if actual_words < min_words:
-                section_violations.append(f"[{section_name}]={actual_words}w (min {min_words})")
-        for section_name, max_words in _ANCHOR_SECTION_MAX_WORDS.items():
-            if section_name not in parsed_sections:
-                continue
-            actual_words = len(parsed_sections[section_name].split())
-            if actual_words > max_words:
-                section_violations.append(f"[{section_name}]={actual_words}w (max {max_words})")
-        if section_violations:
-            msg = f"Captioning {image_path.name} produced out-of-bounds anchor sections: " + "; ".join(
-                section_violations
-            )
-            raise RuntimeError(msg)
 
     # Write cache
     if cache_dir is not None:

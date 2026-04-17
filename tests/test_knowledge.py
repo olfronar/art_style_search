@@ -5,7 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from art_style_search.contracts import ExperimentProposal, Lessons
-from art_style_search.knowledge import build_caption_diffs, update_knowledge_base
+from art_style_search.knowledge import (
+    aggregate_style_gap_notes,
+    append_kb_style_gap_observations,
+    build_caption_diffs,
+    update_knowledge_base,
+)
 from art_style_search.types import (
     AggregatedMetrics,
     Caption,
@@ -384,3 +389,53 @@ class TestKnowledgeBaseDecisionHandling:
         assert hyp.changed_sections == ["subject_anchor", "scene_geometry"]
         assert cat.last_mechanism_tried.startswith("The generator swaps in nearby archetypes")
         assert cat.last_confirmed_mechanism.startswith("The generator swaps in nearby archetypes")
+
+
+class TestAggregateStyleGapNotes:
+    def test_drops_empty_and_short(self) -> None:
+        notes = aggregate_style_gap_notes(["", "  ", "ok"])
+        assert notes == ()
+
+    def test_dedupes_near_duplicates(self) -> None:
+        raw = [
+            "Generated shadows desaturate to gray while reference hue-shifts to cool violet teal neighbors.",
+            "Generated shadows desaturate toward gray; reference instead hue-shifts to cool violet teal tones.",
+            "Reference rim light on silhouette opposite key is missing in the generated reproduction.",
+        ]
+        notes = aggregate_style_gap_notes(raw)
+        # The first two are Jaccard-similar; they should collapse into one entry.
+        assert len(notes) == 2
+        assert any("rim light" in n for n in notes)
+
+    def test_caps_at_max(self) -> None:
+        # 20 distinct notes — expect truncation to the module-level cap (8).
+        raw = [f"Observation number {i} about a distinct palette family {'foo bar ' * (i + 1)}" for i in range(20)]
+        notes = aggregate_style_gap_notes(raw)
+        assert len(notes) <= 8
+
+
+class TestAppendKbStyleGapObservations:
+    def test_appends_new_observations(self) -> None:
+        kb = KnowledgeBase()
+        append_kb_style_gap_observations(kb, ["Shadow hue-shift missing on generated image but present on reference."])
+        assert len(kb.style_gap_observations) == 1
+        assert "shadow hue-shift" in kb.style_gap_observations[0].lower()
+
+    def test_skips_near_duplicate_of_existing(self) -> None:
+        kb = KnowledgeBase(
+            style_gap_observations=[
+                "Generated shadows desaturate to gray while reference hue-shifts to cool violet teal neighbors."
+            ]
+        )
+        append_kb_style_gap_observations(
+            kb,
+            ["Generated shadows desaturate toward gray; reference instead hue-shifts to cool violet teal tones."],
+        )
+        assert len(kb.style_gap_observations) == 1
+
+    def test_ring_buffer_caps_size(self) -> None:
+        kb = KnowledgeBase()
+        for i in range(50):
+            append_kb_style_gap_observations(kb, [f"Canon gap observation number {i} about palette family {i} foo bar"])
+        # Cap defined in knowledge._STYLE_GAP_KB_MAX (20) — the buffer should not exceed it.
+        assert len(kb.style_gap_observations) <= 20

@@ -321,6 +321,7 @@ class TestCaptionAndGenerate:
             [ref_path],
             "meta prompt",
             negative_prompt="Avoid watermarks and signatures.",
+            style_canon="",
             config=config,
             services=services,
             iteration=1,

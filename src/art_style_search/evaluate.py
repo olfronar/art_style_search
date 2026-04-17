@@ -59,12 +59,18 @@ _VISION_SINGLE_PROMPT = (
     "missing or added elements.\n"
     "- MISS: significant failure. Examples: different subject identity; wrong dominant "
     "palette; unrecognizable spatial arrangement.\n\n"
-    "Respond in EXACTLY this format (emit ALL five tags):\n"
+    "Respond in EXACTLY this format (emit ALL five verdict tags AND the style_gap block):\n"
     '<style verdict="MATCH|PARTIAL|MISS">1-sentence explanation</style>\n'
     '<subject verdict="MATCH|PARTIAL|MISS">1-sentence explanation about character/subject fidelity</subject>\n'
     '<composition verdict="MATCH|PARTIAL|MISS">1-sentence explanation about spatial layout</composition>\n'
     '<medium verdict="MATCH|PARTIAL|MISS">1-sentence explanation naming both media in plain observable vocabulary (e.g. "hand-painted 2D with soft gradient shading", "stylized CGI render with beveled volumes")</medium>\n'
     '<proportions verdict="MATCH|PARTIAL|MISS">1-sentence explanation about character/subject proportions (heads-tall, body ratios)</proportions>\n'
+    "<style_gap>2-4 sentences of concrete, canon-actionable style-delta observations between REFERENCE and GENERATED. "
+    "Name specific rendering deltas an upstream style description could sharpen — e.g. 'generated's shadows desaturate "
+    "toward gray where the reference hue-shifts to saturated cool neighbors'; 'generated lacks the reference's rim-light "
+    "on silhouettes opposite key'; 'generated's palette drifts from cadmium red toward magenta'. Phrase as OBSERVATIONS, "
+    "never as instructions; do not prescribe how to write the canon — just name what the canon is missing. If style "
+    "matches closely, write a single short sentence noting that.</style_gap>\n"
 )
 _VISION_SYSTEM = (
     "You are a careful visual judge comparing a reference image to a generated reproduction. "
@@ -87,6 +93,15 @@ _VISION_SYSTEM = (
     "- MATCH (composition): 'Same three-quarter view with subject centered and forest background extending to both edges.'\n"
     "- PARTIAL (composition): 'Subject correctly centered but cropped tighter, cutting off the lower background detail.'\n"
     "- MISS (composition): 'Close-up portrait where reference shows a wide establishing shot with extensive landscape.'\n\n"
+    "style_gap examples (observations feed canon-improvement hypotheses — never prescribe, just name gaps):\n"
+    "- 'Generated's shadows desaturate toward neutral gray while the reference hue-shifts them to saturated cool "
+    "violet/teal; the canon's shadow-hue-shift assertion is not being realized.'\n"
+    "- 'Rim-light on the silhouette opposite the key is absent in the generated image; reference shows a crisp "
+    "saturated rim that separates the subject from the background, matching the canon's rim-separation rule.'\n"
+    "- 'Generated surfaces read as matte plastic uniformly; reference shows clear material differentiation — "
+    "metal fasteners with sharper pinpoint speculars vs broad soft skin gradients — which the canon currently does "
+    "not distinguish strongly enough.'\n"
+    "- 'Minimal style gap — reference and generated share medium, palette families, shading stack, and edge policy.'\n\n"
     "When judging style, a medium mismatch (e.g., reference reads as hand-painted 2D but reproduction reads as a CGI render, or vice versa) is a MISS regardless of palette agreement."
 )
 _VISION_CAPTION_CHAR_LIMIT = 40000
@@ -95,6 +110,7 @@ VERDICT_PATTERN = re.compile(
     r'<(\w+)\s+verdict="(\w+)">(.*?)</\1>',
     re.DOTALL,
 )
+STYLE_GAP_PATTERN = re.compile(r"<style_gap>(.*?)</style_gap>", re.DOTALL)
 
 _SUBJECT_MIN_WORDS = 400
 _SUBJECT_MIN_FACETS = 4
@@ -272,7 +288,7 @@ _VISION_DIMENSIONS: tuple[str, ...] = ("style", "subject", "composition", "mediu
 
 
 def _parse_vision_verdicts(text: str) -> VisionScores:
-    """Parse ternary verdicts from per-image Gemini vision comparison."""
+    """Parse ternary verdicts + canon-actionable style_gap from per-image Gemini vision comparison."""
     scores: dict[str, VisionDimensionScore] = {}
     for match in VERDICT_PATTERN.finditer(text):
         dim_name = match.group(1)
@@ -285,12 +301,16 @@ def _parse_vision_verdicts(text: str) -> VisionScores:
     def _dim(name: str) -> VisionDimensionScore:
         return scores.get(name, VisionDimensionScore(name, VISION_VERDICT_DEFAULT, ""))
 
+    gap_match = STYLE_GAP_PATTERN.search(text)
+    style_gap = gap_match.group(1).strip() if gap_match else ""
+
     return VisionScores(
         style=_dim("style"),
         subject=_dim("subject"),
         composition=_dim("composition"),
         medium=_dim("medium"),
         proportions=_dim("proportions"),
+        style_gap=style_gap,
     )
 
 
@@ -709,41 +729,99 @@ def _subject_specificity_from_parsed(parsed: dict[str, str]) -> str:
 
 _STYLE_PURITY_TRIGRAM_SAMPLE_TOKENS = 500
 _STYLE_PURITY_MIN_CAPTION_TOKENS = 20
+_OBSERVATION_BLOCKS: tuple[str, ...] = ("Subject", "Color Palette", "Composition", "Lighting & Atmosphere")
+
+_STYLE_FOUNDATION_HEADING_RE = re.compile(
+    r"^##\s+style_foundation\s*\n(?:_[^\n]*_\s*\n)?\s*\n?(.*?)(?=^##\s+\S|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
 
 
-def compute_prompt_copying_score(caption_text: str, meta_prompt: str) -> float:
-    """Return style-DNA purity of the caption's [Art Style] block vs the meta-prompt.
+def extract_style_canon(meta_prompt: str) -> str:
+    """Extract the body of the ``## style_foundation`` section from a rendered meta-prompt.
+
+    Returns the canon text (the concrete style assertions the captioner is expected to carry
+    into every ``[Art Style]`` block) or an empty string if the section is missing.
+    """
+    if not meta_prompt:
+        return ""
+    match = _STYLE_FOUNDATION_HEADING_RE.search(meta_prompt)
+    if not match:
+        return ""
+    return match.group(1).strip()
+
+
+def _trigram_overlap(sample_tokens: list[str], reference_tokens: list[str]) -> float | None:
+    """Return Jaccard-like coverage of ``sample_tokens`` trigrams found in ``reference_tokens``.
+
+    ``None`` signals "no meaningful signal" (short/empty inputs) so callers can pick a
+    direction-appropriate neutral default.
+    """
+    if len(sample_tokens) < _STYLE_PURITY_MIN_CAPTION_TOKENS:
+        return None
+    sample_trigrams = {tuple(sample_tokens[i : i + 3]) for i in range(len(sample_tokens) - 2)}
+    if not sample_trigrams:
+        return None
+    if len(reference_tokens) < 3:
+        return None
+    ref_trigrams = {tuple(reference_tokens[i : i + 3]) for i in range(len(reference_tokens) - 2)}
+    if not ref_trigrams:
+        return None
+    return len(sample_trigrams & ref_trigrams) / len(sample_trigrams)
+
+
+def compute_canon_fidelity(caption_text: str, style_canon_text: str) -> float:
+    """Return canon fidelity of the caption's [Art Style] block vs ``style_foundation`` content.
 
     Returns a value in [0, 1]:
-    - 1.0 = the [Art Style] block is paraphrased in the captioner's own voice
-      (low overlap with the meta-prompt).
-    - 0.0 = the [Art Style] block is a near-verbatim copy of meta-prompt sentences
-      (high trigram overlap).
+    - 1.0 = the [Art Style] block is a verbatim (or near-verbatim) copy of the canon
+      (shared style DNA carried forward — the desired behavior).
+    - 0.0 = the [Art Style] block has been paraphrased into the captioner's own voice
+      (no shared DNA; each caption reinvents the style).
 
-    Uses token-trigram Jaccard on the first
-    ``_STYLE_PURITY_TRIGRAM_SAMPLE_TOKENS`` tokens of the [Art Style] block.
-    Short blocks (<20 tokens) or missing [Art Style] return 1.0 (no signal,
-    don't penalize). Short/empty meta-prompts also return 1.0.
+    Uses token-trigram coverage on the first ``_STYLE_PURITY_TRIGRAM_SAMPLE_TOKENS`` tokens
+    of the caption's [Art Style] block. Short blocks, missing [Art Style], or empty canon
+    return 1.0 (no signal, don't penalize).
     """
-    if not caption_text or not meta_prompt:
+    if not caption_text or not style_canon_text:
         return 1.0
     parsed = parse_labeled_sections(caption_text)
     art_style = parsed.get("Art Style", "").strip()
     if not art_style:
         return 1.0
     caption_tokens = art_style.split()[:_STYLE_PURITY_TRIGRAM_SAMPLE_TOKENS]
-    if len(caption_tokens) < _STYLE_PURITY_MIN_CAPTION_TOKENS:
+    canon_tokens = style_canon_text.split()
+    overlap = _trigram_overlap(caption_tokens, canon_tokens)
+    if overlap is None:
         return 1.0
-    caption_trigrams = {tuple(caption_tokens[i : i + 3]) for i in range(len(caption_tokens) - 2)}
-    if not caption_trigrams:
+    return max(0.0, min(1.0, overlap))
+
+
+def compute_observation_boilerplate_purity(caption_text: str, style_canon_text: str) -> float:
+    """Return 1.0 when the observation blocks stay free of canon boilerplate.
+
+    Observation blocks ([Subject], [Color Palette], [Composition], [Lighting & Atmosphere])
+    are supposed to carry per-image content only; they should NOT repeat the canon. This
+    metric catches captioners that paste the canon into multiple sections to pad length.
+
+    Returns a value in [0, 1]:
+    - 1.0 = observation blocks are clean (zero trigram overlap with the canon).
+    - 0.0 = observation blocks are dominated by canon text (pollution).
+
+    Missing canon, missing observation blocks, or blocks below the token floor return 1.0.
+    """
+    if not caption_text or not style_canon_text:
         return 1.0
-    meta_tokens = meta_prompt.split()
-    if len(meta_tokens) < 3:
+    parsed = parse_labeled_sections(caption_text)
+    observation_text_parts = [parsed.get(name, "").strip() for name in _OBSERVATION_BLOCKS]
+    combined = " ".join(part for part in observation_text_parts if part)
+    if not combined:
         return 1.0
-    meta_trigrams = {tuple(meta_tokens[i : i + 3]) for i in range(len(meta_tokens) - 2)}
-    if not meta_trigrams:
+    sample_tokens = combined.split()[: _STYLE_PURITY_TRIGRAM_SAMPLE_TOKENS * len(_OBSERVATION_BLOCKS)]
+    canon_tokens = style_canon_text.split()
+    overlap = _trigram_overlap(sample_tokens, canon_tokens)
+    if overlap is None:
         return 1.0
-    overlap = len(caption_trigrams & meta_trigrams) / len(caption_trigrams)
     return max(0.0, min(1.0, 1.0 - overlap))
 
 
@@ -759,10 +837,13 @@ def compute_caption_compliance(
     ordering / length / subject checks all share that result.  Returns
     ``(stats, prose)`` — callers wanting only one piece discard the other.
 
-    When *meta_prompt* is provided, the structured stats also include
-    ``style_boilerplate_purity`` — the mean per-caption
-    :func:`compute_prompt_copying_score` — to flag captioners that copy the
-    meta-prompt's style rules verbatim instead of observing the image.
+    When *meta_prompt* is provided, the structured stats also include two
+    directional compliance components computed against the meta-prompt's
+    ``style_foundation`` canon:
+    - ``style_canon_fidelity`` — how faithfully the caption's [Art Style] block
+      reproduces the canon (HIGH overlap = GOOD, shared style DNA carried forward).
+    - ``observation_boilerplate_purity`` — how clean the observation blocks stay
+      of canon text (LOW overlap = GOOD, per-image observation unpolluted).
     """
     has_subject = bool(caption_sections and "Subject" in caption_sections)
     if not captions or not section_names:
@@ -820,10 +901,14 @@ def compute_caption_compliance(
     subject_specificity_rate = sum(1 for r in subject_results if r == "OK") / total if has_subject else 1.0
 
     if meta_prompt:
-        purity_scores = [compute_prompt_copying_score(c.text, meta_prompt) for c in captions]
-        style_boilerplate_purity = sum(purity_scores) / len(purity_scores)
+        canon = extract_style_canon(meta_prompt)
+        fidelity_scores = [compute_canon_fidelity(c.text, canon) for c in captions]
+        boilerplate_scores = [compute_observation_boilerplate_purity(c.text, canon) for c in captions]
+        style_canon_fidelity = sum(fidelity_scores) / len(fidelity_scores)
+        observation_boilerplate_purity = sum(boilerplate_scores) / len(boilerplate_scores)
     else:
-        style_boilerplate_purity = 1.0
+        style_canon_fidelity = 1.0
+        observation_boilerplate_purity = 1.0
 
     stats = CaptionComplianceStats(
         section_topic_coverage=topic_coverage,
@@ -831,7 +916,8 @@ def compute_caption_compliance(
         section_ordering_rate=ordering_rate,
         section_balance_rate=balance_rate,
         subject_specificity_rate=subject_specificity_rate,
-        style_boilerplate_purity=style_boilerplate_purity,
+        style_canon_fidelity=style_canon_fidelity,
+        observation_boilerplate_purity=observation_boilerplate_purity,
     )
 
     # Prose summary — same per-caption results drive the human-readable report

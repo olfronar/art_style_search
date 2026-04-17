@@ -645,6 +645,16 @@ def _render_hypothesis_tree(kb: KnowledgeBase) -> str:
     return f'<div class="hypothesis-tree">{"".join(_render_node(root, 0) for root in roots)}</div>'
 
 
+def _render_style_gap_observations(observations: list[str]) -> str:
+    if not observations:
+        return "<p class='empty'>No style-gap observations captured yet.</p>"
+    items = "".join(
+        f"<li class='style-gap-item'><span class='sg-num'>{idx:02d}</span><span class='sg-text'>{_h(obs)}</span></li>"
+        for idx, obs in enumerate(observations, start=1)
+    )
+    return f"<ol class='style-gap-list'>{items}</ol>"
+
+
 def _render_open_problems(problems: list[OpenProblem]) -> str:
     if not problems:
         return "<p class='empty'>No open problems.</p>"
@@ -689,6 +699,11 @@ def _render_kb_section(data: ReportData) -> str:
   <div class="kb-sub">
     <h3>Open problems</h3>
     {_render_open_problems(kb.open_problems)}
+  </div>
+  <div class="kb-sub">
+    <h3>Style-gap observations</h3>
+    <p class="kb-sub-kicker">Canon-actionable deltas from the vision judge. Each feeds the next iteration's canon-edit proposals.</p>
+    {_render_style_gap_observations(kb.style_gap_observations)}
   </div>
 </section>
 """

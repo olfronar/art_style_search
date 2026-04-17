@@ -9,9 +9,11 @@ from art_style_search.evaluate import (
     _lengths_from_parsed,
     _ordering_from_parsed,
     check_caption_compliance,
+    compute_canon_fidelity,
     compute_caption_compliance_stats,
-    compute_prompt_copying_score,
+    compute_observation_boilerplate_purity,
     compute_style_consistency,
+    extract_style_canon,
 )
 from art_style_search.types import Caption
 
@@ -284,50 +286,62 @@ class TestComputeCaptionComplianceStats:
 # -- compute_prompt_copying_score --------------------------------------------
 
 
-class TestComputePromptCopyingScore:
-    def test_no_caption_returns_perfect_purity(self) -> None:
-        assert compute_prompt_copying_score("", "some meta prompt") == 1.0
+_CANON_FOUNDATION = (
+    "The medium class is exactly C stylized 3D CGI. The visual vocabulary is defined by modeled masses, "
+    "subdivision-smooth forms, beveled edges, shaders, ambient occlusion, diffuse gradients, rim lighting, "
+    "roughness, satin specular, global illumination, focal separation, and render polish. Exclude "
+    "class-A and class-B terms such as brushwork, ink contour, cel fill, vector path."
+)
 
-    def test_no_meta_prompt_returns_perfect_purity(self) -> None:
-        caption = "[Art Style] dense observation in my own voice describing the image at length " + ("foo bar " * 50)
-        assert compute_prompt_copying_score(caption, "") == 1.0
 
-    def test_missing_art_style_block_returns_perfect_purity(self) -> None:
+class TestExtractStyleCanon:
+    def test_empty_meta_returns_empty(self) -> None:
+        assert extract_style_canon("") == ""
+
+    def test_missing_section_returns_empty(self) -> None:
+        meta = "## subject_anchor\n\nPer-image subject description only."
+        assert extract_style_canon(meta) == ""
+
+    def test_extracts_between_headings(self) -> None:
+        meta = (
+            "## style_foundation\n"
+            "_core style rules_\n"
+            "\n"
+            f"{_CANON_FOUNDATION}\n"
+            "\n"
+            "## subject_anchor\n"
+            "Per-image subject description."
+        )
+        canon = extract_style_canon(meta)
+        assert canon == _CANON_FOUNDATION
+
+    def test_extracts_to_end_of_document(self) -> None:
+        meta = f"## style_foundation\n\n{_CANON_FOUNDATION}\n"
+        assert extract_style_canon(meta).rstrip() == _CANON_FOUNDATION
+
+
+class TestComputeCanonFidelity:
+    def test_empty_caption_returns_neutral(self) -> None:
+        assert compute_canon_fidelity("", _CANON_FOUNDATION) == 1.0
+
+    def test_empty_canon_returns_neutral(self) -> None:
+        caption = "[Art Style] verbose block " + ("foo bar " * 50)
+        assert compute_canon_fidelity(caption, "") == 1.0
+
+    def test_missing_art_style_block_returns_neutral(self) -> None:
         caption = "[Subject] a character with a red hat. [Composition] centered framing."
-        assert compute_prompt_copying_score(caption, "some meta prompt words here") == 1.0
+        assert compute_canon_fidelity(caption, _CANON_FOUNDATION) == 1.0
 
-    def test_short_art_style_block_returns_perfect_purity(self) -> None:
+    def test_short_art_style_block_returns_neutral(self) -> None:
         caption = "[Art Style] tiny block."
-        meta = "long meta prompt " * 100
-        assert compute_prompt_copying_score(caption, meta) == 1.0
+        assert compute_canon_fidelity(caption, _CANON_FOUNDATION) == 1.0
 
-    def test_verbatim_copy_returns_low_purity(self) -> None:
-        meta = (
-            "## style_foundation\n"
-            "The medium class is exactly C stylized 3D CGI. The visual vocabulary is defined by modeled masses, "
-            "subdivision-smooth forms, beveled edges, shaders, ambient occlusion, diffuse gradients, rim lighting, "
-            "roughness, satin specular, global illumination, focal separation, and render polish. Exclude "
-            "class-A and class-B terms such as brushwork, ink contour, cel fill, vector path."
-        )
-        caption = (
-            "[Art Style] "
-            "The medium class is exactly C stylized 3D CGI. The visual vocabulary is defined by modeled masses, "
-            "subdivision-smooth forms, beveled edges, shaders, ambient occlusion, diffuse gradients, rim lighting, "
-            "roughness, satin specular, global illumination, focal separation, and render polish. Exclude "
-            "class-A and class-B terms such as brushwork, ink contour, cel fill, vector path. "
-            "[Subject] a character."
-        )
-        score = compute_prompt_copying_score(caption, meta)
-        assert score < 0.3, f"near-verbatim copy should score low, got {score}"
+    def test_verbatim_copy_scores_high(self) -> None:
+        caption = f"[Art Style] {_CANON_FOUNDATION} [Subject] a character."
+        score = compute_canon_fidelity(caption, _CANON_FOUNDATION)
+        assert score > 0.7, f"verbatim canon copy should score high (good), got {score}"
 
-    def test_original_voice_returns_high_purity(self) -> None:
-        meta = (
-            "## style_foundation\n"
-            "Medium-Class Rule: exactly C stylized 3D CGI. Bevel Rule: rounded primitive masses. "
-            "Fondant Surface Rule: matte plastic finish. AO-First Depth Rule: clean crease occlusion. "
-            "Cool Rim Rule: thin cyan silhouette. Restricted Specular Rule: permission-based highlights. "
-            "Chromatic Saturation Rule: luminous local colors. Telephoto Readability Rule: central hero clarity."
-        )
+    def test_paraphrase_scores_low(self) -> None:
         caption = (
             "[Art Style] "
             "This rendering reads as a polished toy-resin sculpt, where every shape feels inflated into a soft, "
@@ -337,5 +351,38 @@ class TestComputePromptCopyingScore:
             "juicy saturated complementaries rather than realistic desaturation. "
             "[Subject] the child character."
         )
-        score = compute_prompt_copying_score(caption, meta)
-        assert score > 0.7, f"original-voice caption should score high, got {score}"
+        score = compute_canon_fidelity(caption, _CANON_FOUNDATION)
+        assert score < 0.3, f"paraphrased voice should score low (bad), got {score}"
+
+
+class TestComputeObservationBoilerplatePurity:
+    def test_empty_caption_returns_neutral(self) -> None:
+        assert compute_observation_boilerplate_purity("", _CANON_FOUNDATION) == 1.0
+
+    def test_empty_canon_returns_neutral(self) -> None:
+        caption = "[Subject] a character " + ("foo bar " * 50)
+        assert compute_observation_boilerplate_purity(caption, "") == 1.0
+
+    def test_clean_observations_score_high(self) -> None:
+        caption = (
+            "[Art Style] canon appears here. "
+            "[Subject] A small orange fox sits on a mossy stump, ears forward, eyes wide and dark. "
+            "A leather satchel hangs across its shoulder. "
+            "[Color Palette] saturated rust, cream, and sage against a pastel cyan backdrop. "
+            "[Composition] the fox occupies the lower-left third; the stump leads the eye upward. "
+            "[Lighting & Atmosphere] warm high key light from camera-right, cool sky-bounce fill."
+        )
+        score = compute_observation_boilerplate_purity(caption, _CANON_FOUNDATION)
+        assert score > 0.7, f"clean per-image observations should score high (good), got {score}"
+
+    def test_canon_pasted_into_observations_scores_low(self) -> None:
+        # The captioner mistakenly pastes the canon into every observation block.
+        caption = (
+            f"[Art Style] {_CANON_FOUNDATION} "
+            f"[Subject] {_CANON_FOUNDATION} "
+            f"[Color Palette] {_CANON_FOUNDATION} "
+            f"[Composition] {_CANON_FOUNDATION} "
+            f"[Lighting & Atmosphere] {_CANON_FOUNDATION}"
+        )
+        score = compute_observation_boilerplate_purity(caption, _CANON_FOUNDATION)
+        assert score < 0.3, f"canon-polluted observations should score low (bad), got {score}"

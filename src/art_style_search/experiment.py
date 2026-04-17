@@ -16,6 +16,7 @@ from art_style_search.evaluate import (
     compute_caption_compliance,
     compute_style_consistency,
 )
+from art_style_search.knowledge import aggregate_style_gap_notes
 from art_style_search.types import (
     AggregatedMetrics,
     Caption,
@@ -45,6 +46,7 @@ def _merge_vision(ms: MetricScores, vs: VisionScores) -> MetricScores:
         vision_composition=vs.composition.score,
         vision_medium=vs.medium.score,
         vision_proportions=vs.proportions.score,
+        style_gap=vs.style_gap,
     )
 
 
@@ -134,6 +136,7 @@ async def _caption_and_generate(
     meta_prompt: str,
     *,
     negative_prompt: str | None,
+    style_canon: str,
     config: Config,
     services: RunServices,
     iteration: int,
@@ -144,6 +147,10 @@ async def _caption_and_generate(
     Each image's caption→generate runs as a single chained task so generation
     starts as soon as each individual caption completes. Returns (captions,
     generated_paths, pairs) where pairs maps (original, generated).
+
+    ``style_canon`` is the meta-prompt's ``style_foundation`` value; it's passed to
+    ``build_generation_prompt`` so the generator sees the canonical style assertions
+    even when the captioner's ``[Art Style]`` block is missing or truncated.
     """
     cache_dir = config.log_dir / f"iter_{iteration:03d}" / f"exp_{experiment_id}" / "captions"
     gen_dir = config.output_dir / f"iter_{iteration:03d}" / f"exp_{experiment_id}"
@@ -160,7 +167,7 @@ async def _caption_and_generate(
             cache_key=cache_key,
         )
         gen_path = await services.generation.generate_single(
-            build_generation_prompt(caption.text),
+            build_generation_prompt(caption.text, style_canon=style_canon),
             index=i,
             output_path=gen_dir / f"{i:02d}.png",
             negative_prompt=negative_prompt,
@@ -213,12 +220,14 @@ async def run_experiment(
 ) -> IterationResult:
     """Execute one experiment: caption -> generate -> evaluate (no reasoning-model call here)."""
     meta_prompt = template.render()
+    style_canon = next((s.value for s in template.sections if s.name == "style_foundation"), "")
     logger.info("Exp %d iter %d — meta-prompt: %.100s...", experiment_id, iteration, meta_prompt)
 
     captions, generated_paths, pairs = await _caption_and_generate(
         fixed_refs,
         meta_prompt,
         negative_prompt=template.negative_prompt,
+        style_canon=style_canon,
         config=config,
         services=services,
         iteration=iteration,
@@ -270,6 +279,7 @@ async def run_experiment(
 
     aggregated = aggregate(original_scores, completion_rate=completion_rate)
     style_con = compute_style_consistency(captions)
+    style_gap_notes = aggregate_style_gap_notes([sc.style_gap for sc in original_scores])
     aggregated = replace(
         aggregated,
         style_consistency=style_con,
@@ -278,7 +288,9 @@ async def run_experiment(
         section_ordering_rate=compliance_stats.section_ordering_rate,
         section_balance_rate=compliance_stats.section_balance_rate,
         subject_specificity_rate=compliance_stats.subject_specificity_rate,
-        style_boilerplate_purity=compliance_stats.style_boilerplate_purity,
+        style_canon_fidelity=compliance_stats.style_canon_fidelity,
+        observation_boilerplate_purity=compliance_stats.observation_boilerplate_purity,
+        style_gap_notes=style_gap_notes,
         requested_ref_count=config.num_fixed_refs,
         actual_ref_count=n_attempted,
     )
@@ -376,6 +388,7 @@ async def replicate_experiment(
     are generated.
     """
     meta_prompt = template.render()
+    style_canon = next((s.value for s in template.sections if s.name == "style_foundation"), "")
     all_replicate_scores: list[list[MetricScores]] = []
     all_replicate_agg: list[AggregatedMetrics] = []
 
@@ -401,6 +414,7 @@ async def replicate_experiment(
             fixed_refs,
             meta_prompt,
             negative_prompt=template.negative_prompt,
+            style_canon=style_canon,
             config=config,
             services=services,
             iteration=iteration,
@@ -436,7 +450,8 @@ async def replicate_experiment(
             section_ordering_rate=compliance_stats.section_ordering_rate,
             section_balance_rate=compliance_stats.section_balance_rate,
             subject_specificity_rate=compliance_stats.subject_specificity_rate,
-            style_boilerplate_purity=compliance_stats.style_boilerplate_purity,
+            style_canon_fidelity=compliance_stats.style_canon_fidelity,
+            observation_boilerplate_purity=compliance_stats.observation_boilerplate_purity,
             requested_ref_count=config.num_fixed_refs,
             actual_ref_count=len(fixed_refs),
         )
@@ -461,6 +476,7 @@ async def replicate_experiment(
     median_scores = _median_metric_scores(all_replicate_scores)
     median_agg = aggregate(median_scores)
     style_con = statistics.median(agg.style_consistency for agg in all_replicate_agg)
+    flat_gaps = [gap for agg in all_replicate_agg for gap in agg.style_gap_notes]
     median_agg = replace(
         median_agg,
         style_consistency=style_con,
@@ -469,7 +485,11 @@ async def replicate_experiment(
         section_ordering_rate=statistics.median(agg.section_ordering_rate for agg in all_replicate_agg),
         section_balance_rate=statistics.median(agg.section_balance_rate for agg in all_replicate_agg),
         subject_specificity_rate=statistics.median(agg.subject_specificity_rate for agg in all_replicate_agg),
-        style_boilerplate_purity=statistics.median(agg.style_boilerplate_purity for agg in all_replicate_agg),
+        style_canon_fidelity=statistics.median(agg.style_canon_fidelity for agg in all_replicate_agg),
+        observation_boilerplate_purity=statistics.median(
+            agg.observation_boilerplate_purity for agg in all_replicate_agg
+        ),
+        style_gap_notes=aggregate_style_gap_notes(flat_gaps),
         requested_ref_count=config.num_fixed_refs,
         actual_ref_count=len(fixed_refs),
     )

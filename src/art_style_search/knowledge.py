@@ -90,6 +90,53 @@ def _find_near_duplicate(text: str, candidates: list[str]) -> int | None:
     return None
 
 
+_STYLE_GAP_NOTE_MAX = 8
+_STYLE_GAP_MIN_TOKENS = 4
+_STYLE_GAP_KB_MAX = 20
+
+
+def aggregate_style_gap_notes(raw_gaps: list[str]) -> tuple[str, ...]:
+    """Deduplicate + cluster per-image style-gap observations into a bounded tuple.
+
+    Short or empty strings are dropped; near-duplicates (Jaccard token overlap
+    ≥ ``_NEAR_DUP_THRESHOLD``) are merged keeping the longer, more informative
+    phrasing. Capped at ``_STYLE_GAP_NOTE_MAX`` notes to avoid diluting the
+    reasoner's attention with redundant observations.
+    """
+    kept: list[str] = []
+    for gap in raw_gaps:
+        note = (gap or "").strip()
+        if len(_tokenize(note)) < _STYLE_GAP_MIN_TOKENS:
+            continue
+        dup_idx = _find_near_duplicate(note, kept)
+        if dup_idx is None:
+            kept.append(note)
+        elif len(note) > len(kept[dup_idx]):
+            kept[dup_idx] = note
+        if len(kept) >= _STYLE_GAP_NOTE_MAX:
+            break
+    return tuple(kept)
+
+
+def append_kb_style_gap_observations(kb: KnowledgeBase, new_notes: tuple[str, ...] | list[str]) -> None:
+    """Append this iteration's deduplicated style-gap observations to the KB ring buffer.
+
+    Notes already present in the KB (near-duplicates) are skipped so the buffer
+    reflects distinct gaps across iterations. The oldest notes are dropped once
+    the buffer exceeds ``_STYLE_GAP_KB_MAX``.
+    """
+    for note in new_notes:
+        candidate = (note or "").strip()
+        if len(_tokenize(candidate)) < _STYLE_GAP_MIN_TOKENS:
+            continue
+        if _find_near_duplicate(candidate, kb.style_gap_observations) is not None:
+            continue
+        kb.style_gap_observations.append(candidate)
+    overflow = len(kb.style_gap_observations) - _STYLE_GAP_KB_MAX
+    if overflow > 0:
+        del kb.style_gap_observations[:overflow]
+
+
 def _merge_problem(existing: OpenProblem, incoming: OpenProblem) -> OpenProblem:
     """Merge two near-duplicate problems without losing the strongest history."""
     existing_rank = _PRIORITY_ORDER.get(existing.priority, 99)

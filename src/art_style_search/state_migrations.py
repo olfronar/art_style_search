@@ -6,8 +6,10 @@ from typing import Any
 
 _SCHEMA_VERSION = (
     # v1: dino_similarity era, v2: vision+KB+rigorous, v3: changed_section+target_category, v4: direction metadata,
-    # v5: medium-class + proportions prompt contract (invalidates cached style analyses, adds diagnostic vision dims)
-    5
+    # v5: medium-class + proportions prompt contract (invalidates cached style analyses, adds diagnostic vision dims),
+    # v6: canon-first metric split (style_boilerplate_purity → style_canon_fidelity + observation_boilerplate_purity);
+    #     adds vision style_gap notes + KnowledgeBase.style_gap_observations
+    6
 )
 _ITERATION_LOG_SCHEMA_VERSION = 1
 _MANIFEST_SCHEMA_VERSION = 3
@@ -20,6 +22,8 @@ def _migrate_metric_scores_payload(data: dict[str, Any]) -> dict[str, Any]:
     # v5: diagnostic per-image vision dims
     data.setdefault("vision_medium", 0.5)
     data.setdefault("vision_proportions", 0.5)
+    # v6: vision judge style_gap observation
+    data.setdefault("style_gap", "")
     return data
 
 
@@ -33,6 +37,13 @@ def _migrate_aggregated_metrics_payload(data: dict[str, Any]) -> dict[str, Any]:
     data.setdefault("vision_medium_std", 0.0)
     data.setdefault("vision_proportions", 0.5)
     data.setdefault("vision_proportions_std", 0.0)
+    # v6: canon-first metric split. Old style_boilerplate_purity measured the INVERSE (paraphrasing
+    # rewarded). Drop it — the semantics flipped with the new captioner contract, so stale values
+    # would mislead. Callers get neutral defaults for the new fields until the next evaluation.
+    data.pop("style_boilerplate_purity", None)
+    data.setdefault("style_canon_fidelity", 1.0)
+    data.setdefault("observation_boilerplate_purity", 1.0)
+    data.setdefault("style_gap_notes", [])
     return data
 
 
@@ -89,6 +100,8 @@ def _migrate_knowledge_base_payload(data: dict[str, Any]) -> dict[str, Any]:
     hypotheses = data.get("hypotheses", [])
     if isinstance(hypotheses, list):
         data["hypotheses"] = [_migrate_hypothesis_payload(dict(h)) if isinstance(h, dict) else h for h in hypotheses]
+    # v6: style-gap observations ring buffer fed by the vision judge
+    data.setdefault("style_gap_observations", [])
     return data
 
 

@@ -3,12 +3,29 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
+from typing import TypeVar
 
 import pytest
 
 from art_style_search.caption import CAPTION_PROMPT, caption_single
+
+_T = TypeVar("_T")
+
+
+@pytest.fixture(autouse=True)
+def _bypass_retry_for_deterministic_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Captioning validation now runs inside ``async_retry`` so real runs can recover from
+    transient truncation. Tests feed a mock that returns the same bad caption every time,
+    so we bypass the retry loop here — otherwise each test would stall for ~155s on backoff.
+    """
+
+    async def _passthrough(fn: Callable[[], Awaitable[_T]], **_kwargs: object) -> _T:
+        return await fn()
+
+    monkeypatch.setattr("art_style_search.caption.async_retry", _passthrough)
 
 
 class TestBootstrapCaptionPrompt:

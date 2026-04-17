@@ -332,7 +332,8 @@ class TestAggregatedMetricsSummaryDict:
             "section_ordering_rate",
             "section_balance_rate",
             "subject_specificity_rate",
-            "style_boilerplate_purity",
+            "style_canon_fidelity",
+            "observation_boilerplate_purity",
             "requested_ref_count",
             "actual_ref_count",
         }
@@ -376,8 +377,10 @@ class TestAggregatedMetricsSummaryDict:
             aesthetics_score_std=0.0,
         )
         # 25 base metrics + 4 diagnostic vision dims (vision_medium + vision_medium_std
-        # + vision_proportions + vision_proportions_std) + 1 style-DNA purity compliance field.
-        assert len(m.summary_dict()) == 30
+        # + vision_proportions + vision_proportions_std) + 2 canon compliance fields
+        # (style_canon_fidelity + observation_boilerplate_purity). The style_gap_notes
+        # tuple is non-numeric and is excluded by summary_dict.
+        assert len(m.summary_dict()) == 31
 
 
 # -- ConvergenceReason --------------------------------------------------------

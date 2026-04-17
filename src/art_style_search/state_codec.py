@@ -72,6 +72,7 @@ def _metric_scores_from_dict(d: dict[str, Any]) -> MetricScores:
         vision_composition=d.get("vision_composition", 0.5),
         vision_medium=d.get("vision_medium", 0.5),
         vision_proportions=d.get("vision_proportions", 0.5),
+        style_gap=d.get("style_gap", ""),
         is_fallback=d.get("is_fallback", False),
     )
 
@@ -105,7 +106,9 @@ def _aggregated_metrics_from_dict(d: dict[str, Any]) -> AggregatedMetrics:
         section_ordering_rate=d.get("section_ordering_rate", 1.0),
         section_balance_rate=d.get("section_balance_rate", 1.0),
         subject_specificity_rate=d.get("subject_specificity_rate", 1.0),
-        style_boilerplate_purity=d.get("style_boilerplate_purity", 1.0),
+        style_canon_fidelity=d.get("style_canon_fidelity", 1.0),
+        observation_boilerplate_purity=d.get("observation_boilerplate_purity", 1.0),
+        style_gap_notes=tuple(d.get("style_gap_notes", [])),
         requested_ref_count=d.get("requested_ref_count", 0),
         actual_ref_count=d.get("actual_ref_count", 0),
     )
@@ -222,6 +225,7 @@ def _knowledge_base_from_dict(d: dict[str, Any]) -> KnowledgeBase:
         hypotheses=[_hypothesis_from_dict(h) for h in d.get("hypotheses", [])],
         categories={k: _category_progress_from_dict(v) for k, v in d.get("categories", {}).items()},
         open_problems=[_open_problem_from_dict(p) for p in d.get("open_problems", [])],
+        style_gap_observations=list(d.get("style_gap_observations", [])),
         next_id=d.get("next_id", 1),
     )
 
