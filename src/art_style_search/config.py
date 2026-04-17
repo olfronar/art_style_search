@@ -66,6 +66,11 @@ class Config:
     caption_thinking_level: str = "MINIMAL"
     generation_thinking_level: str = "MINIMAL"
 
+    # Reasoning-model effort ("low" | "medium" | "high"). Mapped per provider by
+    # ReasoningClient — Anthropic: disabled/adaptive/enabled+budget; OpenAI:
+    # reasoning.effort; Z.AI/xAI/local: dropped with one-time warning.
+    reasoning_effort: str = "medium"
+
 
 def parse_args(argv: list[str] | None = None) -> Config:
     """Parse CLI arguments into a Config."""
@@ -140,6 +145,16 @@ def parse_args(argv: list[str] | None = None) -> Config:
         "--reasoning-base-url",
         default="",
         help="Base URL for local/remote OpenAI-compatible server (e.g. http://gpu:8000/v1)",
+    )
+    models.add_argument(
+        "--reasoning-effort",
+        choices=["low", "medium", "high"],
+        default="medium",
+        help=(
+            "Reasoning-model effort (default medium). Anthropic: low=thinking disabled, "
+            "medium=adaptive, high=enabled with a 16k budget. OpenAI: maps to reasoning.effort. "
+            "Z.AI/xAI/local: dropped with a one-time warning."
+        ),
     )
 
     # Scientific rigor
@@ -275,4 +290,5 @@ def _validate_and_build_config(args: argparse.Namespace, parser: argparse.Argume
         raw_proposals=args.raw_proposals,
         caption_thinking_level=args.caption_thinking_level,
         generation_thinking_level=args.generation_thinking_level,
+        reasoning_effort=args.reasoning_effort,
     )

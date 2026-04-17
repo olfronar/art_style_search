@@ -55,6 +55,7 @@ uv tool install pre-commit                           # Install the pre-commit CL
 - `--reasoning-base-url` - Base URL for local/remote OpenAI-compatible server (when using `--reasoning-provider local`)
 - `--caption-thinking-level` - Gemini Pro captioner extended-thinking level (MINIMAL/LOW/MEDIUM/HIGH, default MINIMAL). MEDIUM materially improves medium-class + proportion precision at 2-3x latency.
 - `--generation-thinking-level` - Gemini Flash generator extended-thinking level (MINIMAL/LOW/MEDIUM/HIGH, default MINIMAL).
+- `--reasoning-effort` - Reasoning-model effort level (low/medium/high, default medium). Anthropic: low→thinking disabled, medium→adaptive, high→enabled with 16k budget. OpenAI: mapped to `reasoning.effort`. Z.AI/xAI/local: dropped with a one-time warning.
 
 ## Module Map
 

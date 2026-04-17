@@ -302,6 +302,26 @@ class TestXAIProviders:
         assert cfg.comparison_model == cfg.caption_model
 
 
+class TestReasoningEffort:
+    """--reasoning-effort flag plumbing."""
+
+    def test_defaults_to_medium(self, tmp_path: Path) -> None:
+        cfg = parse_args(_base_args(tmp_path))
+        assert cfg.reasoning_effort == "medium"
+
+    def test_override_low(self, tmp_path: Path) -> None:
+        cfg = parse_args(_base_args(tmp_path, reasoning_effort="low"))
+        assert cfg.reasoning_effort == "low"
+
+    def test_override_high(self, tmp_path: Path) -> None:
+        cfg = parse_args(_base_args(tmp_path, reasoning_effort="high"))
+        assert cfg.reasoning_effort == "high"
+
+    def test_rejects_invalid(self, tmp_path: Path) -> None:
+        with pytest.raises(SystemExit):
+            parse_args(_base_args(tmp_path, reasoning_effort="extreme"))
+
+
 class TestNonExistentReferenceDir:
     """Non-existent reference directory must cause SystemExit."""
 

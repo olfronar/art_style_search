@@ -17,9 +17,14 @@ from art_style_search.types import Caption, PromptTemplate, StyleProfile
 from art_style_search.utils import (
     ReasoningClient,
     async_retry,
+    gemini_timeout_s,
     image_to_gemini_part,
     vision_circuit_breaker,
 )
+
+# Gemini analysis returns a ~8000-token structured analysis — drives timeout scaling.
+_ANALYSIS_MAX_OUTPUT_TOKENS = 8000
+_ANALYSIS_TIMEOUT_S = gemini_timeout_s(_ANALYSIS_MAX_OUTPUT_TOKENS)
 
 logger = logging.getLogger(__name__)
 
@@ -230,7 +235,7 @@ async def _gemini_analyze(
                 contents=contents,
                 config=genai_types.GenerateContentConfig(system_instruction=_ANALYSIS_SYSTEM),
             ),
-            timeout=180,
+            timeout=_ANALYSIS_TIMEOUT_S,
         )
         return response.text
 
@@ -254,7 +259,7 @@ async def _reasoning_analyze(
         user=user,
         max_tokens=8000,
         temperature=0.3,
-        reasoning_effort="medium",
+        stage="analyze",
     )
 
 
@@ -286,7 +291,7 @@ async def _reasoning_compile(
         response_schema=response_schema("style_compilation"),
         max_tokens=20000,
         temperature=0.3,
-        reasoning_effort="medium",
+        stage="compile",
     )
 
 

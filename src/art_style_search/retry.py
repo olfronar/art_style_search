@@ -15,6 +15,55 @@ T = TypeVar("T")
 
 _RATE_LIMIT_DELAY = 30.0
 
+# Per-request Gemini timeout is scaled with the output budget: small vision verdicts
+# finish in seconds while 32k-token captions regularly need minutes. Linear model
+# derived from observed ~50 tokens/sec throughput with a 60s floor for short calls.
+_GEMINI_TIMEOUT_FLOOR_S = 60.0
+_GEMINI_TIMEOUT_BASE_S = 30.0
+_GEMINI_TIMEOUT_PER_TOKEN_S = 0.02
+
+
+def gemini_timeout_s(max_output_tokens: int) -> float:
+    """Scale a per-request Gemini timeout to the output-token budget."""
+    return max(_GEMINI_TIMEOUT_FLOOR_S, _GEMINI_TIMEOUT_BASE_S + max_output_tokens * _GEMINI_TIMEOUT_PER_TOKEN_S)
+
+
+def log_api_call(
+    *,
+    provider: str,
+    model: str,
+    stage: str,
+    duration_s: float,
+    max_tokens: int | None = None,
+    effort: str | None = None,
+    thinking_level: str | None = None,
+    usage: dict[str, int] | None = None,
+    status: str = "ok",
+) -> None:
+    """Emit one structured line summarizing a single provider API call.
+
+    Format: ``API_CALL provider=<p> model=<m> stage=<s> duration_s=<d> [max_tokens=<n>]
+    [effort=<e>] [thinking_level=<t>] [usage=...] status=<st>``
+
+    Log grep-friendly: ``grep API_CALL runs/*/logs/*.log``.
+    """
+    parts: list[str] = [
+        f"provider={provider}",
+        f"model={model}",
+        f"stage={stage}",
+        f"duration_s={duration_s:.2f}",
+    ]
+    if max_tokens is not None:
+        parts.append(f"max_tokens={max_tokens}")
+    if effort is not None:
+        parts.append(f"effort={effort}")
+    if thinking_level is not None:
+        parts.append(f"thinking_level={thinking_level}")
+    if usage:
+        parts.append("usage=" + ",".join(f"{k}:{v}" for k, v in sorted(usage.items())))
+    parts.append(f"status={status}")
+    logger.info("API_CALL " + " ".join(parts))
+
 
 def _is_rate_limit(exc: Exception) -> bool:
     """Detect Gemini 429 / ResourceExhausted errors."""
@@ -69,6 +118,14 @@ generation_circuit_breaker = CircuitBreaker(failure_threshold=15, cooldown=60.0)
 vision_circuit_breaker = CircuitBreaker(failure_threshold=15, cooldown=60.0)
 
 
+def _is_truncation(exc: Exception) -> bool:
+    """Detect output-truncation errors raised by the reasoning_client.
+
+    Named rather than imported to avoid a retry→reasoning_client circular dependency.
+    """
+    return type(exc).__name__ == "TruncationError"
+
+
 async def async_retry(
     coro_fn: Callable[[], Awaitable[T]],
     *,
@@ -77,7 +134,11 @@ async def async_retry(
     label: str = "",
     circuit_breaker: CircuitBreaker | None = None,
 ) -> T:
-    """Generic async retry with jittered exponential backoff and circuit breaker."""
+    """Generic async retry with jittered exponential backoff and circuit breaker.
+
+    ``TruncationError`` is re-raised immediately — retrying with the same budget
+    would deterministically re-truncate, wasting retries.
+    """
     cb = circuit_breaker
     last_exc: Exception | None = None
     for attempt in range(max_retries):
@@ -89,6 +150,13 @@ async def async_retry(
                 cb.record_success()
             return result
         except Exception as exc:
+            if _is_truncation(exc):
+                logger.warning(
+                    "%s truncated (%s); not retrying",
+                    label or "Retry",
+                    exc,
+                )
+                raise
             if cb:
                 cb.record_failure()
             last_exc = exc

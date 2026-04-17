@@ -116,3 +116,30 @@ class TestCaptionSingle:
         )
 
         assert captured["config"].max_output_tokens == 32000
+
+    @pytest.mark.asyncio
+    async def test_rejects_runaway_art_style_section(self, tmp_path: Path) -> None:
+        """[Art Style] exceeding 1600 words is rejected as runaway content."""
+        image_path = tmp_path / "ref.png"
+        image_path.write_bytes(b"fake-image")
+
+        long_art_style = "word " * 1700  # 1700 words, exceeds 1600 ceiling
+        long_subject = "detail " * 1500  # 1500 words, within bounds
+        caption = f"[Art Style] {long_art_style}\n[Subject] {long_subject}"
+
+        class FakeModels:
+            async def generate_content(self, **kwargs):
+                return SimpleNamespace(text=caption)
+
+        class FakeClient:
+            aio = SimpleNamespace(models=FakeModels())
+
+        with pytest.raises(RuntimeError, match=r"\[Art Style\]=1700w \(max 1600\)"):
+            await caption_single(
+                image_path,
+                prompt=CAPTION_PROMPT,
+                model="fake-model",
+                client=FakeClient(),  # type: ignore[arg-type]
+                cache_dir=None,
+                semaphore=asyncio.Semaphore(1),
+            )

@@ -6,6 +6,7 @@ import asyncio
 import logging
 import random
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +26,20 @@ from art_style_search.types import (
     VisionDimensionScore,
     VisionScores,
 )
-from art_style_search.utils import async_retry, extract_xml_tag, image_to_gemini_part, vision_circuit_breaker
+from art_style_search.utils import (
+    async_retry,
+    extract_xml_tag,
+    gemini_timeout_s,
+    image_to_gemini_part,
+    log_api_call,
+    vision_circuit_breaker,
+)
+
+# Output-token budgets for vision/pairwise judge calls — sized to match the ternary-verdict
+# output shape (short rationale + 5 verdict tags). Drives both max_output_tokens (xAI) and
+# the scaled per-request timeout (all providers).
+_VISION_MAX_OUTPUT_TOKENS = 1000
+_VISION_TIMEOUT_S = gemini_timeout_s(_VISION_MAX_OUTPUT_TOKENS)
 
 logger = logging.getLogger(__name__)
 
@@ -314,16 +328,31 @@ async def _compare_vision_single_gemini(
                     contents=contents,
                     config=genai.types.GenerateContentConfig(system_instruction=_VISION_SYSTEM),
                 ),
-                timeout=180,
+                timeout=_VISION_TIMEOUT_S,
             )
         text = response.text or ""
         return text, _parse_vision_verdicts(text)
 
+    started = time.monotonic()
     try:
-        return await async_retry(_call, label=f"Vision {ref_path.name}", circuit_breaker=vision_circuit_breaker)
+        result = await async_retry(_call, label=f"Vision {ref_path.name}", circuit_breaker=vision_circuit_breaker)
     except RuntimeError:
+        log_api_call(
+            provider="gemini",
+            model=model,
+            stage="vision_single",
+            duration_s=time.monotonic() - started,
+            status="error",
+        )
         logger.error("Vision %s failed after retries — using neutral defaults", ref_path.name)
         return "", VisionScores.default()
+    log_api_call(
+        provider="gemini",
+        model=model,
+        stage="vision_single",
+        duration_s=time.monotonic() - started,
+    )
+    return result
 
 
 async def _compare_vision_single_xai(
@@ -358,19 +387,36 @@ async def _compare_vision_single_xai(
                         {"role": "system", "content": _VISION_SYSTEM},
                         {"role": "user", "content": contents},
                     ],
-                    max_output_tokens=1000,
+                    max_output_tokens=_VISION_MAX_OUTPUT_TOKENS,
                     store=False,
                 ),
-                timeout=180,
+                timeout=_VISION_TIMEOUT_S,
             )
         text = response.output_text or ""
         return text, _parse_vision_verdicts(text)
 
+    started = time.monotonic()
     try:
-        return await async_retry(_call, label=f"xAI vision {ref_path.name}", circuit_breaker=vision_circuit_breaker)
+        result = await async_retry(_call, label=f"xAI vision {ref_path.name}", circuit_breaker=vision_circuit_breaker)
     except RuntimeError:
+        log_api_call(
+            provider="xai",
+            model=model,
+            stage="vision_single",
+            duration_s=time.monotonic() - started,
+            max_tokens=_VISION_MAX_OUTPUT_TOKENS,
+            status="error",
+        )
         logger.error("xAI vision %s failed after retries — using neutral defaults", ref_path.name)
         return "", VisionScores.default()
+    log_api_call(
+        provider="xai",
+        model=model,
+        stage="vision_single",
+        duration_s=time.monotonic() - started,
+        max_tokens=_VISION_MAX_OUTPUT_TOKENS,
+    )
+    return result
 
 
 async def compare_vision_per_image(
@@ -523,7 +569,7 @@ async def pairwise_compare_experiments(
                         contents=contents,
                         config=genai.types.GenerateContentConfig(system_instruction=_PAIRWISE_SYSTEM),
                     ),
-                    timeout=180,
+                    timeout=_VISION_TIMEOUT_S,
                 )
             return _parse_pairwise_response(response.text or "")
     elif provider == "xai":
@@ -556,21 +602,35 @@ async def pairwise_compare_experiments(
                             {"role": "system", "content": _PAIRWISE_SYSTEM},
                             {"role": "user", "content": contents},
                         ],
-                        max_output_tokens=1000,
+                        max_output_tokens=_VISION_MAX_OUTPUT_TOKENS,
                         store=False,
                     ),
-                    timeout=180,
+                    timeout=_VISION_TIMEOUT_S,
                 )
             return _parse_pairwise_response(response.output_text or "")
     else:
         msg = f"Unknown comparison provider: {provider}"
         raise ValueError(msg)
 
+    started = time.monotonic()
     try:
         rationale, score = await async_retry(_call, label="Pairwise comparison", circuit_breaker=vision_circuit_breaker)
     except RuntimeError:
+        log_api_call(
+            provider=provider,
+            model=model,
+            stage="pairwise",
+            duration_s=time.monotonic() - started,
+            status="error",
+        )
         logger.error("Pairwise comparison failed after retries")
         return ("Comparison failed", 0.5)
+    log_api_call(
+        provider=provider,
+        model=model,
+        stage="pairwise",
+        duration_s=time.monotonic() - started,
+    )
 
     # Flip the score back if we swapped A/B for position-bias mitigation
     if swapped:

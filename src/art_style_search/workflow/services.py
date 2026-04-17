@@ -165,6 +165,7 @@ class ReasoningService:
 
     client: ReasoningClient
     model: str
+    effort: str = "medium"
 
     async def call_text(
         self,
@@ -172,8 +173,9 @@ class ReasoningService:
         system: str,
         user: str,
         max_tokens: int = 16000,
+        stage: str = "unknown",
     ) -> str:
-        return await self.client.call(model=self.model, system=system, user=user, max_tokens=max_tokens)
+        return await self.client.call(model=self.model, system=system, user=user, max_tokens=max_tokens, stage=stage)
 
     async def call_json(
         self,
@@ -187,6 +189,7 @@ class ReasoningService:
         max_tokens: int = 16000,
         repair_retries: int = 1,
         final_failure_log_level: int = logging.WARNING,
+        stage: str = "unknown",
     ):
         return await self.client.call_json(
             model=self.model,
@@ -199,6 +202,7 @@ class ReasoningService:
             max_tokens=max_tokens,
             repair_retries=repair_retries,
             final_failure_log_level=final_failure_log_level,
+            stage=stage,
         )
 
 

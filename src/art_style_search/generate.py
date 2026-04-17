@@ -6,16 +6,20 @@ import asyncio
 import logging
 import os
 import tempfile
+import time
 from pathlib import Path
 
 from google import genai  # type: ignore[attr-defined]
 from google.genai import types as genai_types  # type: ignore[attr-defined]
 
-from art_style_search.utils import async_retry, generation_circuit_breaker
+from art_style_search.utils import async_retry, generation_circuit_breaker, log_api_call
 
 logger = logging.getLogger(__name__)
 
-_REQUEST_TIMEOUT = 180  # seconds — per-request timeout to release semaphore on hang
+# Seconds — per-request timeout to release the semaphore on hang. Image generation
+# has no explicit token budget, but long captions under concurrent load routinely
+# exceed the previous 180s ceiling, so we give Flash a wider window.
+_REQUEST_TIMEOUT = 300
 _GENERATION_SYSTEM = (
     "You generate a single image from the supplied prompt. "
     "Do not add watermarks, signatures, borders, captions, or other text overlays. "
@@ -107,4 +111,26 @@ async def generate_single(
         msg = f"Image {index}: no image data found in response parts"
         raise RuntimeError(msg)
 
-    return await async_retry(_call, label=f"Image {index}", base_delay=4.0, circuit_breaker=generation_circuit_breaker)
+    started = time.monotonic()
+    try:
+        result = await async_retry(
+            _call, label=f"Image {index}", base_delay=4.0, circuit_breaker=generation_circuit_breaker
+        )
+    except Exception:
+        log_api_call(
+            provider="gemini",
+            model=model,
+            stage="generate",
+            duration_s=time.monotonic() - started,
+            thinking_level=thinking_level,
+            status="error",
+        )
+        raise
+    log_api_call(
+        provider="gemini",
+        model=model,
+        stage="generate",
+        duration_s=time.monotonic() - started,
+        thinking_level=thinking_level,
+    )
+    return result

@@ -6,20 +6,37 @@ import asyncio
 import json
 import logging
 import re
+import time
 from pathlib import Path
 
 from google import genai  # type: ignore[attr-defined]
 from google.genai import types as genai_types  # type: ignore[attr-defined]
 
 from art_style_search.caption_sections import parse_labeled_sections
+from art_style_search.reasoning_client import TruncationError
 from art_style_search.types import Caption
-from art_style_search.utils import async_retry, caption_circuit_breaker, image_to_gemini_part
+from art_style_search.utils import (
+    async_retry,
+    caption_circuit_breaker,
+    gemini_timeout_s,
+    image_to_gemini_part,
+    log_api_call,
+)
 
 logger = logging.getLogger(__name__)
 
 _ANCHOR_SECTION_MIN_WORDS: dict[str, int] = {
     "Art Style": 100,
     "Subject": 80,
+}
+
+# Upper bounds on the per-section word count of the captioner output. Instruction
+# targets are `[Art Style]` 400-800 and `[Subject]` 800-2000; the ceilings here
+# are generous (2x the upper target) to reject only pathological runaway blocks
+# that dilute downstream scoring signal.
+_ANCHOR_SECTION_MAX_WORDS: dict[str, int] = {
+    "Art Style": 1600,
+    "Subject": 4000,
 }
 
 CAPTION_SYSTEM = (
@@ -182,12 +199,40 @@ async def caption_single(
                     ],
                     config=genai_types.GenerateContentConfig(**config_kwargs),
                 ),
-                timeout=180,
+                timeout=gemini_timeout_s(_CAPTIONER_MAX_OUTPUT_TOKENS),
+            )
+        candidates = getattr(resp, "candidates", None) or []
+        if candidates and str(getattr(candidates[0], "finish_reason", "")).endswith("MAX_TOKENS"):
+            raise TruncationError(
+                provider="gemini",
+                stage="caption",
+                max_tokens=_CAPTIONER_MAX_OUTPUT_TOKENS,
             )
         return resp.text
 
-    caption_text: str = await async_retry(
-        _call, label=f"Caption {image_path.name}", circuit_breaker=caption_circuit_breaker
+    started = time.monotonic()
+    try:
+        caption_text: str = await async_retry(
+            _call, label=f"Caption {image_path.name}", circuit_breaker=caption_circuit_breaker
+        )
+    except Exception:
+        log_api_call(
+            provider="gemini",
+            model=model,
+            stage="caption",
+            duration_s=time.monotonic() - started,
+            max_tokens=_CAPTIONER_MAX_OUTPUT_TOKENS,
+            thinking_level=thinking_level,
+            status="error",
+        )
+        raise
+    log_api_call(
+        provider="gemini",
+        model=model,
+        stage="caption",
+        duration_s=time.monotonic() - started,
+        max_tokens=_CAPTIONER_MAX_OUTPUT_TOKENS,
+        thinking_level=thinking_level,
     )
 
     # Validate caption quality — empty or very short captions waste downstream cycles
@@ -199,8 +244,9 @@ async def caption_single(
         )
         raise RuntimeError(msg)
 
-    # Validate per-section anchor minima — catches catastrophic section collapses (e.g. 9-word [Art Style])
-    # that pass the total-length check and poison downstream scoring.
+    # Validate per-section anchor bounds — catches catastrophic section collapses
+    # (e.g. 9-word [Art Style]) that pass the total-length check and poison downstream
+    # scoring, as well as runaway sections that dilute the optimizer's feedback signal.
     parsed_sections = parse_labeled_sections(caption_text)
     if parsed_sections:
         section_violations: list[str] = []
@@ -210,8 +256,14 @@ async def caption_single(
             actual_words = len(parsed_sections[section_name].split())
             if actual_words < min_words:
                 section_violations.append(f"[{section_name}]={actual_words}w (min {min_words})")
+        for section_name, max_words in _ANCHOR_SECTION_MAX_WORDS.items():
+            if section_name not in parsed_sections:
+                continue
+            actual_words = len(parsed_sections[section_name].split())
+            if actual_words > max_words:
+                section_violations.append(f"[{section_name}]={actual_words}w (max {max_words})")
         if section_violations:
-            msg = f"Captioning {image_path.name} produced catastrophically short anchor sections: " + "; ".join(
+            msg = f"Captioning {image_path.name} produced out-of-bounds anchor sections: " + "; ".join(
                 section_violations
             )
             raise RuntimeError(msg)

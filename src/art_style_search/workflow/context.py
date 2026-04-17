@@ -262,6 +262,7 @@ async def _setup_run_context(config: Config) -> RunContext:
         xai_api_key=config.xai_api_key,
         base_url=config.reasoning_base_url,
         debug_dir=config.log_dir / "reasoning_debug",
+        default_reasoning_effort=config.reasoning_effort,
     )
     xai_client = None
     if config.comparison_provider == "xai":
@@ -303,7 +304,11 @@ async def _setup_run_context(config: Config) -> RunContext:
             eval_semaphore=eval_semaphore,
             xai_client=xai_client,
         ),
-        reasoning=ReasoningService(client=reasoning_client, model=config.reasoning_model),
+        reasoning=ReasoningService(
+            client=reasoning_client,
+            model=config.reasoning_model,
+            effort=config.reasoning_effort,
+        ),
     )
     return RunContext(
         config=config,

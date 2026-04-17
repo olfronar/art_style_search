@@ -755,7 +755,7 @@ async def brainstorm_experiment_sketches(
         max_tokens=40000,
         repair_retries=2,
         temperature=0.9,
-        reasoning_effort="medium",
+        stage="brainstorm",
     )
     if not sketches:
         logger.warning("No valid sketches parsed from brainstorm response")
@@ -785,7 +785,7 @@ async def rank_experiment_sketches(
             repair_retries=1,
             final_failure_log_level=logging.INFO,
             temperature=0.1,
-            reasoning_effort="medium",
+            stage="rank",
         )
     except Exception as exc:
         logger.info("Ranking failed; falling back to brainstorm order: %s: %s", type(exc).__name__, exc)
@@ -841,7 +841,7 @@ async def expand_experiment_sketches(
             max_tokens=24000,
             repair_retries=2,
             temperature=0.3,
-            reasoning_effort="medium",
+            stage="expand",
         )
         for idx, sketch in enumerate(sketches)
     ]

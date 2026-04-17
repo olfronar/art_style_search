@@ -164,5 +164,5 @@ async def review_iteration(
         response_schema=response_schema("review"),
         max_tokens=6000,
         temperature=0.2,
-        reasoning_effort="medium",
+        stage="review",
     )

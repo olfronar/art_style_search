@@ -16,7 +16,9 @@ from art_style_search.retry import (
     CircuitBreaker,
     async_retry,
     caption_circuit_breaker,
+    gemini_timeout_s,
     generation_circuit_breaker,
+    log_api_call,
     vision_circuit_breaker,
 )
 from art_style_search.taxonomy import CATEGORY_SYNONYMS
@@ -32,9 +34,11 @@ __all__ = [
     "caption_circuit_breaker",
     "extract_text",
     "extract_xml_tag",
+    "gemini_timeout_s",
     "generation_circuit_breaker",
     "image_to_gemini_part",
     "image_to_xai_data_url",
+    "log_api_call",
     "stream_message",
     "vision_circuit_breaker",
 ]
