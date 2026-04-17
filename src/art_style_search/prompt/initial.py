@@ -57,10 +57,7 @@ _BASE_REQUIREMENTS = (
     "Character proportions (heads-tall + archetype) belong in subject_anchor, NOT here.\n"
     "6. 'subject_anchor.value' MUST include a 'Proportions:' sub-block requiring numeric head-heights-tall AND "
     "an archetype phrase (one of chibi / stylized-youth / heroic / realistic-adult / elongated).\n"
-    "7. The captioner must use MEDIUM-CLASS discipline: classify every image as exactly one of "
-    "A hand-drawn 2D / B vector-flat 2D / C stylized 3D CGI / D photoreal 3D / E mixed-2.5D, and use "
-    "class-appropriate vocabulary only. Name the observed class inside style_foundation.\n"
-    "8. Be laconic: state each style rule ONCE in style_foundation. Other sections reference rules by name, "
+    "7. Be laconic: state each style rule ONCE in style_foundation. Other sections reference rules by name, "
     "not by restatement — duplication adds words without adding signal.\n"
 )
 
@@ -153,7 +150,7 @@ def _expand_system() -> str:
         "- 8-20 sections, with enough detailed instruction to reach 2000-8000 rendered words overall.\n"
         "- First section MUST be 'style_foundation'; it holds the SHARED style DNA the captioner will repeat "
         "inside every caption's [Art Style] block. It MUST realize the 5-slot [Art Style] SKELETON: "
-        "(1) How to Draw (medium class A/B/C/D/E + construction + line policy), "
+        "(1) How to Draw (medium identification in plain observable vocabulary + construction + line policy), "
         "(2) Shading & Light (layer stack + edge softness + key-fill-rim), "
         "(3) Color Principle (generic palette families + value + saturation), "
         "(4) Surface & Texture (grain + class-appropriate material vocabulary), "

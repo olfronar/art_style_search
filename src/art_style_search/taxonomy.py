@@ -9,7 +9,6 @@ CATEGORY_SYNONYMS: dict[str, list[str]] = {
     "composition": ["layout", "framing", "spatial", "arrangement", "perspective", "depth"],
     "technique": ["medium", "brushwork", "brushstroke", "rendering", "stroke", "paint", "watercolor"],
     "rendering_dimensionality": [
-        "medium_class",
         "dimensionality",
         "2d",
         "3d",

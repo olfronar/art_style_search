@@ -49,21 +49,23 @@ _VISION_SINGLE_PROMPT = (
     '<style verdict="MATCH|PARTIAL|MISS">1-sentence explanation</style>\n'
     '<subject verdict="MATCH|PARTIAL|MISS">1-sentence explanation about character/subject fidelity</subject>\n'
     '<composition verdict="MATCH|PARTIAL|MISS">1-sentence explanation about spatial layout</composition>\n'
-    '<medium verdict="MATCH|PARTIAL|MISS">1-sentence explanation naming both medium classes (A/B/C/D/E)</medium>\n'
+    '<medium verdict="MATCH|PARTIAL|MISS">1-sentence explanation naming both media in plain observable vocabulary (e.g. "hand-painted 2D with soft gradient shading", "stylized CGI render with beveled volumes")</medium>\n'
     '<proportions verdict="MATCH|PARTIAL|MISS">1-sentence explanation about character/subject proportions (heads-tall, body ratios)</proportions>\n'
 )
 _VISION_SYSTEM = (
     "You are a careful visual judge comparing a reference image to a generated reproduction. "
     "Use the rubric exactly as given and return only the requested pseudo-XML tags.\n\n"
-    "Medium classes (reference the letter when judging style):\n"
-    "  A hand-drawn 2D   B vector/flat 2D   C stylized 3D CGI   D photoreal 3D   E mixed/2.5D\n\n"
+    "Describe the medium of each image in plain observable vocabulary (e.g. 'hand-painted 2D', "
+    "'digital vector with hard silhouette edges', 'stylized CGI render with beveled volumes and "
+    "matte-plastic surfaces', 'photoreal CGI', 'mixed/2.5D — 2D painted assets with parallax depth'). "
+    "No letter buckets; let the observed surface drive the words.\n\n"
     "Calibration examples:\n"
     "- MATCH (style, 2D): 'Oil painting with visible impasto strokes matching the reference's thick paint application and muted earth-tone palette.'\n"
     "- PARTIAL (style, 2D): 'Correct oil medium but smoother blending than reference, missing the rough brushwork texture.'\n"
     "- MISS (style, 2D): 'Watercolor wash technique where the reference uses dense oil impasto — fundamentally different medium.'\n"
-    "- MATCH (style, 3D CGI): 'Both stylized 3D CGI (class C) with matching matte plastic surfaces, baked ambient occlusion in creases, and rim-light intensity on the focal face.'\n"
-    "- MISS (style, class mismatch): 'Reference is stylized 3D CGI (class C — bevels, AO, rim light) but the reproduction is hand-drawn 2D (class A) with visible pencil hatching and no volumetric gradients — fundamentally different medium class.'\n"
-    "- PARTIAL (style, 3D): 'Right CGI class (C) but specular highlights sharper than reference and subsurface scattering on skin is absent.'\n"
+    "- MATCH (style, CGI): 'Both stylized CGI renders with matching matte plastic surfaces, baked ambient occlusion in creases, and rim-light intensity on the focal face.'\n"
+    "- MISS (style, medium mismatch): 'Reference is a stylized CGI render (beveled volumes, AO in creases, rim light on focal subject) but the reproduction is hand-drawn 2D with visible pencil hatching and no volumetric gradients — fundamentally different medium.'\n"
+    "- PARTIAL (style, CGI): 'Right stylized-CGI feel but specular highlights sharper than reference and subsurface scattering on skin is absent.'\n"
     "- MATCH (subject): 'Same fox character with identical orange fur, white chest markings, and alert ear position as the reference.'\n"
     "- PARTIAL (subject): 'Correct fox species but different pose (sitting vs reference's standing) and missing the satchel prop.'\n"
     "- MISS (subject): 'A deer where the reference shows a fox — different species entirely.'\n"
@@ -71,7 +73,7 @@ _VISION_SYSTEM = (
     "- MATCH (composition): 'Same three-quarter view with subject centered and forest background extending to both edges.'\n"
     "- PARTIAL (composition): 'Subject correctly centered but cropped tighter, cutting off the lower background detail.'\n"
     "- MISS (composition): 'Close-up portrait where reference shows a wide establishing shot with extensive landscape.'\n\n"
-    "When judging style, a medium-class mismatch (e.g., reference is C but reproduction is A) is a MISS regardless of palette agreement."
+    "When judging style, a medium mismatch (e.g., reference reads as hand-painted 2D but reproduction reads as a CGI render, or vice versa) is a MISS regardless of palette agreement."
 )
 _VISION_CAPTION_CHAR_LIMIT = 40000
 

@@ -165,7 +165,7 @@ def parse_args(argv: list[str] | None = None) -> Config:
         default="MINIMAL",
         help=(
             "Gemini Pro captioner extended-thinking level (default MINIMAL — current behavior). "
-            "MEDIUM materially improves medium-class + proportion precision at 2-3x latency."
+            "MEDIUM materially improves medium identification + proportion precision at 2-3x latency."
         ),
     )
     thinking.add_argument(

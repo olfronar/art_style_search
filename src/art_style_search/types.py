@@ -42,7 +42,7 @@ class MetricScores:
     vision_composition: float = 0.5  # higher = better, ternary: MATCH=1.0, PARTIAL=0.5, MISS=0.0
     # Medium-class + proportions dims from the judge — now weighted into composite_score
     # (see scoring._W_VISION_MEDIUM / _W_VISION_PROPORTIONS).
-    vision_medium: float = 0.5  # higher = better, ternary agreement on 2D/3D/CGI medium class
+    vision_medium: float = 0.5  # higher = better, ternary agreement on the observed rendering medium (described in plain observable vocabulary)
     vision_proportions: float = 0.5  # higher = better, ternary agreement on character head-heights + archetype
     is_fallback: bool = False  # True for zero-score sentinels substituted on evaluation failure
 

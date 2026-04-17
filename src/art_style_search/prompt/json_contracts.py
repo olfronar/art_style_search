@@ -385,11 +385,11 @@ def _schema_word_block(token: str, *, words: int = 260) -> str:
 
 
 _STYLE_FOUNDATION_DRAWING_PREFIX = (
-    "How to Draw: medium class A, hand-made line with pressure variation, silhouette primitives, "
-    "construction order (silhouette -> forms -> details), line policy. "
+    "How to Draw: hand-painted 2D with visible brushwork and paper tooth, hand-made line with pressure variation, "
+    "silhouette primitives, construction order (silhouette -> forms -> details), line policy. "
     "Shading & Light: base -> AO -> midtones -> rim -> specular stack, feathered edges, warm key + cool rim. "
     "Color Principle: saturated complementary blues, mid-key with moderate contrast, selective chroma. "
-    "Surface & Texture: paper tooth, watercolor wash vocabulary (class-appropriate). "
+    "Surface & Texture: paper tooth, watercolor wash vocabulary that matches the observed medium. "
     "Style Invariants: MUST every character have exactly one exaggerated feature; NEVER more than three saturated hues in one frame. "
     "Observations-vs-rules: [Art Style] holds RULES only; per-image observations live in [Subject] / [Color Palette] / [Composition] / [Lighting & Atmosphere]. "
     "Anti-name preamble: no genre labels inside [Art Style] — describe HOW it is rendered, not NAMES. "
