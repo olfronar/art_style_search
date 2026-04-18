@@ -259,9 +259,7 @@ def _apply_all_patches(monkeypatch, tmp_path: Path, ref_paths: list[Path]):
     monkeypatch.setattr("art_style_search.loop._setup_run_context", fake_setup_run_context)
 
     # 2. Mock analyze_style (zero-step analysis)
-    async def fake_analyze_style(
-        reference_paths, captions, *, gemini_client, reasoning_client, caption_model, reasoning_model, cache_path
-    ):
+    async def fake_analyze_style(reference_paths, captions, **kwargs):
         return _make_style_profile(), _valid_template()
 
     monkeypatch.setattr("art_style_search.workflow.zero_step.analyze_style", fake_analyze_style)

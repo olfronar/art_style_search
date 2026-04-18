@@ -1,4 +1,4 @@
-"""Caption reference images via Gemini Pro with disk caching."""
+"""Caption reference images via Gemini Pro (per-iteration) or Anthropic (bootstrap) with disk caching."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from google.genai import types as genai_types  # type: ignore[attr-defined]
 
 from art_style_search.caption_sections import parse_labeled_sections
 from art_style_search.evaluate import compute_canon_fidelity
-from art_style_search.reasoning_client import TruncationError
+from art_style_search.reasoning_client import ANTHROPIC_EFFORT_FROM_THINKING, ReasoningClient, TruncationError
 from art_style_search.types import Caption
 from art_style_search.utils import (
     async_retry,
@@ -23,6 +23,11 @@ from art_style_search.utils import (
     image_to_gemini_part,
     log_api_call,
 )
+
+_ANTHROPIC_BOOTSTRAP_CONCURRENCY = 5
+# Sized to cover the caption length ceiling (~4000 words * ~1.5 tokens/word for `[Subject]` + headroom);
+# `_gemini_analyze` uses 8k tokens because it produces a 300-600 word summary, not a caption.
+_ANTHROPIC_BOOTSTRAP_MAX_TOKENS = 32000
 
 logger = logging.getLogger(__name__)
 
@@ -166,16 +171,10 @@ async def caption_single(
     """
     current_mtime: float | None = None
     if cache_dir is not None:
-        cache_file = cache_dir / f"{image_path.stem}.json"
         current_mtime = image_path.stat().st_mtime
-
-        try:
-            cached = json.loads(cache_file.read_text(encoding="utf-8"))
-            if cached.get("mtime") == current_mtime and cached.get("cache_key", "") == cache_key:
-                logger.debug("Cache hit for %s", image_path.name)
-                return Caption(image_path=Path(cached["image_path"]), text=cached["text"])
-        except (FileNotFoundError, json.JSONDecodeError, KeyError):
-            pass
+        cached = _read_caption_cache(cache_dir, image_path, cache_key=cache_key, mtime=current_mtime)
+        if cached is not None:
+            return cached
 
     logger.info("Captioning %s via %s", image_path.name, model)
 
@@ -208,35 +207,17 @@ async def caption_single(
                 max_tokens=_CAPTIONER_MAX_OUTPUT_TOKENS,
             )
         text = resp.text or ""
-        # Validate inside the retry loop — empty/too-short responses and section-floor/ceiling
-        # violations are transient captioner misbehavior; raising lets async_retry re-issue.
-        if not text or len(text.strip()) < min_caption_length:
+        # Raising inside the retry loop lets async_retry re-issue on transient captioner misbehavior
+        # (truncated output, dropped sections). Bootstrap retries skip section validation — the
+        # retry's stricter prompt sometimes trims observation blocks that would otherwise pass.
+        if validate_sections:
+            _validate_caption_text(text, image_name=image_path.name, min_length=min_caption_length)
+        elif not text or len(text.strip()) < min_caption_length:
             msg = (
                 f"Captioning {image_path.name} produced empty or too-short caption "
                 f"({len(text.strip())} chars, min {min_caption_length})"
             )
             raise RuntimeError(msg)
-        if validate_sections:
-            parsed_sections = parse_labeled_sections(text)
-            if parsed_sections:
-                section_violations: list[str] = []
-                for section_name, min_words in _ANCHOR_SECTION_MIN_WORDS.items():
-                    if section_name not in parsed_sections:
-                        continue
-                    actual_words = len(parsed_sections[section_name].split())
-                    if actual_words < min_words:
-                        section_violations.append(f"[{section_name}]={actual_words}w (min {min_words})")
-                for section_name, max_words in _ANCHOR_SECTION_MAX_WORDS.items():
-                    if section_name not in parsed_sections:
-                        continue
-                    actual_words = len(parsed_sections[section_name].split())
-                    if actual_words > max_words:
-                        section_violations.append(f"[{section_name}]={actual_words}w (max {max_words})")
-                if section_violations:
-                    msg = f"Captioning {image_path.name} produced out-of-bounds anchor sections: " + "; ".join(
-                        section_violations
-                    )
-                    raise RuntimeError(msg)
         return text
 
     started = time.monotonic()
@@ -305,17 +286,8 @@ async def caption_single(
                     exc,
                 )
 
-    if cache_dir is not None:
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        cache_data = {
-            "image_path": str(image_path),
-            "text": caption_text,
-            "mtime": current_mtime,
-            "cache_key": cache_key,
-        }
-        cache_file = cache_dir / f"{image_path.stem}.json"
-        cache_file.write_text(json.dumps(cache_data, ensure_ascii=False, indent=2), encoding="utf-8")
-        logger.debug("Cached caption for %s", image_path.name)
+    if cache_dir is not None and current_mtime is not None:
+        _write_caption_cache(cache_dir, image_path, text=caption_text, cache_key=cache_key, mtime=current_mtime)
 
     return Caption(image_path=image_path, text=caption_text)
 
@@ -357,6 +329,121 @@ async def caption_references(
     for i, result in enumerate(results):
         if isinstance(result, BaseException):
             logger.warning("Caption %d (%s) failed: %s", i, reference_paths[i].name, result)
+        else:
+            captions.append(result)
+    return captions
+
+
+def _validate_caption_text(text: str, *, image_name: str, min_length: int) -> None:
+    """Raise RuntimeError when a caption response is empty, too short, or has out-of-bounds anchor sections."""
+    if not text or len(text.strip()) < min_length:
+        msg = (
+            f"Captioning {image_name} produced empty or too-short caption ({len(text.strip())} chars, min {min_length})"
+        )
+        raise RuntimeError(msg)
+    parsed = parse_labeled_sections(text)
+    if not parsed:
+        return
+    violations: list[str] = []
+    for section_name, floor in _ANCHOR_SECTION_MIN_WORDS.items():
+        if section_name in parsed and len(parsed[section_name].split()) < floor:
+            violations.append(f"[{section_name}]={len(parsed[section_name].split())}w (min {floor})")
+    for section_name, ceiling in _ANCHOR_SECTION_MAX_WORDS.items():
+        if section_name in parsed and len(parsed[section_name].split()) > ceiling:
+            violations.append(f"[{section_name}]={len(parsed[section_name].split())}w (max {ceiling})")
+    if violations:
+        msg = f"Captioning {image_name} produced out-of-bounds anchor sections: " + "; ".join(violations)
+        raise RuntimeError(msg)
+
+
+def _read_caption_cache(cache_dir: Path, image_path: Path, *, cache_key: str, mtime: float) -> Caption | None:
+    """Return a cached caption if it matches ``(mtime, cache_key)``, else None."""
+    try:
+        cached = json.loads((cache_dir / f"{image_path.stem}.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+        return None
+    if cached.get("mtime") != mtime or cached.get("cache_key", "") != cache_key:
+        return None
+    logger.debug("Cache hit for %s", image_path.name)
+    return Caption(image_path=Path(cached["image_path"]), text=cached["text"])
+
+
+def _write_caption_cache(
+    cache_dir: Path,
+    image_path: Path,
+    *,
+    text: str,
+    cache_key: str,
+    mtime: float,
+) -> None:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    payload = {"image_path": str(image_path), "text": text, "mtime": mtime, "cache_key": cache_key}
+    (cache_dir / f"{image_path.stem}.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    logger.debug("Cached caption for %s", image_path.name)
+
+
+async def caption_bootstrap(
+    reference_paths: list[Path],
+    *,
+    client: ReasoningClient,
+    model: str,
+    cache_dir: Path,
+    cache_key: str = "",
+    prompt: str | None = None,
+    system: str | None = None,
+    thinking_level: str = "MINIMAL",
+    concurrency: int = _ANTHROPIC_BOOTSTRAP_CONCURRENCY,
+) -> list[Caption]:
+    """Caption references via a multimodal reasoning client (zero-step only).
+
+    Uses the same disk-cache layout as :func:`caption_references` — per-image JSON keyed
+    by (mtime, cache_key). Cache_key should include the provider tag (e.g. ``"initial-claude"``)
+    so cached entries from a different provider aren't mistakenly reused.
+    """
+    effective_prompt = prompt or CAPTION_PROMPT
+    effective_system = system or CAPTION_SYSTEM
+    reasoning_effort = ANTHROPIC_EFFORT_FROM_THINKING.get(thinking_level.upper(), "low")
+    min_caption_length = _minimum_caption_chars(effective_prompt)
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def _caption_one(image_path: Path) -> Caption:
+        current_mtime = image_path.stat().st_mtime
+        cached = _read_caption_cache(cache_dir, image_path, cache_key=cache_key, mtime=current_mtime)
+        if cached is not None:
+            return cached
+
+        logger.info("Bootstrap-captioning %s via %s (%s)", image_path.name, client.provider, model)
+
+        async def _call() -> str:
+            async with semaphore:
+                text = await client.call_with_images(
+                    model=model,
+                    system=effective_system,
+                    user=effective_prompt,
+                    image_paths=[image_path],
+                    max_tokens=_ANTHROPIC_BOOTSTRAP_MAX_TOKENS,
+                    reasoning_effort=reasoning_effort,
+                    stage="caption_bootstrap",
+                )
+            _validate_caption_text(text, image_name=image_path.name, min_length=min_caption_length)
+            return text
+
+        caption_text = await async_retry(
+            _call,
+            label=f"Bootstrap caption {image_path.name}",
+            circuit_breaker=caption_circuit_breaker,
+        )
+        _write_caption_cache(cache_dir, image_path, text=caption_text, cache_key=cache_key, mtime=current_mtime)
+        return Caption(image_path=image_path, text=caption_text)
+
+    results = await asyncio.gather(*[_caption_one(p) for p in reference_paths], return_exceptions=True)
+    captions: list[Caption] = []
+    for i, result in enumerate(results):
+        if isinstance(result, BaseException):
+            logger.warning("Bootstrap caption %d (%s) failed: %s", i, reference_paths[i].name, result)
         else:
             captions.append(result)
     return captions

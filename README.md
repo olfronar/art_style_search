@@ -1,6 +1,6 @@
 # Art Style Search
 
-Self-improving loop that finds the best prompt to define and follow an art style from reference images. A meta-prompt instructs a captioner (Gemini Pro) how to describe images so a generator (Gemini Flash) can recreate them from the captions. A reasoning model (Claude, GLM-5.1, GPT-5.4, or Grok 4.20 — swappable via `--reasoning-provider`) optimizes the meta-prompt through hypothesis-driven experiments, and image comparison can run on either Gemini or Grok via `--comparison-provider`.
+Self-improving loop that finds the best prompt to define and follow an art style from reference images. A meta-prompt instructs a captioner (Gemini Pro) how to describe images so a generator (Gemini Flash) can recreate them from the captions. A reasoning model (Claude, GLM-5.1, GPT-5.4, or Grok 4.20 — swappable via `--reasoning-provider`) optimizes the meta-prompt through hypothesis-driven experiments, image comparison can run on either Gemini or Grok via `--comparison-provider`, and the one-time zero-step (20-ref captioning + parallel visual analysis that seeds the first meta-prompt) can optionally be routed through Anthropic Claude via `--bootstrap-captioner claude` for a richer initial style read.
 
 Inspired by [karpathy/autoresearch](https://github.com/karpathy/autoresearch).
 
@@ -10,27 +10,44 @@ Inspired by [karpathy/autoresearch](https://github.com/karpathy/autoresearch).
 Reference Image + Meta-Prompt
         |
         v
-  Gemini Pro (captioner)
+  Captioner (Gemini Pro per-iteration;
+  at zero-step, --bootstrap-captioner claude
+  routes BOTH the 20-ref captions AND
+  the parallel visual style analysis
+  through Claude Opus 4.7)
         |
         v
    Detailed Caption
+   (includes [Art Style] canon copied
+    verbatim from meta-prompt's
+    style_foundation, plus observation
+    blocks: [Subject], [Color Palette],
+    [Composition], [Lighting & Atmosphere])
         |
         v
   Gemini Flash (generator)
+  (canon's MUST/NEVER invariants
+   also fed to generator system prompt)
         |
         v
    Generated Image
         |
         v
   Compare with Original
-  (DreamSim, Color, SSIM, HPS, Aesthetics, Gemini ternary vision, caption compliance)
+  (DreamSim, Color, SSIM, HPS, Aesthetics,
+   5-axis Gemini ternary vision —
+   style/subject/composition/medium/proportions —
+   + style-gap observations + caption compliance)
         |
         v
   Reasoning model (optimizer)
-  Refines the meta-prompt
+  Refines the meta-prompt, tracks a
+  canon-edit ledger across iterations
 ```
 
-The meta-prompt is the only thing being optimized. It tells the captioner *how* to describe images -- what visual details to capture, how precise to be about colors, technique, characters, composition, etc. Better meta-prompts produce captions that lead to more faithful recreations.
+The meta-prompt is the only external artifact being optimized — but its whole **structure** is part of the search space, not just the text inside fixed slots. Each iteration the reasoner can rewrite any section's content, add new sections, drop or rename existing ones (beyond the two required anchors), reorder the `[Section]` labels the captioner emits (`caption_sections`), adjust the per-caption word-count target (`caption_length_target`), and edit the `negative_prompt`. Two anchors are fixed: `style_foundation` must be first and `subject_anchor` must be second; everything else is open.
+
+`style_foundation` **is the style canon** — third-person declarative assertions about how this specific art style renders (medium, shading, color principle, surface texture, MUST/NEVER invariants). The captioner copies that canon verbatim into every `[Art Style]` caption block; the generator reads it as the style descriptor. Iteration-to-iteration learning is tracked in a canon-edit ledger so the reasoner can see "I tried tightening Color Principle last iteration; vision_subject improved +0.08, vision_style dropped −0.02."
 
 ### Optimization Loop
 
@@ -112,19 +129,24 @@ uv run python -m art_style_search clean --all
 | `--new` | | Force new run (error if name exists) |
 | `--max-iterations` | `10` | Maximum optimization iterations |
 | `--plateau-window` | `5` | Iterations without improvement before stop |
-| `--num-branches` | `5` | Parallel experiments per iteration (portfolio size after selection) |
+| `--num-branches` | `9` | Parallel experiments per iteration (portfolio size after selection) |
 | `--raw-proposals` | `9` | Raw proposals per iteration before portfolio selection (range 8-12) |
 | `--num-fixed-refs` | `20` | Fixed reference images for optimization |
 | `--protocol` | `classic` | `classic` (default) or `rigorous` (info barrier + replication + statistical testing) |
 | `--seed` | random | RNG seed for reproducible reference selection |
 | `--aspect-ratio` | `1:1` | Aspect ratio for generated images |
-| `--caption-model` | `gemini-3.1-pro-preview` | Gemini model for captioning |
+| `--caption-model` | `gemini-3.1-pro-preview` | Gemini model for per-iteration captioning |
 | `--generator-model` | `gemini-3.1-flash-image-preview` | Gemini model for generation |
 | `--reasoning-provider` | `anthropic` | Reasoning provider: `anthropic`, `zai`, `openai`, `xai`, or `local` |
 | `--reasoning-model` | auto | Model name (default: `claude-opus-4-7` / `glm-5.1` / `gpt-5.4` / `grok-4.20-reasoning-latest`) |
+| `--reasoning-effort` | `medium` | Reasoning-model effort (`low`/`medium`/`high`). Anthropic: `low`=thinking disabled, `medium`=adaptive, `high`=16k budget. OpenAI: maps to `reasoning.effort`. Z.AI/xAI/local: dropped with a one-time warning. |
 | `--comparison-provider` | `gemini` | Image comparison provider: `gemini` or `xai` |
 | `--comparison-model` | auto | Comparison model name (default: caption model for `gemini`, `grok-4.20-reasoning-latest` for `xai`) |
 | `--reasoning-base-url` | none | Required with `--reasoning-provider local`; base URL for an OpenAI-compatible server |
+| `--bootstrap-captioner` | `gemini` | Zero-step provider (`gemini` or `claude`). Controls BOTH the one-time 20-ref captioning AND the parallel visual analysis of those images that seeds the first meta-prompt. Per-iteration captioning and the vision judge are unaffected. `claude` requires `ANTHROPIC_API_KEY`. |
+| `--bootstrap-caption-model` | `claude-opus-4-7` | Anthropic model used for both zero-step surfaces when `--bootstrap-captioner claude`. `--caption-thinking-level` maps to Anthropic effort (MINIMAL/LOW → `low`, MEDIUM → `medium`, HIGH → `high`). |
+| `--caption-thinking-level` | `MINIMAL` | Gemini Pro captioner extended-thinking level (`MINIMAL`/`LOW`/`MEDIUM`/`HIGH`). `MEDIUM` materially improves medium identification + proportion precision at 2-3x latency. |
+| `--generation-thinking-level` | `MINIMAL` | Gemini Flash image-generator extended-thinking level. |
 | `--gemini-concurrency` | `50` | Max concurrent Gemini API calls |
 | `--eval-concurrency` | `4` | Max concurrent eval threads |
 
@@ -146,23 +168,25 @@ Each metric compares a generated image against its specific paired original; wei
 |--------|--------|----------|--------|
 | **DreamSim** | 34% | Human-aligned perceptual similarity | Higher |
 | **Color histogram** | 17% | HSV histogram intersection | Higher |
-| **Vision (subject)** | 10% | Gemini ternary subject fidelity | Higher |
-| **SSIM** | 10% | Structural similarity index | Higher |
-| **Vision (style)** | 8% | Gemini ternary style fidelity | Higher |
+| **Style consistency** | 8% | Jaccard overlap of [Art Style] blocks (canon-pull-through alarm) | Higher |
 | **HPS v2** | 7% | Caption-image alignment (normalized / 0.35) | Higher |
+| **Vision (subject)** | 7% | Gemini ternary subject fidelity (paired with subject-floor penalty) | Higher |
+| **Vision (style)** | 6% | Gemini ternary style fidelity | Higher |
 | **Aesthetics** | 6% | Visual quality (LAION predictor, 1-10) | Higher |
+| **SSIM** | 6% | Structural similarity index | Higher |
 | **Vision (composition)** | 4% | Gemini ternary spatial layout | Higher |
-| **Style consistency** | 4% | Jaccard overlap of [Art Style] blocks | Higher |
+| **Vision (proportions)** | 3% | Gemini ternary head-heights + character archetype | Higher |
+| **Vision (medium)** | 2% | Gemini ternary agreement on rendering medium (plain observable vocabulary) | Higher |
 
 Additional penalties (subtracted from the weighted sum, floor-clamped to 0):
 
 - **Variance penalty** (×0.30): mean of per-image DreamSim and color-histogram std — punishes inconsistent reproduction across images.
 - **Completion penalty** (×0.15): `1 - completion_rate`, punishes experiments that drop images.
-- **Compliance penalty** (×0.08): `1 - mean(compliance rates)` over topic coverage, marker coverage, section ordering, section balance, subject specificity.
+- **Compliance penalty** (×0.08): `1 - mean(compliance rates)` over topic coverage, marker coverage, section ordering, section balance, subject specificity, **style-canon fidelity** (the caption's `[Art Style]` block reproduces the meta-prompt's `style_foundation` canon verbatim — LCS char-ratio via `difflib.SequenceMatcher`), and **observation-boilerplate purity** (observation blocks stay free of canon text — token-trigram overlap with the canon).
 - **Ref-shortfall penalty** (×0.04): fraction of requested reference images that were skipped.
 - **Subject-floor penalty** (×0.05): triggers only when `vision_subject < 0.35`, scaling linearly to the floor.
 
-`per_image_composite` (used for paired statistical testing in rigorous mode) applies the same base weights minus `style_consistency` (experiment-level) and without any penalties — max output 0.96.
+`per_image_composite` (used for paired statistical testing in rigorous mode) applies the same base weights minus `style_consistency` (experiment-level only) and without any penalties — max output 0.92.
 
 ## Scientific Rigor Mode
 
@@ -186,8 +210,8 @@ src/art_style_search/
   loop.py                 Façade re-exporting workflow.run
   workflow/               Internal orchestration (context, iteration phases, policy, services, zero-step)
   prompt/                 Reasoning-model interface (proposals, synthesis, review, JSON contracts, parsing)
-  analyze.py              Zero-step: parallel Gemini vision + reasoning-model style analysis
-  caption.py              Gemini Pro captioning with disk cache
+  analyze.py              Zero-step: parallel visual (Gemini or Claude) + reasoning-model style analysis
+  caption.py              Gemini Pro (per-iteration) + Anthropic Claude (zero-step bootstrap) captioning with disk cache
   caption_sections.py     [Section] parser + subject-first generator prompt builder
   generate.py             Gemini Flash image generation with retry
   experiment.py           Single-experiment caption→generate→evaluate pipeline + replicated evaluation

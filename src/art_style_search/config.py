@@ -71,6 +71,12 @@ class Config:
     # reasoning.effort; Z.AI/xAI/local: dropped with one-time warning.
     reasoning_effort: str = "medium"
 
+    # Zero-step captioner. "gemini" uses Gemini Pro (same as per-iteration captioning);
+    # "claude" routes the one-time bootstrap captions through the Anthropic reasoning client
+    # at claude-opus-4-7 with reasoning_effort derived from caption_thinking_level.
+    bootstrap_captioner: str = "gemini"
+    bootstrap_caption_model: str = "claude-opus-4-7"
+
 
 def parse_args(argv: list[str] | None = None) -> Config:
     """Parse CLI arguments into a Config."""
@@ -172,6 +178,24 @@ def parse_args(argv: list[str] | None = None) -> Config:
     conc.add_argument("--gemini-concurrency", type=int, default=50, help="Max concurrent Gemini API calls")
     conc.add_argument("--eval-concurrency", type=int, default=4, help="Max concurrent eval threads")
 
+    # Zero-step bootstrap captioner (one-time captioning of the fixed reference set)
+    bootstrap = parser.add_argument_group("Bootstrap Captioner")
+    bootstrap.add_argument(
+        "--bootstrap-captioner",
+        choices=["gemini", "claude"],
+        default="gemini",
+        help=(
+            "Provider for the one-time zero-step captioning (default gemini reuses the "
+            "per-iteration captioner). 'claude' routes via the Anthropic reasoning client at "
+            "--bootstrap-caption-model; requires ANTHROPIC_API_KEY."
+        ),
+    )
+    bootstrap.add_argument(
+        "--bootstrap-caption-model",
+        default="claude-opus-4-7",
+        help="Anthropic model used when --bootstrap-captioner claude (default claude-opus-4-7).",
+    )
+
     # Gemini extended-thinking (trades latency + tokens for quality)
     thinking = parser.add_argument_group("Gemini Thinking")
     thinking.add_argument(
@@ -213,6 +237,8 @@ def _validate_and_build_config(args: argparse.Namespace, parser: argparse.Argume
     provider = args.reasoning_provider
     if provider == "anthropic" and not anthropic_key:
         parser.error("ANTHROPIC_API_KEY must be set via --anthropic-api-key or environment variable")
+    if args.bootstrap_captioner == "claude" and not anthropic_key:
+        parser.error("ANTHROPIC_API_KEY must be set when --bootstrap-captioner claude (via --anthropic-api-key or env)")
     if provider == "zai" and not zai_key:
         parser.error("ZAI_API_KEY must be set via --zai-api-key or environment variable")
     if provider == "openai" and not openai_key:
@@ -291,4 +317,6 @@ def _validate_and_build_config(args: argparse.Namespace, parser: argparse.Argume
         caption_thinking_level=args.caption_thinking_level,
         generation_thinking_level=args.generation_thinking_level,
         reasoning_effort=args.reasoning_effort,
+        bootstrap_captioner=args.bootstrap_captioner,
+        bootstrap_caption_model=args.bootstrap_caption_model,
     )

@@ -9,7 +9,7 @@
 - `iteration_persistence.py` - Phase 4: writes iteration state/logs; `_update_knowledge_base_for_iteration`.
 - `policy.py` - Promotion/convergence/exploration: `_apply_best_result`, `_apply_exploration_result`, `_should_honor_stop`, `_candidate_results_for_validation`.
 - `services.py` - Provider-adapter dataclasses: `CaptioningService`, `EvaluationService`, `GenerationService`, `ReasoningService`, `RunServices`.
-- `zero_step.py` - Zero-step bootstrap: initial templates, sanitization, first baseline experiments.
+- `zero_step.py` - Zero-step bootstrap: initial templates, sanitization, first baseline experiments. Captioning of the 20 fixed references branches on `config.bootstrap_captioner`: `"gemini"` uses `ctx.services.captioning.caption_references` with `cache_key="initial"` (historical key preserved for cache compatibility); `"claude"` routes via `caption.caption_bootstrap(client=ctx.reasoning_client, model=config.bootstrap_caption_model, thinking_level=config.caption_thinking_level)` with `cache_key="initial-claude"` so provider-tagged cache entries don't collide. The parallel visual analysis that feeds `_reasoning_compile` branches on the same flag — `analyze_style` is called with `visual_provider=config.bootstrap_captioner`, `visual_model=config.bootstrap_caption_model`, `visual_thinking_level=config.caption_thinking_level`, and the shared style-analysis cache filename carries a `_bs-<provider>` suffix when non-gemini so `runs/.cache/style_<hash>.json` (gemini) and `runs/.cache/style_<hash>_bs-claude.json` (claude) don't clobber each other. `maybe_rebuild_canon_on_resume` uses the same suffix when re-saving the rebuilt compilation.
 
 ## Conventions
 

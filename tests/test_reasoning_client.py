@@ -507,3 +507,66 @@ class TestTruncationDetection:
 
         assert attempts["n"] == 1  # no retry
         assert any("truncated" in r.getMessage() for r in caplog.records)
+
+
+class TestCallWithImages:
+    @pytest.mark.asyncio
+    async def test_builds_multimodal_content_and_uses_low_effort(self, monkeypatch, tmp_path) -> None:
+        from PIL import Image
+
+        image = tmp_path / "ref.png"
+        Image.new("RGB", (8, 8), color="blue").save(image)
+
+        captured: dict[str, object] = {}
+
+        async def fake_stream(client, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(content=[SimpleNamespace(type="text", text="caption body")])
+
+        monkeypatch.setattr("art_style_search.reasoning_client.stream_message", fake_stream)
+
+        client = ReasoningClient.__new__(ReasoningClient)
+        client.provider = "anthropic"
+        client._anthropic = SimpleNamespace()
+        client.default_reasoning_effort = "medium"
+
+        result = await ReasoningClient.call_with_images(
+            client,
+            model="claude-opus-4-7",
+            system="system",
+            user="describe",
+            image_paths=[image],
+            max_tokens=4000,
+            reasoning_effort="low",
+            stage="caption_bootstrap",
+        )
+
+        assert result == "caption body"
+        messages = captured["messages"]
+        assert isinstance(messages, list)
+        content = messages[0]["content"]
+        assert content[0]["type"] == "image"
+        # Downscaled + re-encoded as JPEG regardless of source format.
+        assert content[0]["source"]["media_type"] == "image/jpeg"
+        assert content[0]["source"]["type"] == "base64"
+        assert content[-1] == {"type": "text", "text": "describe"}
+        # low effort disables thinking; no cache_control on system block for one-shot bootstrap calls
+        assert captured["thinking"] == {"type": "disabled"}
+        assert "cache_control" not in captured["system"][0]
+
+    @pytest.mark.asyncio
+    async def test_non_anthropic_provider_raises(self, tmp_path) -> None:
+        image = tmp_path / "ref.png"
+        image.write_bytes(b"\x89PNG\r\n\x1a\n\x00fake")
+
+        client = ReasoningClient.__new__(ReasoningClient)
+        client.provider = "openai"
+
+        with pytest.raises(NotImplementedError, match="anthropic"):
+            await ReasoningClient.call_with_images(
+                client,
+                model="gpt-5.4",
+                system="s",
+                user="u",
+                image_paths=[image],
+            )

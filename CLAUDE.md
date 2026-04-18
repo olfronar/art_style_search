@@ -11,6 +11,7 @@ Self-improving loop that optimizes a meta-prompt for art-style capture and image
 - **Claude (Anthropic) / GPT / GLM / local model**: Brain/optimizer. Analyzes reproduction quality, refines the meta-prompt. Supports `--reasoning-provider local` with `--reasoning-base-url` for OpenAI-compatible servers (vLLM, SGLang, Ollama).
 - **Gemini 3.1 Pro Preview**: Captioner. Describes reference images using the meta-prompt instructions.
 - **Gemini 3.1 Flash Image Preview**: Generator. Produces images from per-image captions.
+- **Zero-step bootstrap captioner** (optional): the one-time captioning of the 20 fixed references *and* the parallel visual analysis of those images that together seed `StyleProfile` + the initial meta-prompt can both be routed through Anthropic Claude via `--bootstrap-captioner claude` (default `gemini`). Per-iteration captioning stays on Gemini regardless of this flag.
 
 ## Loop Flow
 
@@ -56,6 +57,8 @@ uv tool install pre-commit                           # Install the pre-commit CL
 - `--caption-thinking-level` - Gemini Pro captioner extended-thinking level (MINIMAL/LOW/MEDIUM/HIGH, default MINIMAL). MEDIUM materially improves medium-class + proportion precision at 2-3x latency.
 - `--generation-thinking-level` - Gemini Flash generator extended-thinking level (MINIMAL/LOW/MEDIUM/HIGH, default MINIMAL).
 - `--reasoning-effort` - Reasoning-model effort level (low/medium/high, default medium). Anthropic: low→thinking disabled, medium→adaptive, high→enabled with 16k budget. OpenAI: mapped to `reasoning.effort`. Z.AI/xAI/local: dropped with a one-time warning.
+- `--bootstrap-captioner` - Zero-step provider (`gemini` default, or `claude`). Controls BOTH the one-time 20-ref captioning AND the parallel visual analysis of those images that feeds `_reasoning_compile`. Per-iteration captioning and the vision judge are unaffected. `claude` requires `ANTHROPIC_API_KEY` and is enforced at config parse time.
+- `--bootstrap-caption-model` - Anthropic model used for both zero-step surfaces when `--bootstrap-captioner claude` (default `claude-opus-4-7`). `--caption-thinking-level` maps to Anthropic `reasoning_effort` for this path (MINIMAL/LOW → low, MEDIUM → medium, HIGH → high).
 
 ## Module Map
 

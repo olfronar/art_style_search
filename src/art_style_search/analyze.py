@@ -12,6 +12,7 @@ from google.genai import types as genai_types  # type: ignore[attr-defined]
 
 from art_style_search.prompt._parse import validate_template
 from art_style_search.prompt.json_contracts import response_schema, schema_hint, validate_style_compilation_payload
+from art_style_search.reasoning_client import ANTHROPIC_EFFORT_FROM_THINKING
 from art_style_search.state import prompt_template_from_dict, style_profile_from_dict, to_dict
 from art_style_search.types import Caption, PromptTemplate, StyleProfile
 from art_style_search.utils import (
@@ -242,6 +243,59 @@ async def _gemini_analyze(
     return await async_retry(_call, label="Gemini style analysis", circuit_breaker=vision_circuit_breaker)
 
 
+async def _claude_visual_analyze(
+    reference_paths: list[Path],
+    *,
+    client: ReasoningClient,
+    model: str,
+    thinking_level: str = "MINIMAL",
+) -> str:
+    """Send all reference images to an Anthropic-compatible reasoning client for style analysis.
+
+    Wraps the underlying call in :func:`async_retry` + ``vision_circuit_breaker`` for parity
+    with :func:`_gemini_analyze` so transient 429/500s don't fail zero-step on a single blip.
+    """
+    logger.info("Sending %d images to %s (%s) for visual style analysis", len(reference_paths), client.provider, model)
+    effort = ANTHROPIC_EFFORT_FROM_THINKING.get(thinking_level.upper(), "low")
+
+    async def _call() -> str:
+        return await client.call_with_images(
+            model=model,
+            system=_ANALYSIS_SYSTEM,
+            user=_GEMINI_ANALYSIS_PROMPT,
+            image_paths=reference_paths,
+            max_tokens=_ANALYSIS_MAX_OUTPUT_TOKENS,
+            reasoning_effort=effort,
+            stage="visual_analyze",
+        )
+
+    return await async_retry(_call, label="Claude visual analysis", circuit_breaker=vision_circuit_breaker)
+
+
+async def _visual_analyze(
+    reference_paths: list[Path],
+    *,
+    provider: str,
+    gemini_client: genai.Client,
+    gemini_model: str,
+    reasoning_client: ReasoningClient,
+    bootstrap_model: str,
+    thinking_level: str = "MINIMAL",
+) -> str:
+    """Dispatch zero-step visual analysis to Gemini (default) or an Anthropic reasoning client."""
+    if provider == "claude":
+        if not bootstrap_model:
+            msg = "visual_provider='claude' requires a non-empty bootstrap_model (e.g. 'claude-opus-4-7')"
+            raise ValueError(msg)
+        return await _claude_visual_analyze(
+            reference_paths,
+            client=reasoning_client,
+            model=bootstrap_model,
+            thinking_level=thinking_level,
+        )
+    return await _gemini_analyze(reference_paths, client=gemini_client, model=gemini_model)
+
+
 async def _reasoning_analyze(
     captions: list[Caption],
     *,
@@ -350,27 +404,43 @@ async def analyze_style(
     caption_model: str,
     reasoning_model: str,
     cache_path: Path,
+    visual_provider: str = "gemini",
+    visual_model: str = "",
+    visual_thinking_level: str = "MINIMAL",
 ) -> tuple[StyleProfile, PromptTemplate]:
     """Perform zero-step style analysis: build a StyleProfile and initial PromptTemplate.
 
     1. Check cache — return early if valid.
-    2. Run Gemini vision analysis and reasoning-model text analysis in parallel.
+    2. Run visual analysis (``visual_provider``: gemini or claude) and reasoning-model text
+       analysis in parallel.
     3. Have the reasoning model compile both into structured outputs.
     4. Cache result to disk.
+
+    When ``visual_provider == "claude"``, the vision analysis routes through
+    ``reasoning_client.call_with_images`` at ``visual_model`` (typically ``claude-opus-4-7``),
+    with ``visual_thinking_level`` mapped to Anthropic reasoning effort.
     """
     cached = _load_cache(cache_path)
     if cached is not None:
         return cached
 
     # Run both analyses in parallel
-    gemini_result, reasoning_result = await asyncio.gather(
-        _gemini_analyze(reference_paths, client=gemini_client, model=caption_model),
+    visual_result, reasoning_result = await asyncio.gather(
+        _visual_analyze(
+            reference_paths,
+            provider=visual_provider,
+            gemini_client=gemini_client,
+            gemini_model=caption_model,
+            reasoning_client=reasoning_client,
+            bootstrap_model=visual_model,
+            thinking_level=visual_thinking_level,
+        ),
         _reasoning_analyze(captions, client=reasoning_client, model=reasoning_model),
     )
 
     # Compile into structured output
     profile, template = await _reasoning_compile(
-        gemini_result,
+        visual_result,
         reasoning_result,
         client=reasoning_client,
         model=reasoning_model,

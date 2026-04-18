@@ -27,11 +27,36 @@ IMAGE_EXTENSIONS: frozenset[str] = frozenset(MIME_MAP)
 _XAI_IMAGE_EXTENSIONS: frozenset[str] = frozenset({".png", ".jpg", ".jpeg"})
 _XAI_MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
+# Anthropic vision accepts up to ~5 MB per image AND a hard cap on the whole request body.
+# 20 full-resolution references trivially blow the request ceiling, so we downscale the longest
+# edge to ANTHROPIC_MAX_EDGE_PX (Anthropic's documented "optimal" boundary) before encoding.
+# PIL's thumbnail preserves aspect ratio and no-ops when the image is already within bounds.
+ANTHROPIC_MAX_EDGE_PX = 1568
+_ANTHROPIC_JPEG_QUALITY = 85
+
 
 def image_to_gemini_part(path: Path) -> genai_types.Part:
     """Read an image file and return a Gemini Part with correct MIME type."""
     mime_type = MIME_MAP.get(path.suffix.lower(), "image/png")
     return genai_types.Part.from_bytes(data=path.read_bytes(), mime_type=mime_type)
+
+
+def image_to_anthropic_block(path: Path, *, max_edge: int = ANTHROPIC_MAX_EDGE_PX) -> dict[str, object]:
+    """Return an Anthropic-format image content block (base64 source + MIME).
+
+    Downscales the longest edge to ``max_edge`` and re-encodes as JPEG to keep the per-image
+    payload well under Anthropic's 5 MiB limit and the per-request size cap. JPEG is used even
+    for source PNG/WebP because the visual-analysis / captioning use case is style description,
+    not pixel-perfect reconstruction, and JPEG is dramatically smaller for photographic content.
+    """
+    with Image.open(path) as image:
+        rgb = image.convert("RGB") if image.mode not in {"RGB", "L"} else image
+        rgb.thumbnail((max_edge, max_edge))
+        buffer = BytesIO()
+        rgb.save(buffer, format="JPEG", quality=_ANTHROPIC_JPEG_QUALITY, optimize=True)
+        image_bytes = buffer.getvalue()
+    data = base64.b64encode(image_bytes).decode("ascii")
+    return {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": data}}
 
 
 def image_to_xai_data_url(path: Path) -> str:

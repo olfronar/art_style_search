@@ -8,6 +8,7 @@ import shutil
 from pathlib import Path
 
 from art_style_search.analyze import _reasoning_compile, _save_cache, analyze_style
+from art_style_search.caption import caption_bootstrap
 from art_style_search.experiment import collect_experiment_results, run_experiment
 from art_style_search.prompt._parse import validate_template
 from art_style_search.prompt.initial import propose_initial_templates
@@ -27,6 +28,12 @@ from art_style_search.workflow.policy import _apply_best_result
 logger = logging.getLogger(__name__)
 
 _CANON_REBUILD_ERROR_MARKER = "must read as third-person declarative assertions"
+
+
+def _style_cache_path(config, refs: list[Path]) -> Path:
+    """Shared-cache filename, provider-tagged so gemini/claude analyses don't collide."""
+    suffix = "" if config.bootstrap_captioner == "gemini" else f"_bs-{config.bootstrap_captioner}"
+    return config.run_dir.parent / ".cache" / f"style_{_ref_cache_key(refs)}{suffix}.json"
 
 
 def _validate_template_or_raise(template: PromptTemplate, *, context: str) -> None:
@@ -83,8 +90,7 @@ async def maybe_rebuild_canon_on_resume(state: LoopState, ctx: RunContext) -> bo
     state.best_metrics = None  # force re-evaluation of the incumbent baseline
     state.style_profile = fresh_profile
 
-    shared_cache = config.run_dir.parent / ".cache" / f"style_{_ref_cache_key(state.fixed_references)}.json"
-    _save_cache(fresh_profile, fresh_template, shared_cache)
+    _save_cache(fresh_profile, fresh_template, _style_cache_path(config, state.fixed_references))
     logger.info("Canon rebuild complete — installed fresh style_foundation as incumbent")
     return True
 
@@ -117,42 +123,58 @@ async def _zero_step(ctx: RunContext, all_ref_paths: list[Path]) -> LoopState:
     if silent_refs:
         logger.info("Information barrier: %d feedback + %d silent images", len(feedback_refs), len(silent_refs))
 
-    logger.info("Zero-step: captioning %d reference images...", len(fixed_refs))
-    captions = await ctx.services.captioning.caption_references(
-        fixed_refs,
-        cache_dir=config.log_dir / "captions",
-        cache_key="initial",
+    caption_cache_dir = config.log_dir / "captions"
+    # Gemini keeps the historical "initial" key so existing caches stay valid; non-gemini providers
+    # tag the key so captions produced under a different captioner aren't mistakenly reused.
+    bootstrap_cache_key = (
+        "initial" if config.bootstrap_captioner == "gemini" else f"initial-{config.bootstrap_captioner}"
     )
+    if config.bootstrap_captioner == "claude":
+        logger.info(
+            "Zero-step: captioning %d reference images via %s (%s)...",
+            len(fixed_refs),
+            config.bootstrap_captioner,
+            config.bootstrap_caption_model,
+        )
+        captions = await caption_bootstrap(
+            fixed_refs,
+            client=ctx.reasoning_client,
+            model=config.bootstrap_caption_model,
+            cache_dir=caption_cache_dir,
+            cache_key=bootstrap_cache_key,
+            thinking_level=config.caption_thinking_level,
+        )
+    else:
+        logger.info("Zero-step: captioning %d reference images via gemini...", len(fixed_refs))
+        captions = await ctx.services.captioning.caption_references(
+            fixed_refs,
+            cache_dir=caption_cache_dir,
+            cache_key=bootstrap_cache_key,
+        )
 
-    logger.info("Zero-step: analyzing art style...")
-    shared_cache_dir = config.run_dir.parent / ".cache"
-    shared_cache_dir.mkdir(parents=True, exist_ok=True)
-    shared_cache = shared_cache_dir / f"style_{_ref_cache_key(fixed_refs)}.json"
+    logger.info("Zero-step: analyzing art style (visual=%s)...", config.bootstrap_captioner)
+    shared_cache = _style_cache_path(config, fixed_refs)
+    shared_cache.parent.mkdir(parents=True, exist_ok=True)
     run_cache = config.log_dir / "style_profile.json"
 
-    style_profile, initial_template = await analyze_style(
-        fixed_refs,
-        captions,
-        gemini_client=ctx.gemini_client,
-        reasoning_client=ctx.reasoning_client,
-        caption_model=config.caption_model,
-        reasoning_model=config.reasoning_model,
-        cache_path=shared_cache,
-    )
+    analyze_kwargs = {
+        "gemini_client": ctx.gemini_client,
+        "reasoning_client": ctx.reasoning_client,
+        "caption_model": config.caption_model,
+        "reasoning_model": config.reasoning_model,
+        "cache_path": shared_cache,
+        "visual_provider": config.bootstrap_captioner,
+        "visual_model": config.bootstrap_caption_model,
+        "visual_thinking_level": config.caption_thinking_level,
+    }
+
+    style_profile, initial_template = await analyze_style(fixed_refs, captions, **analyze_kwargs)
     cache_errors = validate_template(initial_template)
     if cache_errors:
         logger.warning("Cached style template invalid (%s) — re-running analysis", "; ".join(cache_errors))
         if shared_cache.exists():
             shared_cache.unlink()
-        style_profile, initial_template = await analyze_style(
-            fixed_refs,
-            captions,
-            gemini_client=ctx.gemini_client,
-            reasoning_client=ctx.reasoning_client,
-            caption_model=config.caption_model,
-            reasoning_model=config.reasoning_model,
-            cache_path=shared_cache,
-        )
+        style_profile, initial_template = await analyze_style(fixed_refs, captions, **analyze_kwargs)
         _validate_template_or_raise(initial_template, context="Zero-step compiled template")
 
     if shared_cache.exists() and not run_cache.exists():

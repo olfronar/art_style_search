@@ -10,7 +10,7 @@ from typing import TypeVar
 
 import pytest
 
-from art_style_search.caption import CAPTION_PROMPT, caption_single
+from art_style_search.caption import CAPTION_PROMPT, caption_bootstrap, caption_single
 
 _T = TypeVar("_T")
 
@@ -160,3 +160,54 @@ class TestCaptionSingle:
                 cache_dir=None,
                 semaphore=asyncio.Semaphore(1),
             )
+
+
+class TestCaptionBootstrap:
+    @pytest.mark.asyncio
+    async def test_routes_through_reasoning_client_and_persists_cache(self, tmp_path: Path) -> None:
+        image_path = tmp_path / "ref.png"
+        image_path.write_bytes(b"\x89PNG\r\n\x1a\n\x00fake")
+        cache_dir = tmp_path / "captions"
+
+        long_art = "word " * 500
+        long_subject = "subject " * 1000
+        caption_text = f"[Art Style] {long_art}\n[Subject] {long_subject}"
+
+        captured_calls: list[dict[str, object]] = []
+
+        class FakeClient:
+            provider = "anthropic"
+
+            async def call_with_images(self, **kwargs):
+                captured_calls.append(kwargs)
+                return caption_text
+
+        captions = await caption_bootstrap(
+            [image_path],
+            client=FakeClient(),  # type: ignore[arg-type]
+            model="claude-opus-4-7",
+            cache_dir=cache_dir,
+            cache_key="initial-claude",
+            thinking_level="MINIMAL",
+        )
+
+        assert len(captions) == 1
+        assert captions[0].text == caption_text
+        assert captured_calls[0]["reasoning_effort"] == "low"
+        assert captured_calls[0]["stage"] == "caption_bootstrap"
+        assert captured_calls[0]["image_paths"] == [image_path]
+
+        cache_file = cache_dir / "ref.json"
+        assert cache_file.exists()
+
+        captured_calls.clear()
+        cached = await caption_bootstrap(
+            [image_path],
+            client=FakeClient(),  # type: ignore[arg-type]
+            model="claude-opus-4-7",
+            cache_dir=cache_dir,
+            cache_key="initial-claude",
+            thinking_level="MINIMAL",
+        )
+        assert cached[0].text == caption_text
+        assert captured_calls == []  # served from disk cache

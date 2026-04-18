@@ -17,6 +17,7 @@ import httpcore
 import httpx
 from anthropic.types import Message
 
+from art_style_search.media import image_to_anthropic_block
 from art_style_search.retry import async_retry, log_api_call
 
 
@@ -136,6 +137,15 @@ _STREAM_BASE_DELAY = 5.0
 # starving the visible-output envelope; must stay strictly below any stage's max_tokens
 # (enforced by `_call_anthropic` guard).
 _ANTHROPIC_HIGH_BUDGET_TOKENS = 16000
+# Maps Gemini-shaped `caption_thinking_level` values to Anthropic `reasoning_effort`. Used by
+# both the bootstrap captioner (`caption.py`) and the bootstrap visual analyzer (`analyze.py`)
+# when they route through an Anthropic-compatible reasoning client.
+ANTHROPIC_EFFORT_FROM_THINKING: dict[str, str] = {
+    "MINIMAL": "low",
+    "LOW": "low",
+    "MEDIUM": "medium",
+    "HIGH": "high",
+}
 T = TypeVar("T")
 
 
@@ -527,20 +537,7 @@ class ReasoningClient:
             stage=stage,
         )
 
-    async def _call_anthropic(
-        self,
-        *,
-        model: str,
-        system: str,
-        user: str,
-        max_tokens: int,
-        temperature: float | None = None,
-        reasoning_effort: str | None = None,
-        stage: str = "unknown",
-    ) -> str:
-        # Anthropic thinking modes: "disabled" | "adaptive" | "enabled" (with budget).
-        # Temperature is only honored when thinking is disabled (extended thinking requires temp=1).
-        thinking_block: dict[str, object]
+    def _anthropic_thinking_block(self, reasoning_effort: str | None, max_tokens: int) -> dict[str, object]:
         if reasoning_effort == "high":
             if max_tokens <= _ANTHROPIC_HIGH_BUDGET_TOKENS:
                 msg = (
@@ -549,26 +546,36 @@ class ReasoningClient:
                     f"envelope. Raise max_tokens or lower reasoning_effort."
                 )
                 raise ValueError(msg)
-            thinking_block = {"type": "enabled", "budget_tokens": _ANTHROPIC_HIGH_BUDGET_TOKENS}
-        elif reasoning_effort == "low":
-            thinking_block = {"type": "disabled"}
-        else:
-            thinking_block = {"type": "adaptive"}
+            return {"type": "enabled", "budget_tokens": _ANTHROPIC_HIGH_BUDGET_TOKENS}
+        if reasoning_effort == "low":
+            return {"type": "disabled"}
+        return {"type": "adaptive"}
 
-        # Enable prompt caching: system prompts in this project are stable across calls within a run
-        # (brainstorm/expand share a ~150-line system prompt fired many times per iteration; synthesis
-        # and review each fire their own ~100-line prompts every iteration). Wrap as a single cached
-        # block so calls within the 5-minute TTL read from cache instead of reprocessing the prefix.
-        system_blocks: list[dict[str, object]] = [
-            {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
-        ]
+    async def _invoke_anthropic(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, object]],
+        system: str,
+        max_tokens: int,
+        temperature: float | None,
+        reasoning_effort: str | None,
+        stage: str,
+        cache_system: bool,
+    ) -> str:
+        # Wrap system as a cacheable block when the system prompt is stable across calls within a run
+        # (brainstorm/expand share a ~150-line prompt fired many times per iteration; synthesis/review
+        # fire their own ~100-line prompts every iteration). Reads from the 5-minute prefix cache.
+        system_blocks: list[dict[str, object]] = [{"type": "text", "text": system}]
+        if cache_system:
+            system_blocks[0]["cache_control"] = {"type": "ephemeral"}
 
         kwargs: dict[str, object] = {
             "model": model,
             "max_tokens": max_tokens,
-            "thinking": thinking_block,
+            "thinking": self._anthropic_thinking_block(reasoning_effort, max_tokens),
             "system": system_blocks,
-            "messages": [{"role": "user", "content": user}],
+            "messages": messages,
         }
         if temperature is not None:
             if reasoning_effort == "low":
@@ -618,6 +625,66 @@ class ReasoningClient:
             usage=usage,
         )
         return extract_text(response)
+
+    async def _call_anthropic(
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        max_tokens: int,
+        temperature: float | None = None,
+        reasoning_effort: str | None = None,
+        stage: str = "unknown",
+    ) -> str:
+        return await self._invoke_anthropic(
+            model=model,
+            messages=[{"role": "user", "content": user}],
+            system=system,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            reasoning_effort=reasoning_effort,
+            stage=stage,
+            cache_system=True,
+        )
+
+    async def call_with_images(
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        image_paths: list[Path],
+        max_tokens: int = 16000,
+        temperature: float | None = None,
+        reasoning_effort: str | None = None,
+        stage: str = "unknown",
+    ) -> str:
+        """Send a vision request with one or more images and return the text response.
+
+        Currently Anthropic-only. The images precede the text in the user message content
+        so the model reads visual context before the instruction.
+        """
+        if self.provider != "anthropic":
+            msg = f"call_with_images is only supported for anthropic provider (got {self.provider!r})"
+            raise NotImplementedError(msg)
+
+        content: list[dict[str, object]] = [image_to_anthropic_block(path) for path in image_paths]
+        content.append({"type": "text", "text": user})
+
+        effective_effort = (
+            reasoning_effort if reasoning_effort is not None else getattr(self, "default_reasoning_effort", "medium")
+        )
+        return await self._invoke_anthropic(
+            model=model,
+            messages=[{"role": "user", "content": content}],
+            system=system,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            reasoning_effort=effective_effort,
+            stage=stage,
+            cache_system=False,
+        )
 
     async def _call_zai(
         self,

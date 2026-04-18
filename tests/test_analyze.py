@@ -18,6 +18,7 @@ from art_style_search.analyze import (
     _load_cache,
     _reasoning_compile,
     _save_cache,
+    _visual_analyze,
 )
 from art_style_search.types import PromptSection, PromptTemplate
 from art_style_search.utils import extract_xml_tag
@@ -224,3 +225,41 @@ class TestAnalyzePrompts:
         assert result == "analysis"
         assert captured["config"].system_instruction == _ANALYSIS_SYSTEM
         assert _GEMINI_ANALYSIS_PROMPT in captured["contents"]
+
+    @pytest.mark.asyncio
+    async def test_visual_analyze_routes_claude_through_reasoning_client(self, tmp_path: Path) -> None:
+        image_path = tmp_path / "ref.png"
+        Image.new("RGB", (8, 8), color="red").save(image_path)
+        captured: dict[str, object] = {}
+
+        class FakeReasoning:
+            provider = "anthropic"
+
+            async def call_with_images(self, **kwargs):
+                captured.update(kwargs)
+                return "claude-visual-analysis"
+
+        gemini_client = SimpleNamespace(aio=SimpleNamespace(models=SimpleNamespace(generate_content=_should_not_run)))
+
+        result = await _visual_analyze(
+            [image_path],
+            provider="claude",
+            gemini_client=gemini_client,  # type: ignore[arg-type]
+            gemini_model="gemini-3.1-pro-preview",
+            reasoning_client=FakeReasoning(),  # type: ignore[arg-type]
+            bootstrap_model="claude-opus-4-7",
+            thinking_level="MEDIUM",
+        )
+
+        assert result == "claude-visual-analysis"
+        assert captured["model"] == "claude-opus-4-7"
+        assert captured["image_paths"] == [image_path]
+        assert captured["user"] == _GEMINI_ANALYSIS_PROMPT
+        assert captured["system"] == _ANALYSIS_SYSTEM
+        assert captured["reasoning_effort"] == "medium"
+        assert captured["stage"] == "visual_analyze"
+
+
+async def _should_not_run(**_kwargs: object) -> SimpleNamespace:
+    msg = "gemini path should not be invoked when provider='claude'"
+    raise AssertionError(msg)
