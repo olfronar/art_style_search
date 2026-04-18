@@ -36,6 +36,7 @@ class CaptioningService:
         prompt: str,
         cache_dir: Path | None,
         cache_key: str = "",
+        style_canon: str = "",
     ) -> Caption:
         return await caption_single(
             image_path,
@@ -46,6 +47,7 @@ class CaptioningService:
             semaphore=self.semaphore,
             cache_key=cache_key,
             thinking_level=self.thinking_level,
+            style_canon=style_canon,
         )
 
     async def caption_references(
@@ -55,6 +57,7 @@ class CaptioningService:
         cache_dir: Path,
         prompt: str | None = None,
         cache_key: str = "",
+        style_canon: str = "",
     ) -> list[Caption]:
         return await caption_references(
             reference_paths,
@@ -65,6 +68,7 @@ class CaptioningService:
             prompt=prompt,
             cache_key=cache_key,
             thinking_level=self.thinking_level,
+            style_canon=style_canon,
         )
 
 

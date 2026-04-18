@@ -16,6 +16,8 @@ from art_style_search.prompt._parse import validate_template
 from art_style_search.prompt.review import review_iteration
 from art_style_search.prompt.synthesis import synthesize_templates
 from art_style_search.scoring import (
+    DELTA_METRIC_LABELS,
+    IMPROVEMENT_EPSILON,
     adaptive_composite_score,
     composite_score,
     improvement_epsilon,
@@ -300,34 +302,17 @@ async def _run_synthesis_experiment(
         id(result): adaptive_composite_score(result.aggregated, updated_agg) for result in ranking.exp_results
     }
     if merged_score > ranking.best_score:
-        # Minimum-quality gate: synthesis may merge sections from two sub-baseline parents and
-        # win the incumbent slot by averaging noise. Require that at least one parent experiment
-        # beat baseline on any canon-relevant or perceptual axis before letting synthesis crown
-        # a new incumbent. Synthesis still runs + remains visible to the reasoner as analysis —
-        # this only gates promotion.
+        # Minimum-quality gate: synthesis can win the incumbent slot by averaging noise from two
+        # sub-baseline parents. Require at least one parent to beat baseline on any perceptual /
+        # canon axis before letting synthesis crown a new incumbent.
         baseline = state.best_metrics
-        parent_beat_baseline = False
-        if baseline is None:
-            parent_beat_baseline = True  # no baseline yet — nothing to guard against
-        else:
-            gate_axes = (
-                "dreamsim_similarity_mean",
-                "color_histogram_mean",
-                "ssim_mean",
-                "hps_score_mean",
-                "aesthetics_score_mean",
-                "vision_style",
-                "vision_subject",
-                "vision_composition",
-                "vision_medium",
-                "vision_proportions",
-                "style_consistency",
-            )
+        parent_beat_baseline = baseline is None
+        if baseline is not None:
             for parent in ranking.exp_results:
                 if parent is synth_result:
                     continue
                 deltas = metric_deltas(parent.aggregated, baseline)
-                if any(deltas.get(axis, 0.0) > 0.005 for axis in gate_axes):
+                if any(deltas.get(axis, 0.0) > IMPROVEMENT_EPSILON for axis in DELTA_METRIC_LABELS):
                     parent_beat_baseline = True
                     break
         if parent_beat_baseline:

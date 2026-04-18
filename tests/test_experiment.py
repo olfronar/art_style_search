@@ -172,7 +172,7 @@ class TestReplicateExperiment:
         captured_negative: dict[str, str | None] = {}
 
         class FakeCaptioning:
-            async def caption_single(self, image_path, *, prompt, cache_dir, cache_key=""):
+            async def caption_single(self, image_path, *, prompt, cache_dir, cache_key="", style_canon=""):
                 return Caption(
                     image_path=image_path,
                     text=(
@@ -267,7 +267,7 @@ class TestCaptionAndGenerate:
         captured_negative: dict[str, str | None] = {}
 
         class FakeCaptioning:
-            async def caption_single(self, image_path, *, prompt, cache_dir, cache_key=""):
+            async def caption_single(self, image_path, *, prompt, cache_dir, cache_key="", style_canon=""):
                 return Caption(
                     image_path=image_path,
                     text=(

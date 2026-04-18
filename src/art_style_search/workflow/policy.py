@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from art_style_search.knowledge import IterationDecision
 from art_style_search.state import append_promotion_log
 from art_style_search.types import ConvergenceReason, IterationResult, LoopState, PromotionDecision, PromotionTestResult
 from art_style_search.utils import CATEGORY_SYNONYMS
@@ -129,7 +130,7 @@ def _log_promotion_decision(
     append_promotion_log(decision_record, config.run_dir / "promotion_log.jsonl")
 
 
-def _apply_iteration_result(state: LoopState, ranking: IterationRanking, config: Config) -> str:
+def _apply_iteration_result(state: LoopState, ranking: IterationRanking, config: Config) -> IterationDecision:
     """Decide improvement vs plateau and update state accordingly."""
     improved = ranking.best_score > ranking.baseline_score + ranking.epsilon
 

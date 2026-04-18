@@ -99,6 +99,11 @@ def metric_deltas(metrics: AggregatedMetrics, baseline: AggregatedMetrics) -> di
     return deltas
 
 
+# Labels emitted by :func:`metric_deltas` excluding the `completion_rate` counter — these are
+# the perceptual / content / consistency axes callers gate or rank experiments against.
+DELTA_METRIC_LABELS: tuple[str, ...] = tuple(label for label, _ in _METRIC_DELTA_ATTRS if label != "completion_rate")
+
+
 def _normalize_hps(raw: float, ceiling: float = _HPS_CEILING) -> float:
     """Normalize raw HPS v2 score to [0, 1] using the empirical ceiling."""
     return min(raw / ceiling, 1.0)

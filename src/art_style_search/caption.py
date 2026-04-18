@@ -13,6 +13,7 @@ from google import genai  # type: ignore[attr-defined]
 from google.genai import types as genai_types  # type: ignore[attr-defined]
 
 from art_style_search.caption_sections import parse_labeled_sections
+from art_style_search.evaluate import compute_canon_fidelity
 from art_style_search.reasoning_client import TruncationError
 from art_style_search.types import Caption
 from art_style_search.utils import (
@@ -149,6 +150,7 @@ async def caption_single(
     semaphore: asyncio.Semaphore,
     cache_key: str = "",
     thinking_level: str = "MINIMAL",
+    style_canon: str = "",
 ) -> Caption:
     """Caption a single image, optionally using disk cache.
 
@@ -156,7 +158,13 @@ async def caption_single(
     the cached result is returned.  The cache_key should change whenever
     the prompt changes (e.g. hash or iteration number) to invalidate stale
     entries.
+
+    When *style_canon* is non-empty and the first attempt scores below
+    ``_CANON_FIDELITY_RETRY_THRESHOLD`` against it, reissue once with a
+    verbatim-paste suffix. Caller pre-computes the canon once per experiment
+    to avoid a regex over the meta-prompt per image.
     """
+    current_mtime: float | None = None
     if cache_dir is not None:
         cache_file = cache_dir / f"{image_path.stem}.json"
         current_mtime = image_path.stat().st_mtime
@@ -169,12 +177,10 @@ async def caption_single(
         except (FileNotFoundError, json.JSONDecodeError, KeyError):
             pass
 
-    # Cache miss — call Gemini with retry on transient errors
     logger.info("Captioning %s via %s", image_path.name, model)
 
-    # Gemini 3.1 Pro rejects thinking_level="MINIMAL" (only LOW/MEDIUM/HIGH are valid).
-    # Leave thinking_config unset for MINIMAL — restores the pre-flag behavior and
-    # lets the model pick its own default thinking depth.
+    # Gemini 3.1 Pro rejects thinking_level="MINIMAL" (only LOW/MEDIUM/HIGH are valid), so
+    # for MINIMAL we leave thinking_config unset and let the model pick its own default depth.
     config_kwargs: dict[str, object] = {
         "system_instruction": CAPTION_SYSTEM,
         "max_output_tokens": _CAPTIONER_MAX_OUTPUT_TOKENS,
@@ -184,15 +190,12 @@ async def caption_single(
 
     min_caption_length = _minimum_caption_chars(prompt)
 
-    async def _call() -> str:
+    async def _call_captioner(effective_prompt: str, *, validate_sections: bool) -> str:
         async with semaphore:
             resp = await asyncio.wait_for(
                 client.aio.models.generate_content(
                     model=model,
-                    contents=[
-                        image_to_gemini_part(image_path),
-                        prompt,
-                    ],
+                    contents=[image_to_gemini_part(image_path), effective_prompt],
                     config=genai_types.GenerateContentConfig(**config_kwargs),
                 ),
                 timeout=gemini_timeout_s(_CAPTIONER_MAX_OUTPUT_TOKENS),
@@ -205,42 +208,43 @@ async def caption_single(
                 max_tokens=_CAPTIONER_MAX_OUTPUT_TOKENS,
             )
         text = resp.text or ""
-        # Validate caption quality inside the retry loop — empty/too-short responses and
-        # section-floor/ceiling violations are transient captioner misbehavior (truncated
-        # output, dropped sections); raising from here lets ``async_retry`` re-issue the
-        # API call up to its configured max_retries (default 5) before giving up.
+        # Validate inside the retry loop — empty/too-short responses and section-floor/ceiling
+        # violations are transient captioner misbehavior; raising lets async_retry re-issue.
         if not text or len(text.strip()) < min_caption_length:
             msg = (
                 f"Captioning {image_path.name} produced empty or too-short caption "
                 f"({len(text.strip())} chars, min {min_caption_length})"
             )
             raise RuntimeError(msg)
-        parsed_sections = parse_labeled_sections(text)
-        if parsed_sections:
-            section_violations: list[str] = []
-            for section_name, min_words in _ANCHOR_SECTION_MIN_WORDS.items():
-                if section_name not in parsed_sections:
-                    continue
-                actual_words = len(parsed_sections[section_name].split())
-                if actual_words < min_words:
-                    section_violations.append(f"[{section_name}]={actual_words}w (min {min_words})")
-            for section_name, max_words in _ANCHOR_SECTION_MAX_WORDS.items():
-                if section_name not in parsed_sections:
-                    continue
-                actual_words = len(parsed_sections[section_name].split())
-                if actual_words > max_words:
-                    section_violations.append(f"[{section_name}]={actual_words}w (max {max_words})")
-            if section_violations:
-                msg = f"Captioning {image_path.name} produced out-of-bounds anchor sections: " + "; ".join(
-                    section_violations
-                )
-                raise RuntimeError(msg)
+        if validate_sections:
+            parsed_sections = parse_labeled_sections(text)
+            if parsed_sections:
+                section_violations: list[str] = []
+                for section_name, min_words in _ANCHOR_SECTION_MIN_WORDS.items():
+                    if section_name not in parsed_sections:
+                        continue
+                    actual_words = len(parsed_sections[section_name].split())
+                    if actual_words < min_words:
+                        section_violations.append(f"[{section_name}]={actual_words}w (min {min_words})")
+                for section_name, max_words in _ANCHOR_SECTION_MAX_WORDS.items():
+                    if section_name not in parsed_sections:
+                        continue
+                    actual_words = len(parsed_sections[section_name].split())
+                    if actual_words > max_words:
+                        section_violations.append(f"[{section_name}]={actual_words}w (max {max_words})")
+                if section_violations:
+                    msg = f"Captioning {image_path.name} produced out-of-bounds anchor sections: " + "; ".join(
+                        section_violations
+                    )
+                    raise RuntimeError(msg)
         return text
 
     started = time.monotonic()
     try:
         caption_text: str = await async_retry(
-            _call, label=f"Caption {image_path.name}", circuit_breaker=caption_circuit_breaker
+            lambda: _call_captioner(prompt, validate_sections=True),
+            label=f"Caption {image_path.name}",
+            circuit_breaker=caption_circuit_breaker,
         )
     except Exception:
         log_api_call(
@@ -262,14 +266,6 @@ async def caption_single(
         thinking_level=thinking_level,
     )
 
-    # Canon-adherence reject-and-retry. When the prompt is a rendered meta-prompt (i.e. it contains
-    # a `## style_foundation` section) and the captioner paraphrased the canon rather than pasting
-    # it verbatim, reissue ONCE with a stricter suffix that quotes the canon text. This converts the
-    # LCS fidelity metric from scoring-only to enforced. Zero-step CAPTION_PROMPT has no canon
-    # section, so extract_style_canon returns empty and this branch is a no-op there.
-    from art_style_search.evaluate import compute_canon_fidelity, extract_style_canon
-
-    style_canon = extract_style_canon(prompt)
     if style_canon:
         fidelity = compute_canon_fidelity(caption_text, style_canon)
         if fidelity < _CANON_FIDELITY_RETRY_THRESHOLD:
@@ -279,7 +275,7 @@ async def caption_single(
                 fidelity,
                 _CANON_FIDELITY_RETRY_THRESHOLD,
             )
-            retry_suffix = (
+            retried_prompt = prompt + (
                 "\n\n## Canon-copy enforcement (your previous attempt paraphrased the canon)\n"
                 "Your [Art Style] block must paste the following canon text verbatim (or nearly so — "
                 "whitespace and minor edits only). Do NOT paraphrase it. Write original content only in "
@@ -287,35 +283,10 @@ async def caption_single(
                 "Canon to paste into [Art Style]:\n"
                 f"{style_canon}\n"
             )
-            retried_prompt = prompt + retry_suffix
             retry_started = time.monotonic()
-
-            async def _retry_call() -> str:
-                async with semaphore:
-                    resp = await asyncio.wait_for(
-                        client.aio.models.generate_content(
-                            model=model,
-                            contents=[image_to_gemini_part(image_path), retried_prompt],
-                            config=genai_types.GenerateContentConfig(**config_kwargs),
-                        ),
-                        timeout=gemini_timeout_s(_CAPTIONER_MAX_OUTPUT_TOKENS),
-                    )
-                candidates = getattr(resp, "candidates", None) or []
-                if candidates and str(getattr(candidates[0], "finish_reason", "")).endswith("MAX_TOKENS"):
-                    raise TruncationError(
-                        provider="gemini",
-                        stage="caption",
-                        max_tokens=_CAPTIONER_MAX_OUTPUT_TOKENS,
-                    )
-                text = resp.text or ""
-                if not text or len(text.strip()) < min_caption_length:
-                    msg = f"Canon-retry for {image_path.name} returned empty/short caption"
-                    raise RuntimeError(msg)
-                return text
-
             try:
-                retried_text: str = await async_retry(
-                    _retry_call,
+                caption_text = await async_retry(
+                    lambda: _call_captioner(retried_prompt, validate_sections=False),
                     label=f"Caption {image_path.name} (canon-retry)",
                     circuit_breaker=caption_circuit_breaker,
                 )
@@ -327,7 +298,6 @@ async def caption_single(
                     max_tokens=_CAPTIONER_MAX_OUTPUT_TOKENS,
                     thinking_level=thinking_level,
                 )
-                caption_text = retried_text
             except Exception as exc:
                 logger.warning(
                     "Canon-retry failed for %s (keeping original paraphrased caption): %s",
@@ -335,7 +305,6 @@ async def caption_single(
                     exc,
                 )
 
-    # Write cache
     if cache_dir is not None:
         cache_dir.mkdir(parents=True, exist_ok=True)
         cache_data = {
@@ -361,6 +330,7 @@ async def caption_references(
     prompt: str | None = None,
     cache_key: str = "",
     thinking_level: str = "MINIMAL",
+    style_canon: str = "",
 ) -> list[Caption]:
     """Caption all reference images concurrently with disk caching.
 
@@ -378,6 +348,7 @@ async def caption_references(
             semaphore=semaphore,
             cache_key=cache_key,
             thinking_level=thinking_level,
+            style_canon=style_canon,
         )
         for path in reference_paths
     ]

@@ -156,26 +156,13 @@ def retire_resolved_style_gap_observations(
     """
     if not canon_axes_improved or not kb.style_gap_observations or not lesson_texts:
         return []
-    lesson_token_sets = [_tokenize(lesson) for lesson in lesson_texts if lesson]
-    if not lesson_token_sets:
+    lessons = [lesson for lesson in lesson_texts if lesson]
+    if not lessons:
         return []
     retired: list[str] = []
     kept: list[str] = []
     for obs in kb.style_gap_observations:
-        obs_tokens = _tokenize(obs)
-        if not obs_tokens:
-            kept.append(obs)
-            continue
-        addressed = False
-        for lesson_tokens in lesson_token_sets:
-            if not lesson_tokens:
-                continue
-            intersection = len(obs_tokens & lesson_tokens)
-            union = len(obs_tokens | lesson_tokens)
-            if union > 0 and intersection / union >= _NEAR_DUP_THRESHOLD:
-                addressed = True
-                break
-        if addressed:
+        if _find_near_duplicate(obs, lessons) is not None:
             retired.append(obs)
         else:
             kept.append(obs)

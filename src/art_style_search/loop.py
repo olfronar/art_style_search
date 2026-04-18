@@ -11,6 +11,7 @@ import asyncio
 import logging
 
 from art_style_search.config import Config
+from art_style_search.evaluate import extract_style_canon
 from art_style_search.experiment import run_experiment
 from art_style_search.prompt import (
     enforce_hypothesis_diversity,
@@ -142,10 +143,6 @@ async def run(config: Config) -> LoopState:
             logger.warning("Confirmatory validation failed — falling back to single-pass", exc_info=True)
 
         baseline_metrics = state.best_metrics
-        # Capture the incumbent canon BEFORE the apply step so the ledger can record
-        # the pre-edit state for the next iteration's reasoner context.
-        from art_style_search.evaluate import extract_style_canon
-
         prior_canon = extract_style_canon(state.current_template.render())
         decision = _apply_iteration_result(state, ranking, ctx.config)
         append_canon_edit_ledger(state, ranking, prior_canon, baseline_metrics, decision, iteration)
