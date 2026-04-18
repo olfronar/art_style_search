@@ -370,6 +370,7 @@ def _apply_all_patches(monkeypatch, tmp_path: Path, ref_paths: list[Path]):
         is_first_iteration=False,
         iteration=0,
         plateau_counter=0,
+        canon_edit_ledger=None,
     ):
         return [_build_sketch(i) for i in range(num_sketches)], False
 
@@ -392,6 +393,7 @@ def _apply_all_patches(monkeypatch, tmp_path: Path, ref_paths: list[Path]):
         is_first_iteration=False,
         iteration=0,
         plateau_counter=0,
+        canon_edit_ledger=None,
     ):
         return [_build_refinement_result(_valid_template(), i) for i, _sketch in enumerate(sketches)]
 

@@ -119,6 +119,7 @@ _CAPTION_TARGET_RANGE_RE = re.compile(r"target\s+(\d+)\s*-\s*(\d+)\s*words", re.
 _AVG_WORD_CHARS = 4
 _FALLBACK_MIN_CAPTION_CHARS = 600
 _CAPTIONER_MAX_OUTPUT_TOKENS = 32000
+_CANON_FIDELITY_RETRY_THRESHOLD = 0.7
 
 
 def _caption_length_target_from_prompt(prompt: str) -> int:
@@ -260,6 +261,79 @@ async def caption_single(
         max_tokens=_CAPTIONER_MAX_OUTPUT_TOKENS,
         thinking_level=thinking_level,
     )
+
+    # Canon-adherence reject-and-retry. When the prompt is a rendered meta-prompt (i.e. it contains
+    # a `## style_foundation` section) and the captioner paraphrased the canon rather than pasting
+    # it verbatim, reissue ONCE with a stricter suffix that quotes the canon text. This converts the
+    # LCS fidelity metric from scoring-only to enforced. Zero-step CAPTION_PROMPT has no canon
+    # section, so extract_style_canon returns empty and this branch is a no-op there.
+    from art_style_search.evaluate import compute_canon_fidelity, extract_style_canon
+
+    style_canon = extract_style_canon(prompt)
+    if style_canon:
+        fidelity = compute_canon_fidelity(caption_text, style_canon)
+        if fidelity < _CANON_FIDELITY_RETRY_THRESHOLD:
+            logger.info(
+                "Caption %s paraphrased canon (fidelity %.2f < %.2f) — reissuing with verbatim-paste suffix",
+                image_path.name,
+                fidelity,
+                _CANON_FIDELITY_RETRY_THRESHOLD,
+            )
+            retry_suffix = (
+                "\n\n## Canon-copy enforcement (your previous attempt paraphrased the canon)\n"
+                "Your [Art Style] block must paste the following canon text verbatim (or nearly so — "
+                "whitespace and minor edits only). Do NOT paraphrase it. Write original content only in "
+                "the observation blocks ([Subject], [Color Palette], [Composition], [Lighting & Atmosphere]).\n\n"
+                "Canon to paste into [Art Style]:\n"
+                f"{style_canon}\n"
+            )
+            retried_prompt = prompt + retry_suffix
+            retry_started = time.monotonic()
+
+            async def _retry_call() -> str:
+                async with semaphore:
+                    resp = await asyncio.wait_for(
+                        client.aio.models.generate_content(
+                            model=model,
+                            contents=[image_to_gemini_part(image_path), retried_prompt],
+                            config=genai_types.GenerateContentConfig(**config_kwargs),
+                        ),
+                        timeout=gemini_timeout_s(_CAPTIONER_MAX_OUTPUT_TOKENS),
+                    )
+                candidates = getattr(resp, "candidates", None) or []
+                if candidates and str(getattr(candidates[0], "finish_reason", "")).endswith("MAX_TOKENS"):
+                    raise TruncationError(
+                        provider="gemini",
+                        stage="caption",
+                        max_tokens=_CAPTIONER_MAX_OUTPUT_TOKENS,
+                    )
+                text = resp.text or ""
+                if not text or len(text.strip()) < min_caption_length:
+                    msg = f"Canon-retry for {image_path.name} returned empty/short caption"
+                    raise RuntimeError(msg)
+                return text
+
+            try:
+                retried_text: str = await async_retry(
+                    _retry_call,
+                    label=f"Caption {image_path.name} (canon-retry)",
+                    circuit_breaker=caption_circuit_breaker,
+                )
+                log_api_call(
+                    provider="gemini",
+                    model=model,
+                    stage="caption_canon_retry",
+                    duration_s=time.monotonic() - retry_started,
+                    max_tokens=_CAPTIONER_MAX_OUTPUT_TOKENS,
+                    thinking_level=thinking_level,
+                )
+                caption_text = retried_text
+            except Exception as exc:
+                logger.warning(
+                    "Canon-retry failed for %s (keeping original paraphrased caption): %s",
+                    image_path.name,
+                    exc,
+                )
 
     # Write cache
     if cache_dir is not None:

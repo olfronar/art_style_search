@@ -395,6 +395,8 @@ _STYLE_FOUNDATION_DRAWING_PREFIX = (
 _SUBJECT_ANCHOR_PROPORTIONS_PREFIX = (
     "Proportions: N.N heads tall, archetype (chibi / stylized-youth / heroic / realistic-adult / "
     "elongated), eye-size bucket, limb-proportion bucket. "
+    "Distinguishing Features: [identity facets the captioner must name — species, hair/fur, markings, "
+    "apparel, accessories, pose, expression, held props]. "
 )
 
 

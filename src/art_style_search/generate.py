@@ -54,9 +54,16 @@ async def generate_single(
     model: str,
     semaphore: asyncio.Semaphore,
     negative_prompt: str | None = None,
+    style_invariants: str = "",
     thinking_level: str = "MINIMAL",
 ) -> Path:
-    """Generate a single image with semaphore gating and exponential backoff."""
+    """Generate a single image with semaphore gating and exponential backoff.
+
+    ``style_invariants`` (optional) is the MUST/NEVER invariants body extracted from
+    the canon's ``Style Invariants:`` sub-block. When non-empty it is appended to the
+    generator's system instruction so the canon's load-bearing rules survive a caption
+    that paraphrased [Art Style].
+    """
     # Disk cache: skip API call if image already exists (e.g. crash+resume)
     try:
         if output_path.stat().st_size > 0:
@@ -68,6 +75,11 @@ async def generate_single(
     async def _call() -> Path:
         async with semaphore:
             system_instruction = _GENERATION_SYSTEM
+            if style_invariants.strip():
+                system_instruction += (
+                    "\n\nStyle invariants this image must obey (canon rules; do not violate):\n"
+                    + style_invariants.strip()
+                )
             if negative_prompt:
                 system_instruction += f"\nAvoid: {negative_prompt}"
             response = await asyncio.wait_for(

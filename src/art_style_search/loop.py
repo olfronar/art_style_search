@@ -43,6 +43,7 @@ from art_style_search.workflow.iteration_execution import (
 from art_style_search.workflow.iteration_persistence import (
     _record_iteration_state,
     _update_knowledge_base_for_iteration,
+    append_canon_edit_ledger,
 )
 from art_style_search.workflow.iteration_proposals import _propose_iteration_experiments
 from art_style_search.workflow.policy import (
@@ -141,7 +142,13 @@ async def run(config: Config) -> LoopState:
             logger.warning("Confirmatory validation failed — falling back to single-pass", exc_info=True)
 
         baseline_metrics = state.best_metrics
+        # Capture the incumbent canon BEFORE the apply step so the ledger can record
+        # the pre-edit state for the next iteration's reasoner context.
+        from art_style_search.evaluate import extract_style_canon
+
+        prior_canon = extract_style_canon(state.current_template.render())
         decision = _apply_iteration_result(state, ranking, ctx.config)
+        append_canon_edit_ledger(state, ranking, prior_canon, baseline_metrics, decision, iteration)
         _update_knowledge_base_for_iteration(state, ranking, proposals, baseline_metrics, iteration, decision)
         _record_iteration_state(state, ranking, iteration, ctx)
 

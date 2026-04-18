@@ -12,6 +12,7 @@ from art_style_search.prompt._format import (
     _format_style_profile,
     _format_template,
     _truncate_words,
+    format_canon_edit_ledger,
     format_knowledge_base,
     suggest_target_categories,
 )
@@ -26,6 +27,7 @@ from art_style_search.prompt.json_contracts import (
 from art_style_search.scoring import classify_hypothesis, composite_score
 from art_style_search.types import (
     AggregatedMetrics,
+    CanonEditLedgerEntry,
     IterationResult,
     KnowledgeBase,
     PromptTemplate,
@@ -321,6 +323,7 @@ def _build_shared_proposal_user(
     include_roundtrip_feedback: bool = True,
     iteration: int = 0,
     plateau_counter: int = 0,
+    canon_edit_ledger: list[CanonEditLedgerEntry] | None = None,
 ) -> str:
     has_history = knowledge_base.hypotheses
     user_parts: list[str] = []
@@ -348,6 +351,15 @@ def _build_shared_proposal_user(
     if kb_text:
         user_parts.append("\n\n")
         user_parts.append(kb_text)
+
+    # Canon Edit History — the reasoner's cross-iteration learning signal. Shows
+    # what canon edits were tried before, whether they were accepted, and what
+    # metric axes they moved (or regressed). Lets the reasoner stop repeating
+    # reverted edits and reinforce winning patterns.
+    ledger_text = format_canon_edit_ledger(canon_edit_ledger or [])
+    if ledger_text:
+        user_parts.append("\n\n")
+        user_parts.append(ledger_text)
 
     category_names = get_category_names(current_template)
     suggested = suggest_target_categories(knowledge_base, 3, category_names) if knowledge_base else []
@@ -724,6 +736,7 @@ async def brainstorm_experiment_sketches(
     is_first_iteration: bool = False,
     iteration: int = 0,
     plateau_counter: int = 0,
+    canon_edit_ledger: list[CanonEditLedgerEntry] | None = None,
 ) -> tuple[list[ExperimentSketch], bool]:
     shared_user = _build_shared_proposal_user(
         style_profile,
@@ -739,6 +752,7 @@ async def brainstorm_experiment_sketches(
         include_roundtrip_feedback=True,
         iteration=iteration,
         plateau_counter=plateau_counter,
+        canon_edit_ledger=canon_edit_ledger,
     )
     user = _brainstorm_user(
         shared_user, num_sketches=num_sketches, has_feedback=bool(vision_feedback or roundtrip_feedback)
@@ -811,6 +825,7 @@ async def expand_experiment_sketches(
     is_first_iteration: bool = False,
     iteration: int = 0,
     plateau_counter: int = 0,
+    canon_edit_ledger: list[CanonEditLedgerEntry] | None = None,
 ) -> list[RefinementResult]:
     if not sketches:
         return []
@@ -829,6 +844,7 @@ async def expand_experiment_sketches(
         include_roundtrip_feedback=not bool(vision_feedback),
         iteration=iteration,
         plateau_counter=plateau_counter,
+        canon_edit_ledger=canon_edit_ledger,
     )
     system = _expand_system(current_template, is_first_iteration=is_first_iteration)
     tasks = [
@@ -886,6 +902,7 @@ async def propose_experiments(
     is_first_iteration: bool = False,
     iteration: int = 0,
     plateau_counter: int = 0,
+    canon_edit_ledger: list[CanonEditLedgerEntry] | None = None,
 ) -> list[RefinementResult]:
     """Compatibility wrapper: brainstorm more ideas, rank them, then expand survivors."""
 
@@ -905,6 +922,7 @@ async def propose_experiments(
         is_first_iteration=is_first_iteration,
         iteration=iteration,
         plateau_counter=plateau_counter,
+        canon_edit_ledger=canon_edit_ledger,
     )
     if not sketches:
         return [_stop_result(current_template)] if converged else []
@@ -932,6 +950,7 @@ async def propose_experiments(
         is_first_iteration=is_first_iteration,
         iteration=iteration,
         plateau_counter=plateau_counter,
+        canon_edit_ledger=canon_edit_ledger,
     )
 
     if converged:

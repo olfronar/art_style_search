@@ -137,6 +137,54 @@ def append_kb_style_gap_observations(kb: KnowledgeBase, new_notes: tuple[str, ..
         del kb.style_gap_observations[:overflow]
 
 
+def retire_resolved_style_gap_observations(
+    kb: KnowledgeBase,
+    lesson_texts: list[str],
+    canon_axes_improved: bool,
+) -> list[str]:
+    """Retire KB style-gap observations that this iteration addressed AND resolved.
+
+    An observation is considered resolved when (1) at least one of the iteration's
+    ``lesson_texts`` (from ``Lessons.new_insight`` on accepted/promoted refinements)
+    shares ≥ ``_NEAR_DUP_THRESHOLD`` token overlap with the observation, AND (2) at
+    least one canon-relevant metric axis improved on this iteration (``canon_axes_improved``
+    computed by the caller from ``metric_deltas`` on vision_style / vision_medium /
+    vision_subject / style_consistency). Both conditions must hold: the reasoner claimed
+    to address it, and the evidence backs the claim.
+
+    Returns the list of retired observation texts (for logging). Mutates ``kb`` in-place.
+    """
+    if not canon_axes_improved or not kb.style_gap_observations or not lesson_texts:
+        return []
+    lesson_token_sets = [_tokenize(lesson) for lesson in lesson_texts if lesson]
+    if not lesson_token_sets:
+        return []
+    retired: list[str] = []
+    kept: list[str] = []
+    for obs in kb.style_gap_observations:
+        obs_tokens = _tokenize(obs)
+        if not obs_tokens:
+            kept.append(obs)
+            continue
+        addressed = False
+        for lesson_tokens in lesson_token_sets:
+            if not lesson_tokens:
+                continue
+            intersection = len(obs_tokens & lesson_tokens)
+            union = len(obs_tokens | lesson_tokens)
+            if union > 0 and intersection / union >= _NEAR_DUP_THRESHOLD:
+                addressed = True
+                break
+        if addressed:
+            retired.append(obs)
+        else:
+            kept.append(obs)
+    if retired:
+        kb.style_gap_observations[:] = kept
+        logger.info("Retired %d resolved style-gap observation(s) from KB", len(retired))
+    return retired
+
+
 def _merge_problem(existing: OpenProblem, incoming: OpenProblem) -> OpenProblem:
     """Merge two near-duplicate problems without losing the strongest history."""
     existing_rank = _PRIORITY_ORDER.get(existing.priority, 99)

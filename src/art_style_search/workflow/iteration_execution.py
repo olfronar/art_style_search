@@ -19,6 +19,7 @@ from art_style_search.scoring import (
     adaptive_composite_score,
     composite_score,
     improvement_epsilon,
+    metric_deltas,
     paired_promotion_test,
 )
 from art_style_search.types import IterationResult, LoopState, PromotionTestResult, PromptTemplate
@@ -299,6 +300,42 @@ async def _run_synthesis_experiment(
         id(result): adaptive_composite_score(result.aggregated, updated_agg) for result in ranking.exp_results
     }
     if merged_score > ranking.best_score:
-        ranking.best_exp = synth_result
-        ranking.best_score = merged_score
-        logger.info("Synthesis beat best individual — adopting merged template")
+        # Minimum-quality gate: synthesis may merge sections from two sub-baseline parents and
+        # win the incumbent slot by averaging noise. Require that at least one parent experiment
+        # beat baseline on any canon-relevant or perceptual axis before letting synthesis crown
+        # a new incumbent. Synthesis still runs + remains visible to the reasoner as analysis —
+        # this only gates promotion.
+        baseline = state.best_metrics
+        parent_beat_baseline = False
+        if baseline is None:
+            parent_beat_baseline = True  # no baseline yet — nothing to guard against
+        else:
+            gate_axes = (
+                "dreamsim_similarity_mean",
+                "color_histogram_mean",
+                "ssim_mean",
+                "hps_score_mean",
+                "aesthetics_score_mean",
+                "vision_style",
+                "vision_subject",
+                "vision_composition",
+                "vision_medium",
+                "vision_proportions",
+                "style_consistency",
+            )
+            for parent in ranking.exp_results:
+                if parent is synth_result:
+                    continue
+                deltas = metric_deltas(parent.aggregated, baseline)
+                if any(deltas.get(axis, 0.0) > 0.005 for axis in gate_axes):
+                    parent_beat_baseline = True
+                    break
+        if parent_beat_baseline:
+            ranking.best_exp = synth_result
+            ranking.best_score = merged_score
+            logger.info("Synthesis beat best individual — adopting merged template")
+        else:
+            logger.info(
+                "Synthesis beat best individual by composite, but no parent beat baseline on any single metric "
+                "— holding synthesis out of promotion (synthesis visible to reasoner as analysis only)"
+            )

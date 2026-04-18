@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from art_style_search.types import (
     AggregatedMetrics,
+    CanonEditLedgerEntry,
     KnowledgeBase,
     PromptTemplate,
     StyleProfile,
@@ -54,6 +55,34 @@ def _format_metrics(metrics: AggregatedMetrics) -> str:
     d = metrics.summary_dict()
     lines = [f"- {k}: {v:.4f}" for k, v in d.items()]
     return "\n".join(lines)
+
+
+def format_canon_edit_ledger(ledger: list[CanonEditLedgerEntry], max_words: int = 800) -> str:
+    """Render the canon edit ledger as a compact prompt section for the reasoner.
+
+    Each entry shows: iteration number + accepted/rejected + hypothesis summary +
+    changed sections + per-axis metric deltas + prior→new canon excerpts. The reasoner
+    uses this as the central cross-iteration learning signal: "I tried X last iteration,
+    it gained vision_style but lost vision_subject; try tightening the subject side next."
+
+    Returns an empty string when the ledger is empty.
+    """
+    if not ledger:
+        return ""
+    lines: list[str] = ["## Canon Edit History (prior canon edits and their measured effect)"]
+    for entry in ledger:
+        tag = "ACCEPTED" if entry.accepted else "rejected"
+        changed = ", ".join(entry.changed_sections) if entry.changed_sections else "(no section attribution)"
+        deltas_inline = " ".join(f"{axis}={delta:+.3f}" for axis, delta in entry.metric_deltas.items() if axis)
+        hypothesis = entry.hypothesis_summary or "(no hypothesis summary)"
+        lines.append(f"### Iteration {entry.iteration} [{tag}] — sections: {changed}")
+        lines.append(f"Hypothesis: {hypothesis}")
+        if deltas_inline:
+            lines.append(f"Deltas vs baseline: {deltas_inline}")
+        lines.append(f"Prior canon excerpt: {entry.prior_canon_excerpt}")
+        lines.append(f"New canon excerpt:   {entry.new_canon_excerpt}")
+        lines.append("")
+    return _truncate_words("\n".join(lines), max_words)
 
 
 def _truncate_words(text: str, max_words: int, *, suffix: str = "...") -> str:

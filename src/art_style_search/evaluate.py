@@ -519,15 +519,32 @@ _PAIRWISE_WINNER_SCORES = {"A": 1.0, "B": 0.0, "TIE": 0.5}
 
 
 def _parse_pairwise_response(text: str) -> tuple[str, float]:
-    """Extract rationale + winner score from a pairwise-comparison response body."""
+    """Extract rationale + winner score from a pairwise-comparison response body.
+
+    Per-aspect verdicts (style / color / subject / composition) are prepended to the
+    rationale so they survive into ``LoopState.pairwise_feedback`` and reach the next
+    iteration's reasoner context. Previously only the combined ``<rationale>`` string
+    flowed forward, discarding the dimensional signal that would tell the reasoner
+    which axes one experiment beat the other on.
+    """
     winner = (extract_xml_tag(text, "winner") or "TIE").upper()
     rationale = extract_xml_tag(text, "rationale") or text[:300]
-    style_v = extract_xml_tag(text, "style_verdict") or ""
-    color_v = extract_xml_tag(text, "color_verdict") or ""
-    subject_v = extract_xml_tag(text, "subject_verdict") or ""
-    comp_v = extract_xml_tag(text, "composition_verdict") or ""
-    if style_v or color_v or subject_v or comp_v:
-        logger.info("Pairwise per-aspect: style=%s color=%s subject=%s comp=%s", style_v, color_v, subject_v, comp_v)
+    style_v = (extract_xml_tag(text, "style_verdict") or "").upper()
+    color_v = (extract_xml_tag(text, "color_verdict") or "").upper()
+    subject_v = (extract_xml_tag(text, "subject_verdict") or "").upper()
+    comp_v = (extract_xml_tag(text, "composition_verdict") or "").upper()
+    per_aspect_parts: list[str] = []
+    for label, verdict in (
+        ("style", style_v),
+        ("color", color_v),
+        ("subject", subject_v),
+        ("composition", comp_v),
+    ):
+        if verdict:
+            per_aspect_parts.append(f"{label}={verdict}")
+    if per_aspect_parts:
+        logger.info("Pairwise per-aspect: %s", ", ".join(per_aspect_parts))
+        rationale = f"Per-aspect verdicts: {', '.join(per_aspect_parts)}. {rationale}"
     return rationale, _PAIRWISE_WINNER_SCORES.get(winner, 0.5)
 
 

@@ -141,7 +141,11 @@ def _make_valid_template() -> PromptTemplate:
         PromptSection(
             name="subject_anchor",
             description="Subject rules",
-            value=("Proportions: 3.2 heads tall, chibi archetype, stubby limbs. ") + "Subject rules. " * 125,
+            value=(
+                "Proportions: 3.2 heads tall, chibi archetype, stubby limbs. "
+                "Distinguishing Features: species, hair/fur, markings, apparel, props. "
+            )
+            + "Subject rules. " * 125,
         ),
         PromptSection(name="color_palette", description="Colors", value="Color rules. " * 130),
         PromptSection(name="composition", description="Layout", value="Comp rules. " * 130),

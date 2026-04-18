@@ -183,7 +183,7 @@ class TestReplicateExperiment:
                 )
 
         class FakeGeneration:
-            async def generate_single(self, prompt, *, index, output_path, negative_prompt=None):
+            async def generate_single(self, prompt, *, index, output_path, negative_prompt=None, style_invariants=""):
                 captured_negative["negative_prompt"] = negative_prompt
                 output_path.touch()
                 return output_path
@@ -279,7 +279,7 @@ class TestCaptionAndGenerate:
                 )
 
         class FakeGeneration:
-            async def generate_single(self, prompt, *, index, output_path, negative_prompt=None):
+            async def generate_single(self, prompt, *, index, output_path, negative_prompt=None, style_invariants=""):
                 captured["prompt"] = prompt
                 captured_negative["negative_prompt"] = negative_prompt
                 output_path.touch()

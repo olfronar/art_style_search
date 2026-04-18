@@ -9,7 +9,7 @@ import statistics
 from dataclasses import replace
 from pathlib import Path
 
-from art_style_search.caption_sections import build_generation_prompt
+from art_style_search.caption_sections import build_generation_prompt, extract_style_invariants
 from art_style_search.config import Config
 from art_style_search.evaluate import (
     aggregate,
@@ -155,9 +155,17 @@ async def _caption_and_generate(
     cache_dir = config.log_dir / f"iter_{iteration:03d}" / f"exp_{experiment_id}" / "captions"
     gen_dir = config.output_dir / f"iter_{iteration:03d}" / f"exp_{experiment_id}"
     gen_dir.mkdir(parents=True, exist_ok=True)
-    # Content-derived cache key: captions are a pure function of (image_bytes, meta_prompt).
-    # Identical meta-prompts share cache across experiments and iterations.
-    cache_key = f"p{hashlib.sha256(meta_prompt.encode()).hexdigest()[:12]}"
+    # Content-derived cache key: captions are a pure function of (image_bytes, meta_prompt,
+    # CAPTION_SYSTEM). Including a short CAPTION_SYSTEM digest invalidates cache when the
+    # captioner contract itself changes (e.g. tightened canon-copy policy).
+    from art_style_search.caption import CAPTION_SYSTEM
+
+    caption_system_digest = hashlib.sha256(CAPTION_SYSTEM.encode()).hexdigest()[:4]
+    cache_key = f"p{hashlib.sha256(meta_prompt.encode()).hexdigest()[:12]}-c{caption_system_digest}"
+
+    # Canon's Style Invariants flow to the generator's system instruction so the canon's
+    # MUST/NEVER rules survive even when the captioner's [Art Style] block is paraphrased.
+    style_invariants = extract_style_invariants(style_canon)
 
     async def _caption_then_generate(ref_path: Path, i: int) -> tuple[Caption, Path]:
         caption = await services.captioning.caption_single(
@@ -171,6 +179,7 @@ async def _caption_and_generate(
             index=i,
             output_path=gen_dir / f"{i:02d}.png",
             negative_prompt=negative_prompt,
+            style_invariants=style_invariants,
         )
         return caption, gen_path
 

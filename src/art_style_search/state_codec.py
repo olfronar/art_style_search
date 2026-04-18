@@ -10,6 +10,7 @@ from typing import Any
 
 from art_style_search.types import (
     AggregatedMetrics,
+    CanonEditLedgerEntry,
     Caption,
     CategoryProgress,
     ConvergenceReason,
@@ -260,4 +261,17 @@ def _loop_state_from_dict(d: dict[str, Any]) -> LoopState:
         protocol=d.get("protocol", "classic"),
         feedback_refs=[Path(p) for p in d.get("feedback_refs", [])],
         silent_refs=[Path(p) for p in d.get("silent_refs", [])],
+        canon_edit_ledger=[_canon_edit_ledger_entry_from_dict(e) for e in d.get("canon_edit_ledger", [])],
+    )
+
+
+def _canon_edit_ledger_entry_from_dict(d: dict[str, Any]) -> CanonEditLedgerEntry:
+    return CanonEditLedgerEntry(
+        iteration=d.get("iteration", 0),
+        prior_canon_excerpt=d.get("prior_canon_excerpt", ""),
+        new_canon_excerpt=d.get("new_canon_excerpt", ""),
+        changed_sections=list(d.get("changed_sections", [])),
+        hypothesis_summary=d.get("hypothesis_summary", ""),
+        metric_deltas=dict(d.get("metric_deltas", {})),
+        accepted=bool(d.get("accepted", False)),
     )

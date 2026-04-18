@@ -84,7 +84,11 @@ class TestStyleCache:
                 PromptSection(
                     name="subject_anchor",
                     description="subject rules",
-                    value=("Proportions: 3.2 heads tall, chibi archetype, stubby limbs. ") + "Subject guidance. " * 125,
+                    value=(
+                        "Proportions: 3.2 heads tall, chibi archetype, stubby limbs. "
+                        "Distinguishing Features: species, hair/fur, markings, apparel, props. "
+                    )
+                    + "Subject guidance. " * 125,
                 ),
                 PromptSection(name="color_palette", description="colors", value="Palette guidance. " * 130),
                 PromptSection(name="composition", description="layout", value="Composition guidance. " * 130),

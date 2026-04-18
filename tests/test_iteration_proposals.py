@@ -36,7 +36,11 @@ def _valid_template() -> PromptTemplate:
             PromptSection(
                 name="subject_anchor",
                 description="subject",
-                value=("Proportions: 3.2 heads tall, chibi archetype, stubby limbs. ") + "Subject rules. " * 125,
+                value=(
+                    "Proportions: 3.2 heads tall, chibi archetype, stubby limbs. "
+                    "Distinguishing Features: species, hair/fur, markings, apparel, props. "
+                )
+                + "Subject rules. " * 125,
             ),
             PromptSection(name="composition_blueprint", description="layout", value="Layout rules. " * 130),
             PromptSection(name="lighting_rendering", description="light", value="Lighting rules. " * 130),
@@ -65,7 +69,11 @@ def _current_template_with_face_hands_pose() -> PromptTemplate:
             PromptSection(
                 name="subject_anchor",
                 description="subject",
-                value=("Proportions: 3.2 heads tall, chibi archetype, stubby limbs. ") + "Subject rules. " * 125,
+                value=(
+                    "Proportions: 3.2 heads tall, chibi archetype, stubby limbs. "
+                    "Distinguishing Features: species, hair/fur, markings, apparel, props. "
+                )
+                + "Subject rules. " * 125,
             ),
             PromptSection(name="face_hands_pose", description="anatomy", value="Pose rules. " * 130),
             PromptSection(name="global_layout_grid", description="layout", value="Layout rules. " * 130),

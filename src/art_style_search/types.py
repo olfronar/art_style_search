@@ -529,6 +529,25 @@ class IterationResult:
     expected_tradeoff: str = ""
 
 
+@dataclass(frozen=True)
+class CanonEditLedgerEntry:
+    """One record of a canon edit + its measured outcome.
+
+    Written after an iteration completes, so the next iteration's reasoner can see
+    *what it last tried* and *what effect it produced* — the missing cross-iteration
+    feedback loop for canon-level learning. Prior value retained as a short excerpt
+    (≤ 400 chars) to keep the ledger small enough to persist and render in-prompt.
+    """
+
+    iteration: int
+    prior_canon_excerpt: str  # first ~400 chars of pre-edit style_foundation.value
+    new_canon_excerpt: str  # first ~400 chars of post-edit style_foundation.value
+    changed_sections: list[str]
+    hypothesis_summary: str  # short summary of the proposed hypothesis
+    metric_deltas: dict[str, float]  # per-metric delta vs baseline (only meaningful axes)
+    accepted: bool  # True if the edit was promoted to incumbent
+
+
 @dataclass
 class LoopState:
     """Top-level state that gets persisted to state.json.
@@ -559,6 +578,10 @@ class LoopState:
     protocol: str = "classic"  # "classic" or "rigorous"
     feedback_refs: list[Path] = field(default_factory=list)  # shown to reasoning model
     silent_refs: list[Path] = field(default_factory=list)  # evaluated but hidden from optimizer
+    # Canon edit ledger — ring buffer capped at _CANON_EDIT_LEDGER_MAX. Rendered into the
+    # reasoner's brainstorm context as "Canon Edit History" so the reasoner can see its
+    # own prior edits and their measured effect on style/medium/proportions.
+    canon_edit_ledger: list[CanonEditLedgerEntry] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

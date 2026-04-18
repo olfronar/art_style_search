@@ -10,6 +10,32 @@ _SECTION_MARKER_RE = re.compile(r"\[(?P<name>[^\]\n]+)\]\s*")
 # by :func:`art_style_search.caption._validate_expanded_template`.
 _ART_STYLE_MIN_WORDS = 100
 
+# Sub-block labels inside style_foundation.value (the 5-facet canon skeleton). Used by
+# `extract_style_invariants` to pull just the MUST/NEVER invariants out of the canon for
+# surfacing to the image generator's system instruction (so rules survive a paraphrased caption).
+_STYLE_INVARIANTS_PATTERN = re.compile(
+    r"style\s+invariants\s*:\s*(?P<body>.+?)(?=\n(?:how\s+to\s+draw|shading\s*&\s*light|"
+    r"color\s+principle|surface\s*&\s*texture|style\s+invariants|subject|\Z))",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def extract_style_invariants(style_canon: str) -> str:
+    """Return the body of the ``Style Invariants:`` sub-block from a canon string, or empty.
+
+    Canon follows a 5-facet skeleton (How to Draw / Shading & Light / Color Principle /
+    Surface & Texture / Style Invariants). Invariants are the MUST/NEVER rules that every
+    image in the style obeys; they're the most load-bearing part of the canon for the image
+    generator. Extracting them lets callers surface them directly to the generator's system
+    instruction, so they survive even when the captioner paraphrases [Art Style].
+    """
+    if not style_canon:
+        return ""
+    match = _STYLE_INVARIANTS_PATTERN.search(style_canon)
+    if not match:
+        return ""
+    return match.group("body").strip()
+
 
 def parse_labeled_sections(caption_text: str) -> dict[str, str]:
     """Parse ``[Section]`` blocks from *caption_text*, preserving order."""

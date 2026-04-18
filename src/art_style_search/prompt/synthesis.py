@@ -23,6 +23,8 @@ _SYNTHESIS_DELTA_LABELS: dict[str, str] = {
     "vision_style": "vision_style",
     "vision_subject": "vision_subject",
     "vision_composition": "vision_composition",
+    "vision_medium": "vision_medium",
+    "vision_proportions": "vision_proportions",
     "style_consistency": "style_consistency",
 }
 

@@ -9,7 +9,9 @@ _SCHEMA_VERSION = (
     # v5: medium-class + proportions prompt contract (invalidates cached style analyses, adds diagnostic vision dims),
     # v6: canon-first metric split (style_boilerplate_purity → style_canon_fidelity + observation_boilerplate_purity);
     #     adds vision style_gap notes + KnowledgeBase.style_gap_observations
-    6
+    # v7: canon edit ledger — LoopState.canon_edit_ledger ring buffer recording cross-iteration canon edits +
+    #     measured effect, rendered into the reasoner's brainstorm context as "Canon Edit History"
+    7
 )
 _ITERATION_LOG_SCHEMA_VERSION = 1
 _MANIFEST_SCHEMA_VERSION = 3
@@ -142,6 +144,8 @@ def _migrate_state_payload(raw: dict[str, Any], version: int) -> dict[str, Any]:
         data["global_best_metrics"] = _migrate_aggregated_metrics_payload(dict(data["global_best_metrics"]))
     if "knowledge_base" in data and isinstance(data["knowledge_base"], dict):
         data["knowledge_base"] = _migrate_knowledge_base_payload(dict(data["knowledge_base"]))
+    # v7: canon edit ledger — backfill empty on pre-v7 payloads
+    data.setdefault("canon_edit_ledger", [])
     return data
 
 

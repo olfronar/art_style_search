@@ -79,6 +79,8 @@ _REVIEW_DELTA_LABELS: dict[str, str] = {
     "vision_style": "vision_style",
     "vision_subject": "vision_subject",
     "vision_composition": "vision_composition",
+    "vision_medium": "vision_medium",
+    "vision_proportions": "vision_proportions",
     "style_consistency": "style_consistency",
     "completion_rate": "completion_rate",
     "compliance": "compliance",
@@ -98,6 +100,19 @@ def _noise_floor_summary(experiments: list[IterationResult]) -> str:
     def _std(values: list[float]) -> float:
         return statistics.pstdev(values) if len(values) >= 2 else 0.0
 
+    def _pearson(xs: list[float], ys: list[float]) -> float | None:
+        """Sample Pearson correlation, None on degenerate input (constant series / <3 points)."""
+        if len(xs) != len(ys) or len(xs) < 3:
+            return None
+        mean_x = sum(xs) / len(xs)
+        mean_y = sum(ys) / len(ys)
+        num = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys, strict=False))
+        den_x = sum((x - mean_x) ** 2 for x in xs)
+        den_y = sum((y - mean_y) ** 2 for y in ys)
+        if den_x <= 0 or den_y <= 0:
+            return None
+        return num / ((den_x**0.5) * (den_y**0.5))
+
     metrics = [exp.aggregated for exp in experiments]
     value_fns: dict[str, list[float]] = {
         "dreamsim_similarity_mean": [m.dreamsim_similarity_mean for m in metrics],
@@ -108,12 +123,31 @@ def _noise_floor_summary(experiments: list[IterationResult]) -> str:
         "vision_style": [m.vision_style for m in metrics],
         "vision_subject": [m.vision_subject for m in metrics],
         "vision_composition": [m.vision_composition for m in metrics],
+        "vision_medium": [m.vision_medium for m in metrics],
+        "vision_proportions": [m.vision_proportions for m in metrics],
         "style_consistency": [m.style_consistency for m in metrics],
         "completion_rate": [m.completion_rate for m in metrics],
         "compliance": [compliance_mean(m) for m in metrics],
     }
     parts = " ".join(f"{label}=±{_std(value_fns[attr]):.4f}" for attr, label in _REVIEW_DELTA_LABELS.items())
-    return f"## Noise floors for this run\n{parts}\n"
+
+    # Vision-verdict vs continuous-metric calibration. Surfaces the observed correlation
+    # between each vision-judge axis and its closest continuous-metric counterpart so the
+    # reviewer can discount noisy judge signal ("vision_style r=0.1 with DreamSim → treat
+    # as independent axis, don't over-interpret"). Low r under noisy judging prevents the
+    # reasoner from chasing spurious verdict swings.
+    correlation_pairs: tuple[tuple[str, str, str], ...] = (
+        ("vision_style", "dreamsim_similarity_mean", "r(vision_style,DS)"),
+        ("vision_subject", "dreamsim_similarity_mean", "r(vision_subject,DS)"),
+        ("vision_composition", "ssim_mean", "r(vision_composition,SSIM)"),
+    )
+    corr_bits: list[str] = []
+    for axis_a, axis_b, label in correlation_pairs:
+        r = _pearson(value_fns[axis_a], value_fns[axis_b])
+        if r is not None:
+            corr_bits.append(f"{label}={r:+.3f}")
+    calibration_line = f"\nJudge calibration (this iteration): {' '.join(corr_bits)}" if corr_bits else ""
+    return f"## Noise floors for this run\n{parts}{calibration_line}\n"
 
 
 async def review_iteration(

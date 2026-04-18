@@ -52,6 +52,19 @@ _SUBJECT_ANCHOR_ARCHETYPE_TOKENS: tuple[str, ...] = (
     "realistic-adult",
     "elongated",
 )
+# subject_anchor.value must instruct the captioner to write an identity/distinguishing-features
+# sub-block for the [Subject] output. Without this the captioner may produce a generic subject
+# description that fails vision_subject and DreamSim (the heaviest composite-weight axes). Any
+# of these tokens in the value satisfies the check — we accept multiple phrasings that the
+# reasoner produces in practice (Schema A: "Identity & Species"; Schema B: "Scene Class";
+# general: "Distinguishing Features").
+_SUBJECT_ANCHOR_IDENTITY_TOKENS: tuple[str, ...] = (
+    "distinguishing features",
+    "identity &",
+    "identity:",
+    "scene class",
+    "landmark inventory",
+)
 
 # Style canon anti-methodology lint. The canon (``style_foundation.value``) IS the literal
 # [Art Style] block content — declarative third-person assertions ABOUT the style that the
@@ -115,6 +128,13 @@ def _check_anchor_sub_blocks(template: PromptTemplate) -> list[str]:
         if _SUBJECT_ANCHOR_PROPORTION_MARKER not in subject:
             errors.append(
                 "subject_anchor.value must contain a 'Proportions:' sub-block (heads-tall numeric + archetype)"
+            )
+        if not any(token in subject for token in _SUBJECT_ANCHOR_IDENTITY_TOKENS):
+            errors.append(
+                "subject_anchor.value must instruct the captioner to write an identity/distinguishing-features "
+                "sub-block (one of: 'Distinguishing Features', 'Identity:', 'Identity &', 'Scene Class', "
+                "'Landmark Inventory'). Without it the [Subject] block lacks identity anchors and "
+                "vision_subject / DreamSim suffer."
             )
         if not any(token in subject for token in _SUBJECT_ANCHOR_ARCHETYPE_TOKENS):
             errors.append(
