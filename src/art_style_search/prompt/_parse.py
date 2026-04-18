@@ -104,11 +104,10 @@ def _check_anchor_sub_blocks(template: PromptTemplate) -> list[str]:
         methodology_hits = [p.pattern for p in _CANON_METHODOLOGY_PATTERNS if p.search(foundation_raw)]
         if methodology_hits:
             errors.append(
-                "style_foundation.value must read as third-person declarative assertions ABOUT this style "
-                "(e.g. 'This style renders as lit 3D volumes with uniformly beveled edges. Shadows hue-shift "
-                "cooler...'), NOT as imperatives to a captioner. Drop imperative verbs, audit scaffolding "
-                "(SLOT N, checkboxes, MANDATORY), meta-references ('this block', 'each slot'), word-count "
-                "targets, and reproduction vocabulary ('verbatim', 'paraphrase', 'REUSABLE DNA') "
+                "style_foundation.value must read as third-person declarative assertions about this style, "
+                "NOT as imperatives to a captioner. Drop imperative verbs, audit scaffolding (SLOT N, "
+                "checkboxes, MANDATORY), meta-references ('this block', 'each slot'), word-count targets, "
+                "and reproduction vocabulary ('verbatim', 'paraphrase', 'REUSABLE DNA') "
                 f"(matched {len(methodology_hits)} methodology patterns: {methodology_hits[:5]})"
             )
     subject = (by_name.get("subject_anchor") or "").lower()

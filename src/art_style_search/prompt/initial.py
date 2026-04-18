@@ -57,7 +57,7 @@ _BASE_REQUIREMENTS = (
     "Shading & Light (layer stack, edge softness, key-fill-rim direction and temperature), "
     "Color Principle (generic palette families + value + saturation; NO named colors), "
     "Surface & Texture (grain + class-appropriate material vocabulary; NO named objects), "
-    "Style Invariants (3-5 MUST/NEVER rules — e.g. 'MUST bevel every structural edge'; 'NEVER outline any form'). "
+    "Style Invariants (3-5 MUST/NEVER rules drawn from the analyzed style's invariants). "
     "Genre labels like '3D CGI of X', 'cel-shaded anime', or '{Artist}-style' are forbidden inside [Art Style]. "
     "Character proportions (heads-tall + archetype) belong in subject_anchor, NOT here.\n"
     "6. 'subject_anchor.value' MUST include a 'Proportions:' sub-block requiring numeric head-heights-tall AND "

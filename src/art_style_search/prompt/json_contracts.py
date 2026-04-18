@@ -385,16 +385,12 @@ def _schema_word_block(token: str, *, words: int = 260) -> str:
 
 
 _STYLE_FOUNDATION_DRAWING_PREFIX = (
-    "How to Draw: this style is hand-painted 2D with visible brushwork and paper tooth. Lines are hand-made with "
-    "pressure variation; forms build from silhouette primitives through construction order silhouette-forms-details. "
-    "Shading & Light: surfaces carry a base-AO-midtones-rim-specular stack with feathered edges and a warm key "
-    "paired with a cool rim. "
-    "Color Principle: the palette locks to saturated complementary blues in the mid-key with moderate contrast and "
-    "selective chroma; shadows hue-shift cooler rather than desaturating. "
-    "Surface & Texture: every surface reads as paper tooth and watercolor wash; material vocabulary stays consistent "
-    "with the observed medium and does not mix with incompatible media. "
-    "Style Invariants: MUST give every character exactly one exaggerated feature; MUST hue-shift shadows; "
-    "NEVER allow more than three saturated hues in one frame; NEVER introduce photographic grain. "
+    "How to Draw: [declarative medium identification + construction order + line policy for this style]. "
+    "Shading & Light: [declarative shading-layer stack + edge softness + key/fill/rim direction and temperature]. "
+    "Color Principle: [palette families + value range + saturation policy + shadow-direction rule; no image-specific hues]. "
+    "Surface & Texture: [grain/noise policy + material vocabulary self-consistent with the medium named above; "
+    "no specific objects]. "
+    "Style Invariants: [3-5 MUST/NEVER rules every image in this style obeys]. "
 )
 _SUBJECT_ANCHOR_PROPORTIONS_PREFIX = (
     "Proportions: N.N heads tall, archetype (chibi / stylized-youth / heroic / realistic-adult / "
