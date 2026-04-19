@@ -43,6 +43,7 @@ uv run python -m art_style_search clean --all        # Remove all runs
 uv run python -m art_style_search report --run NAME  # Generate runs/<NAME>/report.html
 uv run python -m art_style_search report --run NAME --open  # Generate and open in browser
 uv run python -m art_style_search report --all       # Regenerate reports for all runs
+uv run python -m art_style_search verify-metrics     # Sanity-check metrics on a random reference from the newest run (compared against itself)
 uv tool install pre-commit                           # Install the pre-commit CLI (optional)
 ```
 
@@ -72,6 +73,7 @@ Top-level modules in `src/art_style_search/`:
 - `reasoning_client.py`, `retry.py`, `media.py`, `utils.py` - Providers, retry, shared helpers. See `src/art_style_search/CLAUDE.md`.
 - `runs.py`, `state.py`, `state_codec.py`, `state_migrations.py` - Persistence + run directory management.
 - `report.py`, `report_data.py` - Reporting façade + data loader.
+- `verify_metrics.py` - `verify-metrics` subcommand: runs the full evaluation stack on a randomly-chosen reference from an existing run (compared against itself) and prints a per-metric sanity report. Exit 0 when paired-identity invariants hold, 1 on failure, 2 on setup errors.
 
 Sub-packages have their own CLAUDE.md:
 

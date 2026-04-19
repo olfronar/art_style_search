@@ -89,6 +89,13 @@ def _handle_report(argv: list[str]) -> None:
     print(path)
 
 
+def _handle_verify_metrics(argv: list[str]) -> None:
+    from art_style_search.verify_metrics import build_parser, run_verify_metrics
+
+    args = build_parser().parse_args(argv)
+    sys.exit(run_verify_metrics(args))
+
+
 def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "clean":
         _handle_clean(sys.argv[2:])
@@ -98,6 +105,9 @@ def main() -> None:
         return
     if len(sys.argv) > 1 and sys.argv[1] == "report":
         _handle_report(sys.argv[2:])
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "verify-metrics":
+        _handle_verify_metrics(sys.argv[2:])
         return
 
     from art_style_search.config import parse_args
