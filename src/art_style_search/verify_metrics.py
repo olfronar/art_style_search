@@ -1,10 +1,18 @@
-"""`verify-metrics` subcommand — sanity-check image evaluation on a pair of identical images.
+"""`verify-metrics` subcommand — sanity-check image evaluation at both extremes.
 
 Runs the full evaluation stack (local models + vision judge + caption-compliance) against
-a randomly-chosen reference image from an existing run, compared against itself. Paired
-metrics are expected to hit their maximum; the vision judge is expected to return MATCH
-on every ternary dimension. HPS / Aesthetics / style_gap text / caption-compliance
-sub-components are printed without assertion (content-dependent).
+a randomly-chosen reference image from an existing run, **twice**:
+
+  - **identity** — ref vs. ref: every paired metric should hit its maximum and the vision
+    judge should return MATCH on every ternary dimension (the "1 baseline").
+  - **zero** — ref vs. a same-size black square: the vision judge should return MISS on
+    every ternary dimension (the "0 baseline"). Paired metric values are printed but not
+    asserted — they vary by model and image content, and the point of this case is to see
+    the full range the metrics produce, not to enforce a specific ceiling.
+
+HPS / Aesthetics / style_gap text / caption-compliance sub-components are printed without
+assertion (content-dependent) in both cases. Caption-level metrics depend only on
+meta-prompt + caption text, so they are computed once and reported at run level.
 """
 
 from __future__ import annotations
@@ -16,6 +24,7 @@ import logging
 import os
 import random
 import sys
+import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -23,6 +32,7 @@ from typing import Any
 import httpx
 from dotenv import load_dotenv
 from google import genai  # type: ignore[attr-defined]
+from PIL import Image
 
 from art_style_search.evaluate import (
     aggregate,
@@ -60,7 +70,7 @@ _PAIRED_TOLERANCES: dict[str, float] = {
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="art_style_search verify-metrics",
-        description="Run the full image-evaluation stack on a pair of identical images to sanity-check metrics.",
+        description=("Run the full image-evaluation stack on identity + zero baselines to sanity-check metrics."),
     )
     parser.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS_DIR, help="Base directory for all runs")
     parser.add_argument("--run", type=str, default=None, help="Run name (default: newest run with loadable data)")
@@ -207,6 +217,24 @@ def pick_random_caption(branch: BranchLog, seed: int | None) -> tuple[Path, str]
 
 
 # ---------------------------------------------------------------------------
+# Black-square fixture
+# ---------------------------------------------------------------------------
+
+
+def make_black_square(ref_path: Path, out_dir: Path) -> Path:
+    """Write a same-size all-black PNG next to ``out_dir`` and return its path.
+
+    The black square matches the reference's dimensions so that any aspect-ratio-sensitive
+    metric behaves the same as on the identity case — the only difference is pixel content.
+    """
+    with Image.open(ref_path) as image:
+        size = image.size
+    out_path = out_dir / "black_square.png"
+    Image.new("RGB", size, (0, 0, 0)).save(out_path, format="PNG")
+    return out_path
+
+
+# ---------------------------------------------------------------------------
 # Result formatting
 # ---------------------------------------------------------------------------
 
@@ -219,17 +247,147 @@ class MetricRow:
     status: str  # "OK" | "FAIL" | "INFO"
 
 
-def _classify(value: float, *, minimum: float | None = None, exact: float | None = None) -> str:
-    """Return ``"OK"`` when ``value`` meets the invariant, ``"FAIL"`` otherwise."""
+@dataclass(frozen=True)
+class CaseResult:
+    """One full evaluation pass (identity or zero)."""
+
+    case: str  # "identity" | "zero"
+    label: str  # human-readable description
+    scores: MetricScores
+    vision: VisionScores
+    composite: float
+    per_image: float
+    rows: list[MetricRow]
+
+
+def _classify(
+    value: float,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+    exact: float | None = None,
+) -> str:
+    """Return ``"OK"`` when ``value`` meets the invariant, ``"FAIL"`` otherwise.
+
+    Exactly one of ``minimum`` / ``maximum`` / ``exact`` should be supplied; passing none
+    returns ``"INFO"`` (value is informational and not gated).
+    """
     if exact is not None:
         return "OK" if value == exact else "FAIL"
     if minimum is not None:
         return "OK" if value >= minimum else "FAIL"
+    if maximum is not None:
+        return "OK" if value <= maximum else "FAIL"
     return "INFO"
 
 
 def _fmt_float(v: float, digits: int = 3) -> str:
     return f"{v:.{digits}f}"
+
+
+def _build_case_rows(scores: MetricScores, vision: VisionScores, *, case: str) -> list[MetricRow]:
+    """Local-paired + vision-judge rows for a single case.
+
+    Paired metrics are hard-gated on identity (>= tolerance) and informational on zero —
+    the exact floor a given DreamSim/histogram/SSIM hits on a black-vs-real-image pair
+    depends on content and can't be fixed in the tool. Vision dims are hard-gated both
+    ways: MATCH (1.0) for identity, MISS (0.0) for zero.
+    """
+    rows: list[MetricRow] = []
+
+    if case == "identity":
+        rows.append(
+            MetricRow(
+                "dreamsim_similarity",
+                scores.dreamsim_similarity,
+                f">= {_PAIRED_TOLERANCES['dreamsim_similarity']}",
+                _classify(scores.dreamsim_similarity, minimum=_PAIRED_TOLERANCES["dreamsim_similarity"]),
+            )
+        )
+        rows.append(
+            MetricRow(
+                "color_histogram",
+                scores.color_histogram,
+                f">= {_PAIRED_TOLERANCES['color_histogram']}",
+                _classify(scores.color_histogram, minimum=_PAIRED_TOLERANCES["color_histogram"]),
+            )
+        )
+        rows.append(
+            MetricRow(
+                "ssim",
+                scores.ssim,
+                f">= {_PAIRED_TOLERANCES['ssim']}",
+                _classify(scores.ssim, minimum=_PAIRED_TOLERANCES["ssim"]),
+            )
+        )
+    else:  # zero
+        rows.append(MetricRow("dreamsim_similarity", scores.dreamsim_similarity, "(expected low)", "INFO"))
+        rows.append(MetricRow("color_histogram", scores.color_histogram, "(expected low)", "INFO"))
+        rows.append(MetricRow("ssim", scores.ssim, "(expected low)", "INFO"))
+
+    rows.append(MetricRow("hps_score", scores.hps_score, "(informational)", "INFO"))
+    rows.append(MetricRow("aesthetics_score", scores.aesthetics_score, "(informational)", "INFO"))
+
+    vision_expected, vision_target = ("== 1.0 (MATCH)", 1.0) if case == "identity" else ("== 0.0 (MISS)", 0.0)
+    for dim, score in (
+        ("style", vision.style.score),
+        ("subject", vision.subject.score),
+        ("composition", vision.composition.score),
+        ("medium", vision.medium.score),
+        ("proportions", vision.proportions.score),
+    ):
+        rows.append(MetricRow(f"vision_{dim}", score, vision_expected, _classify(score, exact=vision_target)))
+
+    return rows
+
+
+def _build_caption_rows(style_consistency: float, compliance_stats: Any) -> list[MetricRow]:
+    """Caption-level rows (case-independent: driven by caption text + meta-prompt only)."""
+    rows: list[MetricRow] = [
+        MetricRow("style_consistency", style_consistency, "== 1.0", _classify(style_consistency, exact=1.0)),
+        MetricRow("caption_canon_fidelity", compliance_stats.style_canon_fidelity, "(informational)", "INFO"),
+        MetricRow(
+            "caption_boilerplate_purity", compliance_stats.observation_boilerplate_purity, "(informational)", "INFO"
+        ),
+        MetricRow("caption_topic_coverage", compliance_stats.section_topic_coverage, "(informational)", "INFO"),
+        MetricRow("caption_marker_coverage", compliance_stats.section_marker_coverage, "(informational)", "INFO"),
+        MetricRow("caption_section_ordering", compliance_stats.section_ordering_rate, "(informational)", "INFO"),
+        MetricRow("caption_section_balance", compliance_stats.section_balance_rate, "(informational)", "INFO"),
+        MetricRow("caption_subject_specificity", compliance_stats.subject_specificity_rate, "(informational)", "INFO"),
+    ]
+    return rows
+
+
+def _render_rows_section(heading: str, section_rows: list[MetricRow]) -> list[str]:
+    lines: list[str] = [
+        f"[{heading}]",
+        f"  {'Metric':<35} {'Value':>10}   {'Expected':<20}  Status",
+        f"  {'-' * 35} {'-' * 10}   {'-' * 20}  {'-' * 6}",
+    ]
+    for row in section_rows:
+        value_str = _fmt_float(row.value) if isinstance(row.value, float) else str(row.value)
+        lines.append(f"  {row.name:<35} {value_str:>10}   {row.expected:<20}  {row.status}")
+    lines.append("")
+    return lines
+
+
+def _render_case(case: CaseResult) -> list[str]:
+    lines: list[str] = [f"=== Case: {case.case} ({case.label}) ===", ""]
+    local = [r for r in case.rows if not r.name.startswith("vision_")]
+    vision_rows = [r for r in case.rows if r.name.startswith("vision_")]
+    if local:
+        lines.extend(_render_rows_section("Local paired", local))
+    if vision_rows:
+        lines.extend(_render_rows_section("Vision judge", vision_rows))
+    if case.vision.style_gap:
+        lines.append("[style_gap]")
+        lines.append(f"  {case.vision.style_gap}")
+        lines.append("")
+    lines.append("[Composite]")
+    lines.append(f"  composite_score     {_fmt_float(case.composite, 4)}")
+    lines.append(f"  per_image_composite {_fmt_float(case.per_image, 4)}")
+    lines.append("")
+    return lines
 
 
 def _render_table(
@@ -240,10 +398,8 @@ def _render_table(
     seed: int | None,
     provider: str,
     model: str,
-    vision: VisionScores,
-    composite: float,
-    per_image: float,
-    rows: list[MetricRow],
+    cases: list[CaseResult],
+    caption_rows: list[MetricRow],
 ) -> str:
     lines: list[str] = []
     lines.append(f"Image:    {image_path.name}")
@@ -251,98 +407,17 @@ def _render_table(
     lines.append(f"Provider: {provider} ({model})")
     lines.append("")
 
-    sections: dict[str, list[MetricRow]] = {"Local paired": [], "Vision judge": [], "Caption-level": []}
-    for row in rows:
-        if row.name.startswith("vision_"):
-            sections["Vision judge"].append(row)
-        elif row.name.startswith("caption_") or row.name == "style_consistency":
-            sections["Caption-level"].append(row)
-        else:
-            sections["Local paired"].append(row)
+    for case in cases:
+        lines.extend(_render_case(case))
 
-    for heading, section_rows in sections.items():
-        if not section_rows:
-            continue
-        lines.append(f"[{heading}]")
-        lines.append(f"  {'Metric':<35} {'Value':>10}   {'Expected':<18}  Status")
-        lines.append(f"  {'-' * 35} {'-' * 10}   {'-' * 18}  {'-' * 6}")
-        for row in section_rows:
-            value_str = _fmt_float(row.value) if isinstance(row.value, float) else str(row.value)
-            lines.append(f"  {row.name:<35} {value_str:>10}   {row.expected:<18}  {row.status}")
-        lines.append("")
+    if caption_rows:
+        lines.extend(_render_rows_section("Caption-level (both cases)", caption_rows))
 
-    if vision.style_gap:
-        lines.append("[style_gap]")
-        lines.append(f"  {vision.style_gap}")
-        lines.append("")
-
-    lines.append("[Composite]")
-    lines.append(f"  composite_score     {_fmt_float(composite, 4)}")
-    lines.append(f"  per_image_composite {_fmt_float(per_image, 4)}")
-    return "\n".join(lines)
+    return "\n".join(lines).rstrip() + "\n"
 
 
-def _build_rows(
-    scores: MetricScores, vision: VisionScores, style_consistency: float, compliance_stats: Any
-) -> list[MetricRow]:
-    rows: list[MetricRow] = []
-
-    rows.append(
-        MetricRow(
-            "dreamsim_similarity",
-            scores.dreamsim_similarity,
-            f">= {_PAIRED_TOLERANCES['dreamsim_similarity']}",
-            _classify(scores.dreamsim_similarity, minimum=_PAIRED_TOLERANCES["dreamsim_similarity"]),
-        )
-    )
-    rows.append(
-        MetricRow(
-            "color_histogram",
-            scores.color_histogram,
-            f">= {_PAIRED_TOLERANCES['color_histogram']}",
-            _classify(scores.color_histogram, minimum=_PAIRED_TOLERANCES["color_histogram"]),
-        )
-    )
-    rows.append(
-        MetricRow(
-            "ssim",
-            scores.ssim,
-            f">= {_PAIRED_TOLERANCES['ssim']}",
-            _classify(scores.ssim, minimum=_PAIRED_TOLERANCES["ssim"]),
-        )
-    )
-    rows.append(MetricRow("hps_score", scores.hps_score, "(informational)", "INFO"))
-    rows.append(MetricRow("aesthetics_score", scores.aesthetics_score, "(informational)", "INFO"))
-
-    for dim, score in (
-        ("style", vision.style.score),
-        ("subject", vision.subject.score),
-        ("composition", vision.composition.score),
-        ("medium", vision.medium.score),
-        ("proportions", vision.proportions.score),
-    ):
-        rows.append(MetricRow(f"vision_{dim}", score, "== 1.0 (MATCH)", _classify(score, exact=1.0)))
-
-    rows.append(MetricRow("style_consistency", style_consistency, "== 1.0", _classify(style_consistency, exact=1.0)))
-    rows.append(MetricRow("caption_canon_fidelity", compliance_stats.style_canon_fidelity, "(informational)", "INFO"))
-    rows.append(
-        MetricRow(
-            "caption_boilerplate_purity", compliance_stats.observation_boilerplate_purity, "(informational)", "INFO"
-        )
-    )
-    rows.append(MetricRow("caption_topic_coverage", compliance_stats.section_topic_coverage, "(informational)", "INFO"))
-    rows.append(
-        MetricRow("caption_marker_coverage", compliance_stats.section_marker_coverage, "(informational)", "INFO")
-    )
-    rows.append(
-        MetricRow("caption_section_ordering", compliance_stats.section_ordering_rate, "(informational)", "INFO")
-    )
-    rows.append(MetricRow("caption_section_balance", compliance_stats.section_balance_rate, "(informational)", "INFO"))
-    rows.append(
-        MetricRow("caption_subject_specificity", compliance_stats.subject_specificity_rate, "(informational)", "INFO")
-    )
-
-    return rows
+def _rows_to_payload(rows: list[MetricRow]) -> list[dict[str, Any]]:
+    return [{"name": r.name, "value": r.value, "expected": r.expected, "status": r.status} for r in rows]
 
 
 def _render_json(
@@ -353,10 +428,8 @@ def _render_json(
     seed: int | None,
     provider: str,
     model: str,
-    rows: list[MetricRow],
-    vision: VisionScores,
-    composite: float,
-    per_image: float,
+    cases: list[CaseResult],
+    caption_rows: list[MetricRow],
 ) -> str:
     payload = {
         "image": str(image_path),
@@ -366,10 +439,18 @@ def _render_json(
         "seed": seed,
         "provider": provider,
         "model": model,
-        "metrics": [{"name": r.name, "value": r.value, "expected": r.expected, "status": r.status} for r in rows],
-        "style_gap": vision.style_gap,
-        "composite_score": composite,
-        "per_image_composite": per_image,
+        "caption_level": _rows_to_payload(caption_rows),
+        "cases": [
+            {
+                "case": c.case,
+                "label": c.label,
+                "metrics": _rows_to_payload(c.rows),
+                "style_gap": c.vision.style_gap,
+                "composite_score": c.composite,
+                "per_image_composite": c.per_image,
+            }
+            for c in cases
+        ],
     }
     return json.dumps(payload, indent=2)
 
@@ -407,6 +488,86 @@ def _resolve_model(provider: str, explicit: str | None) -> str:
     if explicit:
         return explicit
     return _DEFAULT_GEMINI_MODEL if provider == "gemini" else _DEFAULT_XAI_MODEL
+
+
+# ---------------------------------------------------------------------------
+# Case runner
+# ---------------------------------------------------------------------------
+
+
+async def _evaluate_pair(
+    *,
+    ref_path: Path,
+    gen_path: Path,
+    caption_text: str,
+    registry: ModelRegistry,
+    eval_sem: asyncio.Semaphore,
+    vision_sem: asyncio.Semaphore,
+    provider: str,
+    model: str,
+    gemini_client: genai.Client | None,
+    xai_client: Any | None,
+) -> tuple[MetricScores, VisionScores, int]:
+    """Run local paired metrics + vision judge on a single (ref, gen) pair."""
+    (metric_scores, n_eval_failed), (_, vision_scores_list) = await asyncio.gather(
+        evaluate_images([gen_path], [ref_path], [caption_text], registry=registry, semaphore=eval_sem),
+        compare_vision_per_image(
+            [(ref_path, gen_path)],
+            [caption_text],
+            provider=provider,
+            model=model,
+            semaphore=vision_sem,
+            client=gemini_client,
+            xai_client=xai_client,
+        ),
+    )
+    scores = metric_scores[0]
+    vision = vision_scores_list[0]
+    scores = replace(
+        scores,
+        vision_style=vision.style.score,
+        vision_subject=vision.subject.score,
+        vision_composition=vision.composition.score,
+        vision_medium=vision.medium.score,
+        vision_proportions=vision.proportions.score,
+        style_gap=vision.style_gap,
+    )
+    return scores, vision, n_eval_failed
+
+
+def _compose_case(
+    *,
+    case: str,
+    label: str,
+    scores: MetricScores,
+    vision: VisionScores,
+    style_consistency: float,
+    compliance_stats: Any,
+) -> CaseResult:
+    """Wrap (scores, vision) into a CaseResult with composite + per-case rows."""
+    aggregated = aggregate([scores], completion_rate=1.0)
+    aggregated = replace(
+        aggregated,
+        style_consistency=style_consistency,
+        compliance_topic_coverage=compliance_stats.section_topic_coverage,
+        compliance_marker_coverage=compliance_stats.section_marker_coverage,
+        section_ordering_rate=compliance_stats.section_ordering_rate,
+        section_balance_rate=compliance_stats.section_balance_rate,
+        subject_specificity_rate=compliance_stats.subject_specificity_rate,
+        style_canon_fidelity=compliance_stats.style_canon_fidelity,
+        observation_boilerplate_purity=compliance_stats.observation_boilerplate_purity,
+        requested_ref_count=1,
+        actual_ref_count=1,
+    )
+    return CaseResult(
+        case=case,
+        label=label,
+        scores=scores,
+        vision=vision,
+        composite=composite_score(aggregated),
+        per_image=per_image_composite(scores),
+        rows=_build_case_rows(scores, vision, case=case),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -460,41 +621,9 @@ async def _run(args: argparse.Namespace) -> int:
     eval_sem = asyncio.Semaphore(1)
     vision_sem = asyncio.Semaphore(1)
 
-    # Pipeline: ref vs. itself.
-    (metric_scores, n_eval_failed), (_, vision_scores_list) = await asyncio.gather(
-        evaluate_images([ref_path], [ref_path], [caption_text], registry=registry, semaphore=eval_sem),
-        compare_vision_per_image(
-            [(ref_path, ref_path)],
-            [caption_text],
-            provider=provider,
-            model=model,
-            semaphore=vision_sem,
-            client=gemini_client,
-            xai_client=xai_client,
-        ),
-    )
-
-    if n_eval_failed:
-        print(f"Error: {n_eval_failed} local-metric evaluation(s) failed", file=sys.stderr)
-        return 2
-
-    scores = metric_scores[0]
-    vision = vision_scores_list[0]
-    # Merge vision into the MetricScores so composite_score sees the ternary dims.
-    scores = replace(
-        scores,
-        vision_style=vision.style.score,
-        vision_subject=vision.subject.score,
-        vision_composition=vision.composition.score,
-        vision_medium=vision.medium.score,
-        vision_proportions=vision.proportions.score,
-        style_gap=vision.style_gap,
-    )
-
+    # Caption-level metrics depend only on caption text + meta-prompt — compute once.
     cap_for_consistency = Caption(image_path=ref_path, text=caption_text)
     style_consistency = compute_style_consistency([cap_for_consistency, cap_for_consistency])
-    # Section names derived from the rendered meta-prompt's `## <name>` headers — the txt
-    # fallback only carries the rendered form, so header parsing is the common path.
     section_names = _parse_section_names(meta_prompt)
     compliance_stats, _ = compute_caption_compliance(
         section_names,
@@ -502,25 +631,64 @@ async def _run(args: argparse.Namespace) -> int:
         caption_sections=None,
         meta_prompt=meta_prompt,
     )
+    caption_rows = _build_caption_rows(style_consistency, compliance_stats)
 
-    aggregated = aggregate([scores], completion_rate=1.0)
-    aggregated = replace(
-        aggregated,
-        style_consistency=style_consistency,
-        compliance_topic_coverage=compliance_stats.section_topic_coverage,
-        compliance_marker_coverage=compliance_stats.section_marker_coverage,
-        section_ordering_rate=compliance_stats.section_ordering_rate,
-        section_balance_rate=compliance_stats.section_balance_rate,
-        subject_specificity_rate=compliance_stats.subject_specificity_rate,
-        style_canon_fidelity=compliance_stats.style_canon_fidelity,
-        observation_boilerplate_purity=compliance_stats.observation_boilerplate_purity,
-        requested_ref_count=1,
-        actual_ref_count=1,
-    )
+    with tempfile.TemporaryDirectory(prefix="verify_metrics_") as tmp:
+        black_path = make_black_square(ref_path, Path(tmp))
 
-    composite = composite_score(aggregated)
-    per_image = per_image_composite(scores)
-    rows = _build_rows(scores, vision, style_consistency, compliance_stats)
+        identity_future = _evaluate_pair(
+            ref_path=ref_path,
+            gen_path=ref_path,
+            caption_text=caption_text,
+            registry=registry,
+            eval_sem=eval_sem,
+            vision_sem=vision_sem,
+            provider=provider,
+            model=model,
+            gemini_client=gemini_client,
+            xai_client=xai_client,
+        )
+        zero_future = _evaluate_pair(
+            ref_path=ref_path,
+            gen_path=black_path,
+            caption_text=caption_text,
+            registry=registry,
+            eval_sem=eval_sem,
+            vision_sem=vision_sem,
+            provider=provider,
+            model=model,
+            gemini_client=gemini_client,
+            xai_client=xai_client,
+        )
+        (identity_scores, identity_vision, id_failed), (zero_scores, zero_vision, z_failed) = await asyncio.gather(
+            identity_future, zero_future
+        )
+
+    if id_failed or z_failed:
+        print(
+            f"Error: local-metric evaluation failures: identity={id_failed}, zero={z_failed}",
+            file=sys.stderr,
+        )
+        return 2
+
+    cases: list[CaseResult] = [
+        _compose_case(
+            case="identity",
+            label="ref vs. ref",
+            scores=identity_scores,
+            vision=identity_vision,
+            style_consistency=style_consistency,
+            compliance_stats=compliance_stats,
+        ),
+        _compose_case(
+            case="zero",
+            label="ref vs. black square",
+            scores=zero_scores,
+            vision=zero_vision,
+            style_consistency=style_consistency,
+            compliance_stats=compliance_stats,
+        ),
+    ]
 
     if args.as_json:
         out = _render_json(
@@ -530,10 +698,8 @@ async def _run(args: argparse.Namespace) -> int:
             seed=args.seed,
             provider=provider,
             model=model,
-            rows=rows,
-            vision=vision,
-            composite=composite,
-            per_image=per_image,
+            cases=cases,
+            caption_rows=caption_rows,
         )
     else:
         out = _render_table(
@@ -543,14 +709,13 @@ async def _run(args: argparse.Namespace) -> int:
             seed=args.seed,
             provider=provider,
             model=model,
-            vision=vision,
-            composite=composite,
-            per_image=per_image,
-            rows=rows,
+            cases=cases,
+            caption_rows=caption_rows,
         )
     print(out)
 
-    any_fail = any(row.status == "FAIL" for row in rows)
+    all_rows = [*caption_rows, *cases[0].rows, *cases[1].rows]
+    any_fail = any(row.status == "FAIL" for row in all_rows)
     return 1 if any_fail else 0
 
 
