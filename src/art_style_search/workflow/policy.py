@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from art_style_search.knowledge import IterationDecision
 from art_style_search.state import append_promotion_log
-from art_style_search.types import ConvergenceReason, IterationResult, LoopState, PromotionDecision, PromotionTestResult
+from art_style_search.types import ConvergenceReason, IterationResult, LoopState, PromotionDecision
 from art_style_search.utils import CATEGORY_SYNONYMS
 
 if TYPE_CHECKING:
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from art_style_search.workflow.context import RunContext
     from art_style_search.workflow.iteration_execution import IterationRanking
 
-from art_style_search.scoring import composite_score
+from art_style_search.scoring import composite_score, replicate_promotion_decision
 
 logger = logging.getLogger(__name__)
 
@@ -42,23 +42,10 @@ def _apply_exploration_result(state: LoopState, result: IterationResult) -> None
 
     Only ``current_template`` is updated so that proposals diverge from the
     exploration direction.  ``best_template`` stays in sync with
-    ``best_metrics`` — this is critical for rigorous-mode confirmatory
-    validation, which replicates the incumbent using ``best_template``.
+    ``best_metrics``.
     """
     result.kept = True
     state.current_template = result.template
-
-
-def _candidate_results_for_validation(ranking: IterationRanking) -> list[IterationResult]:
-    """Return the top proposal candidates plus synthesis candidate, if present."""
-    proposal_results = [
-        result for result in ranking.exp_results if ranking.synth_result is None or result is not ranking.synth_result
-    ]
-    sorted_proposals = sorted(proposal_results, key=lambda result: ranking.adaptive_scores[id(result)], reverse=True)
-    candidates = sorted_proposals[:2]
-    if ranking.synth_result is not None and ranking.synth_result not in candidates:
-        candidates.append(ranking.synth_result)
-    return candidates
 
 
 def _select_exploration_candidate(state: LoopState, ranking: IterationRanking) -> tuple[IterationResult, str]:
@@ -103,16 +90,10 @@ def _log_promotion_decision(
     candidate: IterationResult | None = None,
     candidate_score: float | None = None,
     replicate_scores: list[float] | None = None,
-    promotion_test: PromotionTestResult | None = None,
 ) -> None:
     """Log a promotion decision to promotion_log.jsonl."""
     selected = candidate or ranking.best_exp
     score = candidate_score if candidate_score is not None else composite_score(selected.aggregated)
-    test_result = (
-        promotion_test
-        if promotion_test is not None
-        else (ranking.promotion_test if selected is ranking.best_exp else None)
-    )
     decision_record = PromotionDecision(
         iteration=state.iteration,
         candidate_score=score,
@@ -124,24 +105,27 @@ def _log_promotion_decision(
         candidate_branch_id=selected.branch_id,
         candidate_hypothesis=selected.hypothesis,
         replicate_scores=replicate_scores,
-        p_value=test_result.p_value if test_result is not None else None,
-        test_statistic=test_result.statistic if test_result is not None else None,
     )
     append_promotion_log(decision_record, config.run_dir / "promotion_log.jsonl")
 
 
 def _apply_iteration_result(state: LoopState, ranking: IterationRanking, config: Config) -> IterationDecision:
-    """Decide improvement vs plateau and update state accordingly."""
-    improved = ranking.best_score > ranking.baseline_score + ranking.epsilon
+    """Decide improvement vs plateau and update state accordingly.
 
-    if improved and config.protocol == "rigorous":
-        promotion_test = ranking.promotion_test
-        if promotion_test is not None and not promotion_test.passed:
-            logger.info(
-                "Epsilon check passed but statistical test failed (p=%.4f) — rejecting promotion",
-                promotion_test.p_value,
+    When replicate scores are present on the ranking (A1 paired-replicate gate), use the
+    dominance + effect-size decision; otherwise fall back to the single-shot epsilon check.
+    """
+    if ranking.best_replicate_scores is not None and ranking.baseline_replicate_scores is not None:
+        improved = (
+            replicate_promotion_decision(
+                ranking.best_replicate_scores,
+                ranking.baseline_replicate_scores,
+                epsilon=ranking.epsilon,
             )
-            improved = False
+            == "promoted"
+        )
+    else:
+        improved = ranking.best_score > ranking.baseline_score + ranking.epsilon
 
     if improved:
         _apply_best_result(state, ranking.best_exp)

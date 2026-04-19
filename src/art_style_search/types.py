@@ -460,6 +460,8 @@ class KnowledgeBase:
             return hyp
 
         max_insights = 5
+        max_rejected = 15  # A4 corollary: wider failure memory helps the reasoner avoid re-proposing
+        # mode-collapse patterns across phase 1 → phase 2 resume
 
         perceptual_delta = metric_delta.get("dreamsim", 0.0)
         if outcome == "confirmed" or outcome == "partial":
@@ -476,8 +478,8 @@ class KnowledgeBase:
             short = statement[:120]
             if short not in cat.rejected_approaches:
                 cat.rejected_approaches.append(short)
-                if len(cat.rejected_approaches) > max_insights:
-                    cat.rejected_approaches = cat.rejected_approaches[-max_insights:]
+                if len(cat.rejected_approaches) > max_rejected:
+                    cat.rejected_approaches = cat.rejected_approaches[-max_rejected:]
 
         return hyp
 
@@ -573,11 +575,8 @@ class LoopState:
     pairwise_feedback: str = ""
     converged: bool = False
     convergence_reason: ConvergenceReason | None = None
-    # Scientific rigor fields (Phase 1-3)
     seed: int = 0
-    protocol: str = "classic"  # "classic" or "rigorous"
-    feedback_refs: list[Path] = field(default_factory=list)  # shown to reasoning model
-    silent_refs: list[Path] = field(default_factory=list)  # evaluated but hidden from optimizer
+    protocol: str = "short"  # "short" (default, 3-iter foundation) or "classic" (5-iter refinement)
     # Canon edit ledger — ring buffer capped at _CANON_EDIT_LEDGER_MAX. Rendered into the
     # reasoner's brainstorm context as "Canon Edit History" so the reasoner can see its
     # own prior edits and their measured effect on style/medium/proportions.
@@ -593,7 +592,7 @@ class LoopState:
 class RunManifest:
     """Write-once provenance record for a run."""
 
-    protocol_version: str  # "classic" or "rigorous_v1"
+    protocol_version: str  # "short" or "classic"
     seed: int
     cli_args: dict[str, Any]
     model_names: dict[str, str]  # caption_model, generator_model, reasoning_model, comparison_model
@@ -623,25 +622,16 @@ class PromotionDecision:
     candidate_branch_id: int
     candidate_hypothesis: str
     replicate_scores: list[float] | None = None
-    p_value: float | None = None
-    test_statistic: float | None = None
-
-
-@dataclass(frozen=True)
-class PromotionTestResult:
-    """Statistical test result for promotion decisions (rigorous mode)."""
-
-    statistic: float
-    p_value: float  # one-sided
-    effect_size: float  # mean paired difference
-    ci_lower: float  # 95% CI lower bound of mean difference
-    ci_upper: float
-    passed: bool  # p < 0.10 AND effect_size > 0
 
 
 @dataclass
 class ReplicatedEvaluation:
-    """Replicated evaluation for confirmatory validation (rigorous mode)."""
+    """Replicated evaluation of a single template — per-image scores + aggregates.
+
+    Used by the paired-replicate promotion gate (``A1``): a candidate's ``n_replicates``
+    runs yield a median aggregate that is compared against the incumbent's replicate
+    distribution. Also reused by the short-protocol iter-3 synthesis replication step.
+    """
 
     template: PromptTemplate
     branch_id: int

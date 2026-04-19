@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 
-from art_style_search.types import AggregatedMetrics, MetricScores, PromotionTestResult, compliance_components_mean
+from art_style_search.types import AggregatedMetrics, MetricScores, compliance_components_mean
 from art_style_search.utils import CATEGORY_SYNONYMS as _CATEGORY_SYNONYMS
 
 _HPS_CEILING = 0.35  # default empirical max for HPS v2 scores; used to normalize to [0, 1]
@@ -59,6 +59,44 @@ def improvement_epsilon(baseline: float) -> float:
     """
     clamped = min(max(baseline, 0.0), 1.0)
     return max(IMPROVEMENT_EPSILON * (1.0 - clamped), _EPSILON_FLOOR)
+
+
+def replicate_promotion_decision(
+    candidate_scores: list[float],
+    baseline_scores: list[float],
+    *,
+    epsilon: float,
+) -> str:
+    """A1 paired-replicate promotion gate.
+
+    Requires BOTH conditions to promote:
+
+    1. **Hard dominance** — ``min(candidate) > max(baseline)``. With 3 replicates per side
+       this cuts SNR from ~30x to ~5x vs a single-shot epsilon check, letting genuinely
+       better candidates clear the gate without being drowned by branch-level variance.
+    2. **Effect-size clearance** — ``median(candidate) > median(baseline) + epsilon``.
+       Dominance without a meaningful median delta is still noise — the candidate just
+       happened to sample above the incumbent on every replicate.
+
+    Returns ``"promoted"`` or ``"rejected"``. An empty candidate list always rejects;
+    an empty baseline list (first iteration, no prior metrics) skips the dominance check
+    and falls back to median-vs-epsilon only.
+    """
+    if not candidate_scores:
+        return "rejected"
+
+    import statistics
+
+    candidate_median = statistics.median(candidate_scores)
+    if not baseline_scores:
+        return "promoted" if candidate_median > epsilon else "rejected"
+
+    baseline_median = statistics.median(baseline_scores)
+    candidate_min = min(candidate_scores)
+    baseline_max = max(baseline_scores)
+    dominates = candidate_min > baseline_max
+    clears_epsilon = candidate_median > baseline_median + epsilon
+    return "promoted" if dominates and clears_epsilon else "rejected"
 
 
 def compliance_mean(m: AggregatedMetrics) -> float:
@@ -109,32 +147,33 @@ def _normalize_hps(raw: float, ceiling: float = _HPS_CEILING) -> float:
     return min(raw / ceiling, 1.0)
 
 
-def composite_score(m: AggregatedMetrics) -> float:
-    """Fixed-weight composite score used for absolute quality comparison.
+# ---------------------------------------------------------------------------
+# Weighted-axis terms (shared by composite + headroom composite)
+# ---------------------------------------------------------------------------
 
-    All metrics normalized to ~[0, 1] before weighting.
-    Weights: DreamSim 34%, HPS 7%, Aesthetics 6%, Color 17%, SSIM 10%,
-    StyleConsistency 4%, Vision(style) 6%, Vision(subject) 7%,
-    Vision(composition) 4%, Vision(medium) 2%, Vision(proportions) 3%.
-    Total = 1.00.
-    Includes a consistency penalty based on per-image score variance.
+# Each entry is ``(weight, score_extractor)``. Keeping the list in one place means composite_score
+# and headroom_composite_score can't drift — both iterate the same axes with the same normalization.
+_COMPOSITE_AXES: tuple[tuple[float, Callable[[AggregatedMetrics], float]], ...] = (
+    (_W_DREAMSIM, lambda m: m.dreamsim_similarity_mean),
+    (_W_HPS, lambda m: _normalize_hps(m.hps_score_mean)),
+    (_W_AESTHETICS, lambda m: m.aesthetics_score_mean / 10.0),
+    (_W_COLOR, lambda m: m.color_histogram_mean),
+    (_W_SSIM, lambda m: m.ssim_mean),
+    (_W_STYLE_CON, lambda m: m.style_consistency),
+    (_W_VISION_STYLE, lambda m: m.vision_style),
+    (_W_VISION_SUBJECT, lambda m: m.vision_subject),
+    (_W_VISION_COMP, lambda m: m.vision_composition),
+    (_W_VISION_MEDIUM, lambda m: m.vision_medium),
+    (_W_VISION_PROPORTIONS, lambda m: m.vision_proportions),
+)
+
+
+def _composite_penalties(m: AggregatedMetrics) -> float:
+    """Sum of all composite penalties (variance, completion, compliance, ref-shortfall, subject-floor).
+
+    Same for ``composite_score`` and ``headroom_composite_score`` — only the forward base term differs.
     """
-    base = (
-        _W_DREAMSIM * m.dreamsim_similarity_mean
-        + _W_HPS * _normalize_hps(m.hps_score_mean)
-        + _W_AESTHETICS * (m.aesthetics_score_mean / 10.0)
-        + _W_COLOR * m.color_histogram_mean
-        + _W_SSIM * m.ssim_mean
-        + _W_STYLE_CON * m.style_consistency
-        + _W_VISION_STYLE * m.vision_style
-        + _W_VISION_SUBJECT * m.vision_subject
-        + _W_VISION_COMP * m.vision_composition
-        + _W_VISION_MEDIUM * m.vision_medium
-        + _W_VISION_PROPORTIONS * m.vision_proportions
-    )
-    # Penalize inconsistency: high std across images means unreliable reproduction
     variance_penalty = _W_VARIANCE_PENALTY * (m.dreamsim_similarity_std + m.color_histogram_std) / 2.0
-    # Penalize incomplete experiments: missing images should not inflate scores
     completion_penalty = (1.0 - m.completion_rate) * _W_COMPLETION_PENALTY
     compliance_score = compliance_components_mean(
         m.compliance_topic_coverage,
@@ -146,7 +185,6 @@ def composite_score(m: AggregatedMetrics) -> float:
         m.observation_boilerplate_purity,
     )
     compliance_penalty = (1.0 - compliance_score) * _W_COMPLIANCE_PENALTY
-
     ref_shortfall = 0.0
     if m.requested_ref_count > 0:
         ref_shortfall = max(m.requested_ref_count - m.actual_ref_count, 0) / m.requested_ref_count
@@ -155,15 +193,43 @@ def composite_score(m: AggregatedMetrics) -> float:
     if m.vision_subject < _VISION_SUBJECT_FLOOR:
         shortfall = (_VISION_SUBJECT_FLOOR - m.vision_subject) / _VISION_SUBJECT_FLOOR
         subject_floor_penalty = shortfall * _W_VISION_SUBJECT_FLOOR_PENALTY
-    return max(
-        0.0,
-        base
-        - variance_penalty
-        - completion_penalty
-        - compliance_penalty
-        - ref_shortfall_penalty
-        - subject_floor_penalty,
-    )
+    return variance_penalty + completion_penalty + compliance_penalty + ref_shortfall_penalty + subject_floor_penalty
+
+
+def composite_score(m: AggregatedMetrics) -> float:
+    """Fixed-weight composite score used for absolute quality comparison.
+
+    All metrics normalized to ~[0, 1] before weighting.
+    Weights: DreamSim 34%, HPS 7%, Aesthetics 6%, Color 17%, SSIM 10%,
+    StyleConsistency 4%, Vision(style) 6%, Vision(subject) 7%,
+    Vision(composition) 4%, Vision(medium) 2%, Vision(proportions) 3%.
+    Total = 1.00.
+    Includes a consistency penalty based on per-image score variance.
+    """
+    base = sum(weight * extractor(m) for weight, extractor in _COMPOSITE_AXES)
+    return max(0.0, base - _composite_penalties(m))
+
+
+def headroom_composite_score(m: AggregatedMetrics) -> float:
+    """A6: headroom-weighted composite that redirects weight away from saturated axes.
+
+    Saturated metrics (those at or near 1.0) carry no marginal utility for the optimizer —
+    keeping their static weight drowns out signal from axes that can still move. This variant
+    reweights each axis by ``w_m * (1 - s_m)`` then renormalizes so the weights sum to the
+    original ``Σ w_m`` (preserving headline-score scale). When every axis is fully saturated
+    we fall back to ``composite_score`` to keep rankings defined.
+
+    Penalties (variance, completion, compliance, ref-shortfall, subject-floor) are applied
+    identically to ``composite_score``.
+    """
+    static_total = sum(weight for weight, _ in _COMPOSITE_AXES)
+    raw_headroom = [(weight * (1.0 - extractor(m)), extractor) for weight, extractor in _COMPOSITE_AXES]
+    headroom_total = sum(weight for weight, _ in raw_headroom)
+    if headroom_total <= 0:
+        return composite_score(m)
+    scale = static_total / headroom_total
+    base = sum((weight * scale) * extractor(m) for weight, extractor in raw_headroom)
+    return max(0.0, base - _composite_penalties(m))
 
 
 def adaptive_composite_score(
@@ -261,7 +327,7 @@ def classify_hypothesis(text: str, categories: list[str]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Per-image composite score (for statistical testing)
+# Per-image composite score
 # ---------------------------------------------------------------------------
 
 
@@ -283,77 +349,4 @@ def per_image_composite(s: MetricScores) -> float:
         + _W_VISION_COMP * s.vision_composition
         + _W_VISION_MEDIUM * s.vision_medium
         + _W_VISION_PROPORTIONS * s.vision_proportions
-    )
-
-
-# ---------------------------------------------------------------------------
-# Statistical testing for promotion decisions (rigorous mode)
-# ---------------------------------------------------------------------------
-
-_PROMOTION_ALPHA = 0.10  # relaxed threshold for internal trustworthiness
-_BOOTSTRAP_RESAMPLES = 2000
-
-
-def paired_promotion_test(
-    candidate_scores: list[MetricScores],
-    incumbent_scores: list[MetricScores],
-) -> PromotionTestResult:
-    """Wilcoxon signed-rank test on per-image composite scores.
-
-    Returns a ``PromotionTestResult`` with one-sided p-value (H1: candidate > incumbent),
-    effect size (mean paired difference), and bootstrap 95% CI on the mean difference.
-    Falls back to a sign test when Wilcoxon assumptions are violated (too many ties).
-
-    Note: uses ``per_image_composite`` which has max 0.94 (no style_consistency term),
-    so paired differences are on a [0, 0.94] scale rather than [0, 1.0].
-    """
-    import numpy as np
-    from scipy import stats as sp_stats
-
-    n = min(len(candidate_scores), len(incumbent_scores))
-    diffs = np.array(
-        [per_image_composite(candidate_scores[i]) - per_image_composite(incumbent_scores[i]) for i in range(n)]
-    )
-
-    effect_size = float(np.mean(diffs))
-
-    # Bootstrap 95% CI on mean difference
-    rng = np.random.default_rng(42)
-    boot_means = np.array(
-        [float(np.mean(rng.choice(diffs, size=n, replace=True))) for _ in range(_BOOTSTRAP_RESAMPLES)]
-    )
-    ci_lower = float(np.percentile(boot_means, 2.5))
-    ci_upper = float(np.percentile(boot_means, 97.5))
-
-    # Wilcoxon signed-rank test (one-sided: candidate > incumbent)
-    try:
-        stat_result = sp_stats.wilcoxon(diffs, alternative="greater")
-        statistic = float(stat_result.statistic)
-        p_value = float(stat_result.pvalue)
-    except ValueError:
-        # Falls back to sign test if all differences are zero or too many ties
-        n_pos = int(np.sum(diffs > 0))
-        n_neg = int(np.sum(diffs < 0))
-        n_nonzero = n_pos + n_neg
-        if n_nonzero == 0:
-            return PromotionTestResult(
-                statistic=0.0,
-                p_value=1.0,
-                effect_size=effect_size,
-                ci_lower=ci_lower,
-                ci_upper=ci_upper,
-                passed=False,
-            )
-        sign_result = sp_stats.binomtest(n_pos, n_nonzero, 0.5, alternative="greater")
-        statistic = float(n_pos)
-        p_value = float(sign_result.pvalue)
-
-    passed = p_value < _PROMOTION_ALPHA and effect_size > 0
-    return PromotionTestResult(
-        statistic=statistic,
-        p_value=p_value,
-        effect_size=effect_size,
-        ci_lower=ci_lower,
-        ci_upper=ci_upper,
-        passed=passed,
     )

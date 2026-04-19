@@ -247,10 +247,16 @@ async def test_propose_iteration_experiments_requests_raw_batch_and_selects_port
 
     assert should_stop is False
     assert seen_num_sketches == [18]
-    assert len(proposals) == 9
+    # A4 quota: 3 distinct target_categories (subject_anchor, composition, lighting), cap 2 each = 6 proposals.
+    # Under the old regime (no quota) this test expected 9; the under-fill is the intended mode-collapse signal.
+    assert len(proposals) == 6
     assert [proposal.direction_id for proposal in proposals[:3]] == ["D1", "D2", "D3"]
     assert [proposal.risk_level for proposal in proposals[:3]] == ["targeted", "targeted", "targeted"]
-    assert [proposal.risk_level for proposal in proposals[3:]] == ["bold", "bold", "bold", "bold", "bold", "bold"]
+    assert [proposal.risk_level for proposal in proposals[3:]] == ["bold", "bold", "bold"]
+    # Each category appears exactly twice (one targeted + one bold).
+    categories = [p.target_category for p in proposals]
+    for cat in ("subject_anchor", "composition", "lighting"):
+        assert categories.count(cat) == 2
 
 
 @pytest.mark.asyncio

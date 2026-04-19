@@ -10,7 +10,6 @@ from art_style_search.reporting.charts import _build_composite_trajectory, _buil
 from art_style_search.reporting.render import (
     _h,
     _render_header,
-    _render_holdout_section,
     _render_iteration_drilldown,
     _render_kb_section,
     _render_promotion_section,
@@ -59,7 +58,6 @@ def _assemble_html(data: ReportData, report_dir, *, offline: bool = False) -> st
     kb_section = _render_kb_section(data)
     protocol_section = _render_protocol_section(data)
     promotion_section = _render_promotion_section(data)
-    holdout_section = _render_holdout_section(data)
 
     plot_script = ""
     if composite_json and multi_json:
@@ -103,7 +101,6 @@ def _assemble_html(data: ReportData, report_dir, *, offline: bool = False) -> st
     {kb_section}
     {protocol_section}
     {promotion_section}
-    {holdout_section}
   </main>
   {plot_script}
 </body>

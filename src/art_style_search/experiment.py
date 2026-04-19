@@ -342,7 +342,7 @@ async def run_experiment(
 
 
 # ---------------------------------------------------------------------------
-# Replicated evaluation (rigorous mode)
+# Replicated evaluation (A1 paired-replicate promotion gate + short-protocol synthesis)
 # ---------------------------------------------------------------------------
 
 
@@ -386,12 +386,13 @@ async def replicate_experiment(
     existing_result: IterationResult | None = None,
     existing_scores: list[MetricScores] | None = None,
 ) -> ReplicatedEvaluation:
-    """Run replicated caption+generate+evaluate cycles for confirmatory validation.
+    """Run replicated caption+generate+evaluate cycles for a single template.
 
-    If *existing_result* is provided, its full per-image result is used as
-    replicate 0. Otherwise, *existing_scores* can seed replicate 0 with score
-    data only. In both cases, only ``n_replicates - 1`` additional replicates
-    are generated.
+    Used by the A1 paired-replicate promotion gate (classic refinement pass) and by the
+    short protocol's iter-3 synthesis confirmation. If *existing_result* is provided, its
+    full per-image result is used as replicate 0. Otherwise, *existing_scores* can seed
+    replicate 0 with score data only. In both cases, only ``n_replicates - 1`` additional
+    replicates are generated.
     """
     meta_prompt = template.render()
     style_canon = next((s.value for s in template.sections if s.name == "style_foundation"), "")

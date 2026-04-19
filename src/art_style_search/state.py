@@ -191,8 +191,6 @@ def load_promotion_log(path: Path) -> list[PromotionDecision]:
                 candidate_branch_id=d["candidate_branch_id"],
                 candidate_hypothesis=d.get("candidate_hypothesis", ""),
                 replicate_scores=d.get("replicate_scores"),
-                p_value=d.get("p_value"),
-                test_statistic=d.get("test_statistic"),
             )
         )
     return decisions

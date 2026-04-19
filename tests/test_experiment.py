@@ -138,7 +138,7 @@ class TestReplicateExperiment:
             gemini_concurrency=1,
             eval_concurrency=1,
             seed=42,
-            protocol="rigorous",
+            protocol="classic",
             anthropic_api_key="test",
             google_api_key="test",
             zai_api_key="",

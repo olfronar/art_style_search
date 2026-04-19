@@ -11,7 +11,9 @@ _SCHEMA_VERSION = (
     #     adds vision style_gap notes + KnowledgeBase.style_gap_observations
     # v7: canon edit ledger — LoopState.canon_edit_ledger ring buffer recording cross-iteration canon edits +
     #     measured effect, rendered into the reasoner's brainstorm context as "Canon Edit History"
-    7
+    # v8: rigorous protocol removed — drops feedback_refs/silent_refs; protocol enum collapsed to
+    #     {"short", "classic"} with short as the default foundation pass.
+    8
 )
 _ITERATION_LOG_SCHEMA_VERSION = 1
 _MANIFEST_SCHEMA_VERSION = 3
@@ -146,6 +148,11 @@ def _migrate_state_payload(raw: dict[str, Any], version: int) -> dict[str, Any]:
         data["knowledge_base"] = _migrate_knowledge_base_payload(dict(data["knowledge_base"]))
     # v7: canon edit ledger — backfill empty on pre-v7 payloads
     data.setdefault("canon_edit_ledger", [])
+    # v8: rigorous protocol removal — drop legacy info-barrier refs and normalize protocol string.
+    data.pop("feedback_refs", None)
+    data.pop("silent_refs", None)
+    if data.get("protocol") == "rigorous":
+        data["protocol"] = "classic"
     return data
 
 
@@ -172,6 +179,8 @@ def _migrate_promotion_payload(raw: dict[str, Any], version: int) -> dict[str, A
     if version < 1:
         data.setdefault("candidate_hypothesis", "")
         data.setdefault("replicate_scores", None)
-        data.setdefault("p_value", None)
-        data.setdefault("test_statistic", None)
+    # v8 cleanup: rigorous-era fields dropped from PromotionDecision. Silently discard them
+    # from historical promotion_log.jsonl lines so load_promotion_log doesn't choke.
+    data.pop("p_value", None)
+    data.pop("test_statistic", None)
     return data

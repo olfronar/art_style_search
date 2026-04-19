@@ -629,17 +629,24 @@ def _is_structurally_novel(
     return _length_target_delta_ratio(cand_sig[2], incumb_sig[2]) >= length_delta_threshold
 
 
+_DEFAULT_MAX_PER_CATEGORY = 2
+
+
 def select_experiment_portfolio(
     results: list[RefinementResult],
     *,
     num_experiments: int,
     num_directions: int = 3,
     incumbent_template: PromptTemplate | None = None,
+    max_per_category: int = _DEFAULT_MAX_PER_CATEGORY,
 ) -> list[RefinementResult]:
     """Select a portfolio from raw proposals.
 
-    Take one targeted proposal per direction first, preserving direction order,
-    then fill remaining slots with bold proposals in original order.
+    Pick one targeted proposal per direction first (preserving direction order), then fill
+    remaining slots with bold proposals, then any leftovers. Throughout, enforce an A4 quota:
+    no single ``target_category`` may appear more than ``max_per_category`` times in the final
+    portfolio (default 2). Hitting the cap can return fewer proposals than ``num_experiments`` —
+    that under-fill is the intended mode-collapse signal.
 
     When *incumbent_template* is provided, the portfolio is post-checked for structural
     novelty: if every selected proposal shares the incumbent's structural signature,
@@ -659,30 +666,39 @@ def select_experiment_portfolio(
 
     selected: list[RefinementResult] = []
     seen_ids: set[int] = set()
+    per_category_count: dict[str, int] = {}
+
+    def _category_full(candidate: RefinementResult) -> bool:
+        cat = candidate.target_category or ""
+        return per_category_count.get(cat, 0) >= max_per_category
+
+    def _accept(candidate: RefinementResult) -> None:
+        cat = candidate.target_category or ""
+        selected.append(candidate)
+        seen_ids.add(id(candidate))
+        per_category_count[cat] = per_category_count.get(cat, 0) + 1
 
     for direction_id in direction_order[:num_directions]:
         targeted = next((r for r in grouped[direction_id] if r.risk_level != "bold"), None)
-        if targeted is None:
+        if targeted is None or _category_full(targeted):
             continue
-        selected.append(targeted)
-        seen_ids.add(id(targeted))
+        _accept(targeted)
         if len(selected) >= num_experiments:
             break
 
     if len(selected) < num_experiments:
-        bold_candidates = [r for r in results if r.risk_level == "bold" and id(r) not in seen_ids]
-        for candidate in bold_candidates:
-            selected.append(candidate)
-            seen_ids.add(id(candidate))
+        for candidate in results:
+            if candidate.risk_level != "bold" or id(candidate) in seen_ids or _category_full(candidate):
+                continue
+            _accept(candidate)
             if len(selected) >= num_experiments:
                 break
 
     if len(selected) < num_experiments:
         for candidate in results:
-            if id(candidate) in seen_ids:
+            if id(candidate) in seen_ids or _category_full(candidate):
                 continue
-            selected.append(candidate)
-            seen_ids.add(id(candidate))
+            _accept(candidate)
             if len(selected) >= num_experiments:
                 break
 

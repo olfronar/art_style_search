@@ -21,7 +21,6 @@ from art_style_search.workflow.context import (
     _ref_cache_key,
     _sample,
     _save_best_prompt,
-    _split_information_barrier,
 )
 from art_style_search.workflow.policy import _apply_best_result
 
@@ -119,10 +118,6 @@ async def _zero_step(ctx: RunContext, all_ref_paths: list[Path]) -> LoopState:
     fixed_refs = _sample(all_ref_paths, config.num_fixed_refs, rng=ctx.rng)
     logger.info("Fixed %d reference images for optimization", len(fixed_refs))
 
-    feedback_refs, silent_refs = _split_information_barrier(fixed_refs, config.protocol, ctx.rng)
-    if silent_refs:
-        logger.info("Information barrier: %d feedback + %d silent images", len(feedback_refs), len(silent_refs))
-
     caption_cache_dir = config.log_dir / "captions"
     # Gemini keeps the historical "initial" key so existing caches stay valid; non-gemini providers
     # tag the key so captions produced under a different captioner aren't mistakenly reused.
@@ -200,8 +195,6 @@ async def _zero_step(ctx: RunContext, all_ref_paths: list[Path]) -> LoopState:
         fixed_references=fixed_refs,
         seed=config.seed,
         protocol=config.protocol,
-        feedback_refs=feedback_refs,
-        silent_refs=silent_refs,
     )
 
     save_state(state, config.state_file)

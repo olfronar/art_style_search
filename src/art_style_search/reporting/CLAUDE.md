@@ -1,10 +1,10 @@
 # reporting/ — HTML report
 
-Note: the façade lives at `src/art_style_search/report.py` (re-exports `build_report`, `build_all_reports`, `load_report_data`, `ReportData`). Data loading lives in `report_data.py` (`ReportData` dataclass centralizes state, iteration logs, manifest, promotion decisions, holdout summary).
+Note: the façade lives at `src/art_style_search/report.py` (re-exports `build_report`, `build_all_reports`, `load_report_data`, `ReportData`). Data loading lives in `report_data.py` (`ReportData` dataclass centralizes state, iteration logs, manifest, promotion decisions).
 
 ## Module map
 
-- `render.py` - HTML section renderers: header, summary (score trajectory + hypothesis outcomes + top open problems), trajectories, iteration drilldown, KB, protocol, promotion decisions, holdout. Vision feedback XML tags parsed into styled verdict cards. Prompt diffs via `difflib.unified_diff`.
+- `render.py` - HTML section renderers: header, summary (score trajectory + hypothesis outcomes + top open problems), trajectories, iteration drilldown, KB, protocol, promotion decisions. Vision feedback XML tags parsed into styled verdict cards. Prompt diffs via `difflib.unified_diff`.
 - `charts.py` - Plotly chart builders (composite trajectory + per-metric subplots); lazy-imports Plotly.
 - `document.py` - HTML5 document assembly; CSS lazy-loaded via `functools.cache`. `--offline` embeds Plotly JS inline.
 - `report.css` - Editorial dark-theme design system (CSS custom properties, responsive at 880px).

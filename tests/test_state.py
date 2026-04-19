@@ -505,7 +505,7 @@ class TestManifestRoundTrip:
 
     def test_save_and_load_manifest(self, tmp_path: Path) -> None:
         manifest = RunManifest(
-            protocol_version="rigorous_v1",
+            protocol_version="classic",
             seed=42,
             cli_args={"num_fixed_refs": 20, "max_iterations": 50},
             model_names={
@@ -602,8 +602,6 @@ class TestPromotionLog:
             candidate_branch_id=1,
             candidate_hypothesis="Increase brush detail",
             replicate_scores=[0.61, 0.63, 0.62],
-            p_value=0.35,
-            test_statistic=1.2,
         )
 
         append_promotion_log(d1, log_path)
@@ -617,15 +615,12 @@ class TestPromotionLog:
         assert loaded[0].candidate_score == 0.65
         assert loaded[0].candidate_hypothesis == "Add hex color codes"
         assert loaded[0].replicate_scores is None
-        assert loaded[0].p_value is None
 
         assert loaded[1].iteration == 2
         assert loaded[1].decision == "rejected"
         assert loaded[1].candidate_score == 0.62
         assert loaded[1].candidate_hypothesis == "Increase brush detail"
         assert loaded[1].replicate_scores == [0.61, 0.63, 0.62]
-        assert loaded[1].p_value == 0.35
-        assert loaded[1].test_statistic == 1.2
 
     def test_log_lines_include_schema_marker(self, tmp_path: Path) -> None:
         log_path = tmp_path / "promotions.jsonl"
@@ -653,14 +648,12 @@ class TestPromotionLog:
 
 
 class TestLoopStateNewFields:
-    """Test that seed, protocol, feedback_refs, silent_refs survive save/load."""
+    """Test that seed and protocol survive save/load."""
 
     def test_round_trip_with_new_fields(self, tmp_path: Path) -> None:
         state = make_loop_state(global_best_metrics=make_aggregated_metrics())
         state.seed = 12345
-        state.protocol = "rigorous"
-        state.feedback_refs = [Path("/data/refs/img_001.png"), Path("/data/refs/img_002.png")]
-        state.silent_refs = [Path("/data/refs/img_003.png")]
+        state.protocol = "classic"
 
         state_file = tmp_path / "state.json"
         save_state(state, state_file)
@@ -668,6 +661,51 @@ class TestLoopStateNewFields:
 
         assert loaded is not None
         assert loaded.seed == 12345
-        assert loaded.protocol == "rigorous"
-        assert loaded.feedback_refs == [Path("/data/refs/img_001.png"), Path("/data/refs/img_002.png")]
-        assert loaded.silent_refs == [Path("/data/refs/img_003.png")]
+        assert loaded.protocol == "classic"
+
+    def test_legacy_rigorous_state_migrates_to_classic(self, tmp_path: Path) -> None:
+        """v7 state.json with rigorous protocol + feedback_refs/silent_refs → v8 classic, fields dropped."""
+        import json
+
+        state_file = tmp_path / "state.json"
+        legacy_payload = {
+            "_schema_version": 7,
+            "iteration": 0,
+            "current_template": {
+                "sections": [],
+                "negative_prompt": None,
+                "caption_sections": [],
+                "caption_length_target": 0,
+            },
+            "best_template": {
+                "sections": [],
+                "negative_prompt": None,
+                "caption_sections": [],
+                "caption_length_target": 0,
+            },
+            "best_metrics": None,
+            "knowledge_base": {"hypotheses": [], "categories": {}, "open_problems": [], "next_id": 1},
+            "captions": [],
+            "style_profile": {
+                "color_palette": "",
+                "composition": "",
+                "technique": "",
+                "mood_atmosphere": "",
+                "subject_matter": "",
+                "influences": "",
+                "gemini_raw_analysis": "",
+                "claude_raw_analysis": "",
+            },
+            "fixed_references": [],
+            "seed": 99,
+            "protocol": "rigorous",
+            "feedback_refs": ["/data/refs/a.png"],
+            "silent_refs": ["/data/refs/b.png"],
+        }
+        state_file.write_text(json.dumps(legacy_payload), encoding="utf-8")
+
+        loaded = load_state(state_file)
+        assert loaded is not None
+        assert loaded.protocol == "classic"  # migrated away from rigorous
+        assert not hasattr(loaded, "feedback_refs")
+        assert not hasattr(loaded, "silent_refs")

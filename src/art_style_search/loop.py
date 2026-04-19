@@ -33,10 +33,10 @@ from art_style_search.workflow.context import (
 from art_style_search.workflow.iteration_context import _build_iteration_context
 from art_style_search.workflow.iteration_execution import (
     IterationRanking,
-    _confirmatory_validation,
     _run_experiments_parallel,
     _run_independent_review,
     _run_pairwise_comparison,
+    _run_replicate_gate,
     _run_synthesis_experiment,
     _score_and_rank,
     _synthesize_reasoning,
@@ -138,9 +138,9 @@ async def run(config: Config) -> LoopState:
                 logger.warning("Synthesis experiment failed — continuing with individual experiments", exc_info=True)
 
         try:
-            await _confirmatory_validation(ranking, state, ctx, iteration)
+            await _run_replicate_gate(ranking, state, ctx, iteration)
         except Exception:
-            logger.warning("Confirmatory validation failed — falling back to single-pass", exc_info=True)
+            logger.warning("Replicate gate failed — falling back to single-shot", exc_info=True)
 
         baseline_metrics = state.best_metrics
         prior_canon = extract_style_canon(state.current_template.render())

@@ -911,8 +911,8 @@ details.hyp > summary::-webkit-details-marker { display: none; }
   font-family: var(--mono); font-size: 13px; font-weight: 700;
   padding: 4px 12px; border-radius: 4px; letter-spacing: 0.05em;
 }
-.badge-classic { background: var(--panel); color: var(--ink-muted); border: 1px solid var(--rule); }
-.badge-rigorous { background: rgba(201,169,97,0.15); color: var(--gold); border: 1px solid var(--gold); }
+.badge-classic { background: rgba(201,169,97,0.15); color: var(--gold); border: 1px solid var(--gold); }
+.badge-short { background: var(--panel); color: var(--ink-muted); border: 1px solid var(--rule); }
 .manifest-item { font-family: var(--mono); font-size: 13px; color: var(--ink-muted); }
 .manifest-item code { color: var(--ink); }
 
@@ -920,17 +920,3 @@ details.hyp > summary::-webkit-details-marker { display: none; }
 .promotion-table .promo-explore td:last-child { color: var(--gold); font-weight: 600; }
 .promotion-table .promo-no td:last-child { color: var(--ink-muted); }
 .decision-cell { text-transform: uppercase; font-family: var(--mono); font-size: 12px; letter-spacing: 0.05em; }
-
-.holdout-grid {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px;
-  padding: 24px 0;
-}
-.holdout-card {
-  background: var(--panel); border: 1px solid var(--rule); border-radius: 8px;
-  padding: 20px; text-align: center;
-}
-.holdout-label { font-family: var(--sans); font-size: 13px; color: var(--ink-muted); margin-bottom: 8px; }
-.holdout-value { font-family: var(--mono); font-size: 24px; color: var(--ink); }
-.holdout-up { color: var(--accent); }
-.holdout-down { color: var(--ink-muted); }
-.holdout-images { font-family: var(--mono); font-size: 12px; color: var(--ink-muted); word-break: break-all; }

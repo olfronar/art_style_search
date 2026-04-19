@@ -193,7 +193,6 @@ def _render_header(data: ReportData) -> str:
             f"<div class='kv-row'><dt>Requested refs</dt><dd>{data.requested_ref_count}</dd></div>",
             f"<div class='kv-row'><dt>Discovered refs</dt><dd>{data.discovered_ref_count}</dd></div>",
             f"<div class='kv-row'><dt>Actual refs</dt><dd>{data.actual_ref_count}</dd></div>",
-            f"<div class='kv-row'><dt>Feedback / silent</dt><dd>{len(state.feedback_refs)} / {len(state.silent_refs)}</dd></div>",
         ]
     )
 
@@ -714,7 +713,9 @@ def _render_protocol_section(data: ReportData) -> str:
     if manifest is None:
         return ""
 
-    badge_class = "badge-rigorous" if "rigorous" in manifest.protocol_version else "badge-classic"
+    badge_class = (
+        f"badge-{manifest.protocol_version}" if manifest.protocol_version in ("short", "classic") else "badge-classic"
+    )
     badge_label = manifest.protocol_version.upper().replace("_", " ")
     git_line = (
         f'<span class="manifest-item">Git: <code>{_h(manifest.git_sha[:10])}</code></span>' if manifest.git_sha else ""
@@ -760,7 +761,6 @@ def _render_promotion_section(data: ReportData) -> str:
         css_class = {"promoted": "promo-yes", "exploration": "promo-explore", "rejected": "promo-no"}.get(
             decision.decision, ""
         )
-        p_cell = f"{decision.p_value:.4f}" if decision.p_value is not None else "—"
         effect_cell = f"{decision.delta:+.5f}"
         rows.append(
             f'<tr class="{css_class}">'
@@ -770,7 +770,6 @@ def _render_promotion_section(data: ReportData) -> str:
             f"<td>{_fmt_score(decision.candidate_score)}</td>"
             f"<td>{effect_cell}</td>"
             f"<td>{_fmt_score(decision.epsilon)}</td>"
-            f"<td>{p_cell}</td>"
             f'<td class="decision-cell">{_h(decision.decision)}</td>'
             f"</tr>"
         )
@@ -793,87 +792,12 @@ def _render_promotion_section(data: ReportData) -> str:
   <div class="table-wrap">
     <table class="experiment-table promotion-table">
       <thead>
-        <tr><th>Iter</th><th>Exp</th><th>Baseline</th><th>Candidate</th><th>Delta</th><th>&epsilon;</th><th>p-value</th><th>Decision</th></tr>
+        <tr><th>Iter</th><th>Exp</th><th>Baseline</th><th>Candidate</th><th>Delta</th><th>&epsilon;</th><th>Decision</th></tr>
       </thead>
       <tbody>
         {"".join(rows)}
       </tbody>
     </table>
   </div>
-</section>
-"""
-
-
-def _render_holdout_section(data: ReportData) -> str:
-    summary = data.holdout_summary
-    if summary is None:
-        if data.state.protocol == "rigorous" and data.state.silent_refs:
-            if not data.state.converged:
-                return (
-                    '<section class="holdout-section">'
-                    '<div class="section-head"><span class="section-numeral">VI</span>'
-                    "<h2>Silent-Image Holdout</h2></div>"
-                    '<p class="empty">Holdout data is not available yet for this in-progress rigorous run; '
-                    "holdout_summary.json will be written when the run finishes.</p>"
-                    "</section>"
-                )
-            return (
-                '<section class="holdout-section">'
-                '<div class="section-head"><span class="section-numeral">VI</span>'
-                "<h2>Silent-Image Holdout</h2></div>"
-                '<p class="empty">Holdout data was expected for this rigorous run, '
-                "but holdout_summary.json is missing or empty.</p>"
-                "</section>"
-            )
-        return (
-            '<section class="holdout-section">'
-            '<div class="section-head"><span class="section-numeral">VI</span>'
-            "<h2>Silent-Image Holdout</h2></div>"
-            '<p class="empty">No holdout data available for this run. '
-            "Enable the rigorous protocol with an information barrier to generate holdout metrics.</p>"
-            "</section>"
-        )
-
-    n_silent = summary.get("silent_image_count", 0)
-
-    iter0_mean = summary.get("iteration_0_mean")
-    final_mean = summary.get("final_mean")
-    delta = summary.get("delta")
-    iter0_str = f"{iter0_mean:.4f}" if iter0_mean is not None else "—"
-    final_str = f"{final_mean:.4f}" if final_mean is not None else "—"
-    if delta is not None:
-        arrow = "&#9650;" if delta > 0 else "&#9660;" if delta < 0 else "="
-        delta_str = f"{delta:+.4f} {arrow}"
-        delta_class = "holdout-up" if delta > 0 else "holdout-down" if delta < 0 else ""
-    else:
-        delta_str = "—"
-        delta_class = ""
-
-    image_names = ", ".join(summary.get("silent_image_names", []))
-    return f"""
-<section class="holdout-section">
-  <div class="section-head">
-    <span class="section-numeral">VI</span>
-    <h2>Silent-Image Holdout</h2>
-    <p class="section-kicker">{n_silent} images were never shown to the optimizer — improvements here indicate genuine generalization.</p>
-  </div>
-  <div class="holdout-grid">
-    <div class="holdout-card">
-      <div class="holdout-label">Iteration 0</div>
-      <div class="holdout-value">{iter0_str}</div>
-    </div>
-    <div class="holdout-card">
-      <div class="holdout-label">Final</div>
-      <div class="holdout-value">{final_str}</div>
-    </div>
-    <div class="holdout-card">
-      <div class="holdout-label">Delta</div>
-      <div class="holdout-value {delta_class}">{delta_str}</div>
-    </div>
-  </div>
-  <details class="fold">
-    <summary>Silent images</summary>
-    <p class="holdout-images">{_h(image_names)}</p>
-  </details>
 </section>
 """

@@ -52,30 +52,32 @@ The meta-prompt is the only external artifact being optimized — but its whole 
 ### Optimization Loop
 
 0. **Zero-step**: Fix the reference images. Caption them, run parallel style analysis (Gemini vision + reasoning model) to build a `StyleProfile` and N diverse initial meta-prompts.
-1. **Propose**: the reasoning model emits a single JSON batch of 8-12 raw hypotheses grouped into 3 mechanism-tagged directions (`D1`/`D2`/`D3`), each carrying 1 targeted proposal (one section changed) + 1-3 bold proposals (up to 3 related sections). The workflow dedups duplicates on `(category, failure_mechanism, intervention_type)` and selects up to `--num-branches` experiments to evaluate (one targeted per direction first, then bolds fill remaining slots).
+1. **Propose**: the reasoning model emits a single JSON batch of 8-12 raw hypotheses grouped into 3 mechanism-tagged directions (`D1`/`D2`/`D3`), each carrying 1 targeted proposal (one section changed) + 1-3 bold proposals (up to 3 related sections). The workflow dedups duplicates on `(category, failure_mechanism, intervention_type)` and selects up to `--num-branches` experiments to evaluate. Selection picks one targeted per direction first, then fills remaining slots with bolds — while enforcing a **category quota** (max 2 proposals per `target_category` in a portfolio) so a reasoner batch that all fires at one section can't collapse the iteration.
 2. **Run**: each experiment runs in parallel -- caption all references with the proposed meta-prompt, generate images from captions, evaluate against originals.
 3. **Rank & synthesize**: experiments are ranked by an adaptive composite score; the top 2-3 are merged into a synthesized template (picks the best section from each) even if none individually beat the baseline.
 4. **Pairwise vision comparison** (SPO-inspired): the top two experiments' reproductions are sent to Gemini vision for a head-to-head verdict, and the rationale is fed back into the next iteration.
 5. **Independent review** (CycleResearcher-inspired): a skeptical reviewer assesses every experiment as SIGNAL/NOISE/MIXED and writes strategic guidance that is prepended to the next iteration's proposal prompt.
-6. **Apply**: best experiment becomes the new baseline (or, on even plateau counts, the second-best is adopted as an exploration move). All results feed a shared Knowledge Base that tracks hypothesis chains, per-category progress, confirmed insights, rejected approaches, and open problems.
-7. **Repeat** until convergence (max iterations, plateau window, or the reasoning model signals stop).
+6. **Replicate gate** (optional, `--replicates N`): when enabled, the top candidate and the current incumbent are each re-run N times; promotion requires both hard dominance (`min(candidate) > max(baseline)` across replicates) AND an epsilon-clearing median delta. Without replicates (default), the single-shot `composite > baseline + epsilon` check is used.
+7. **Apply**: best experiment becomes the new baseline (or, on even plateau counts, the second-best is adopted as an exploration move). All results feed a shared Knowledge Base that tracks hypothesis chains, per-category progress, confirmed insights, rejected approaches, and open problems.
+8. **Repeat** until convergence (max iterations, plateau window, or the reasoning model signals stop).
 
 ## Cost & resources
 
 Running this loop is not free. Know the order-of-magnitude before you start:
 
-- **API calls**. A default run is `--max-iterations 10 × --num-branches 9 × --num-fixed-refs 20` -- on the order of 1800 Gemini Pro captions, 1800 Gemini Flash generations, 1800 image-comparison calls (Gemini by default, optionally Grok), and 30-50 reasoning-model calls (Claude, GLM, GPT, or Grok). Expect several US dollars per full run at current 2026 prices. Costs scale roughly linearly with `max_iterations × num_branches × num_fixed_refs`.
+- **API calls**. The default `--protocol short` runs 3 iterations × 9 branches × 20 references -- on the order of 540 Gemini Pro captions, 540 Gemini Flash generations, 540 image-comparison calls (Gemini by default, optionally Grok), and ~10-15 reasoning-model calls. `--protocol classic` extends that with up to 5 more iterations on the short run's output. `--replicates 3` roughly triples the per-iteration cost (candidate + incumbent each replicated). Expect low single-digit US dollars for a short run and several US dollars for short+classic at current 2026 prices.
 - **First-run ML model downloads**. The first invocation pulls ~2 GB of weights from Hugging Face Hub: DreamSim `dino_vitb16` (~870 MB), LAION-Aesthetics CLIP-L, and HPSv2 CLIP-H. These are cached under `~/.cache/huggingface/` plus the local package caches used by DreamSim/OpenCLIP.
 - **GPU is optional**. CPU works but is slow. Apple Silicon uses MPS automatically. NVIDIA CUDA users have to pick a matching `torch` wheel (see Troubleshooting).
 - **Smoke-test recipe** (~1% of the cost of a default run):
 
   ```bash
   uv run python -m art_style_search \
-    --max-iterations 1 --num-branches 1 --raw-proposals 8 --num-fixed-refs 3 \
+    --protocol classic --max-iterations 1 \
+    --num-branches 1 --raw-proposals 8 --num-fixed-refs 3 \
     --run smoke-test --new
   ```
 
-  This runs one iteration with one experiment against three images -- enough to validate the full pipeline end-to-end (downloads, captioning, generation, evaluation, state persistence) without burning budget.
+  This runs one iteration with one experiment against three images -- enough to validate the full pipeline end-to-end (downloads, captioning, generation, evaluation, state persistence) without burning budget. `--protocol classic` is required here because `short` hard-clamps `max_iterations` to 3.
 
 ## Prerequisites
 
@@ -102,11 +104,18 @@ cp .env.sample .env
 # Drop at least 20 images of the target art style in reference_images/,
 # or pass --num-fixed-refs N to match however many you have (minimum 3 for the smoke test).
 
-# Run the optimization loop (creates runs/run_001/)
+# Run the optimization loop with the default short protocol (creates runs/run_001/)
 uv run python -m art_style_search
 
-# Resume or create a named run
+# Resume or create a named run (same name → resume; add --new to error if it exists)
 uv run python -m art_style_search --run my-experiment
+
+# Two-phase run: cheap short foundation, then deep classic refinement on top
+uv run python -m art_style_search --run my-style                      # phase 1: 3-iter short
+uv run python -m art_style_search --run my-style --protocol classic   # phase 2: up to 5-iter classic
+
+# One-shot classic with the A1 replicate gate (recommended for final polish)
+uv run python -m art_style_search --run my-style --protocol classic --replicates 3
 
 # View all options
 uv run python -m art_style_search --help
@@ -127,12 +136,13 @@ uv run python -m art_style_search clean --all
 | `--runs-dir` | `runs` | Base directory for all runs |
 | `--run` | auto | Run name (auto-incremented if omitted) |
 | `--new` | | Force new run (error if name exists) |
-| `--max-iterations` | `10` | Maximum optimization iterations |
-| `--plateau-window` | `5` | Iterations without improvement before stop |
-| `--num-branches` | `9` | Parallel experiments per iteration (portfolio size after selection) |
+| `--max-iterations` | `5` | Maximum optimization iterations (classic pass). `short` hard-clamps to 3. |
+| `--plateau-window` | `3` | Iterations without improvement before stop |
+| `--num-branches` | `9` | Parallel experiments per iteration (portfolio size after selection). Category quota caps at 2 per `target_category`. |
 | `--raw-proposals` | `9` | Raw proposals per iteration before portfolio selection (range 8-12) |
 | `--num-fixed-refs` | `20` | Fixed reference images for optimization |
-| `--protocol` | `classic` | `classic` (default) or `rigorous` (info barrier + replication + statistical testing) |
+| `--protocol` | `short` | `short` (default, 3-iter cheap foundation pass) or `classic` (5-iter refinement pass, usually resumes on top of a short run). |
+| `--replicates` | `1` | A1 paired-replicate promotion gate. `1` = single-shot (default). Values ≥ 2 enable the replicate gate: candidate's min replicate must beat baseline's max, AND candidate's median must clear baseline + epsilon. Recommended `3` for classic refinement on runs where branch-level variance drowns the signal. |
 | `--seed` | random | RNG seed for reproducible reference selection |
 | `--aspect-ratio` | `1:1` | Aspect ratio for generated images |
 | `--caption-model` | `gemini-3.1-pro-preview` | Gemini model for per-iteration captioning |
@@ -159,6 +169,7 @@ uv run python -m art_style_search clean --all
 - **Using a local reasoning model**. `--reasoning-provider local` skips third-party reasoning API keys, but it does require both `--reasoning-model` and `--reasoning-base-url`, for example `--reasoning-base-url http://localhost:8000/v1`.
 - **Empty `reference_images/`**. The loop raises `FileNotFoundError` with an actionable message. Drop at least `--num-fixed-refs` images of a supported type (see `IMAGE_EXTENSIONS` in `utils.py`).
 - **`KeyError: 'branches'` when resuming**. Your `state.json` predates the branch-based → shared-KB refactor. Delete the old state and start a new run with `--new`.
+- **Old `--protocol rigorous` state on resume**. State schema v8 removed the rigorous protocol; legacy state files with `protocol="rigorous"` are auto-migrated to `classic` on load (with `feedback_refs`/`silent_refs` dropped). If you relied on statistical-testing promotion, use `--protocol classic --replicates 3` for the equivalent A1 paired-replicate gate.
 
 ## Evaluation Metrics
 
@@ -186,21 +197,36 @@ Additional penalties (subtracted from the weighted sum, floor-clamped to 0):
 - **Ref-shortfall penalty** (×0.04): fraction of requested reference images that were skipped.
 - **Subject-floor penalty** (×0.05): triggers only when `vision_subject < 0.35`, scaling linearly to the floor.
 
-`per_image_composite` (used for paired statistical testing in rigorous mode) applies the same base weights minus `style_consistency` (experiment-level only) and without any penalties — max output 0.92.
+`per_image_composite` applies the same base weights minus `style_consistency` (experiment-level only) and without any penalties — max output 0.92. Used for the paired-replicate promotion decision when `--replicates > 1`.
 
-## Scientific Rigor Mode
+## Protocol Modes
 
-Pass `--protocol rigorous` (optionally with `--seed 42` for reproducibility) to upgrade from the default exploratory loop to a controlled experimental protocol:
+The loop ships with two protocols; choose per-run via `--protocol`.
 
-- **Information barrier**: reference images are split into *feedback* (70%, shown to the reasoning model in per-image feedback) and *silent* (30%, evaluated but hidden from the optimizer). Improvements on silent images indicate genuine generalization, not overfitting to feedback signals.
-- **Confirmatory replication**: the top-2 candidates and the current incumbent are each regenerated 3 times. Per-image medians replace single-pass scores, reducing generation noise.
-- **Statistical testing**: promotion requires a Wilcoxon signed-rank test (p < 0.10, one-sided) on per-image composite-score differences, plus a bootstrap 95% CI on the mean delta. This prevents lucky single generations from being mistaken for real improvements.
-- **Run provenance**: a `run_manifest.json` records the seed, git SHA, model versions, reference-image hashes, and platform. On resume in rigorous mode, mismatches abort to prevent silent state drift.
-- **Promotion log**: every iteration's promotion decision (score, delta, epsilon, p-value, verdict) is appended to `promotion_log.jsonl` for post-hoc audit.
+### Short (default, 3-iter foundation)
 
-Classic mode (`--protocol classic`, the default) is unchanged — no replication, no barrier, no statistical gating. The only always-on additions are the manifest and promotion log (observability, zero cost).
+`--protocol short` is the cheap coarse pass. It runs **3 iterations** (hard-clamped — any `--max-iterations` value above 3 is ignored; smaller values still work), produces a `state.json` that is directly resumable by `classic`, and is the right default for:
 
-Cost: rigorous mode is ~2.8x more expensive per iteration (confirmatory replication of 3 templates x 3 replicates x N images).
+- Batch-scanning a new reference set where you don't know yet whether the zero-step meta-prompt already nails it.
+- Runs where baseline metrics are near-ceiling on most axes (improvements would need to come from canon-edits, not sweeping structural changes).
+- Budget-bound pipelines where you want a known ~35%-of-classic footprint.
+
+### Classic (5-iter refinement pass)
+
+`--protocol classic` is the deeper pass. It runs up to `--max-iterations` (default `5`) and **usually resumes on top of a prior short run** — the state.json, canon-edit ledger, knowledge base, and style-gap observations all carry through, giving the reasoner full history from the coarse pass. Recommended combination with `--replicates 3` to enable the A1 paired-replicate gate.
+
+```bash
+uv run python -m art_style_search --run my-style                                    # phase 1
+uv run python -m art_style_search --run my-style --protocol classic --replicates 3  # phase 2
+```
+
+### Shared observability
+
+Both protocols always write:
+
+- **`run_manifest.json`** — seed, git SHA, model versions, reference-image hashes, platform. Seed/protocol drift on resume is warned-but-allowed (so short→classic resume works).
+- **`promotion_log.jsonl`** — every iteration's promotion decision (score, delta, epsilon, decision, replicate scores if active) for post-hoc audit.
+- **`canon_edit_ledger`** — cross-iteration record of canon edits + measured effect, rendered back to the reasoner on the next iteration so it sees "last time I tightened Color Principle, vision_style dropped −0.02."
 
 ## Project Structure
 
@@ -208,15 +234,15 @@ Cost: rigorous mode is ~2.8x more expensive per iteration (confirmatory replicat
 src/art_style_search/
   __main__.py             Entry point + list/clean/report subcommands
   loop.py                 Façade re-exporting workflow.run
-  workflow/               Internal orchestration (context, iteration phases, policy, services, zero-step)
-  prompt/                 Reasoning-model interface (proposals, synthesis, review, JSON contracts, parsing)
+  workflow/               Internal orchestration (context, iteration phases, policy, services, zero-step, replicate gate)
+  prompt/                 Reasoning-model interface (proposals, synthesis, review, JSON contracts, parsing, canon ops)
   analyze.py              Zero-step: parallel visual (Gemini or Claude) + reasoning-model style analysis
   caption.py              Gemini Pro (per-iteration) + Anthropic Claude (zero-step bootstrap) captioning with disk cache
   caption_sections.py     [Section] parser + subject-first generator prompt builder
   generate.py             Gemini Flash image generation with retry
-  experiment.py           Single-experiment caption→generate→evaluate pipeline + replicated evaluation
+  experiment.py           Single-experiment caption→generate→evaluate pipeline + replicated evaluation (A1)
   evaluate.py             Per-image paired metrics + Gemini vision comparison + caption compliance
-  scoring.py              Composite scoring, per-image scoring, Wilcoxon promotion test
+  scoring.py              Composite scoring (base + headroom-weighted), per-image scoring, replicate promotion gate
   knowledge.py            Knowledge Base maintenance (hypothesis tracking)
   models.py               Lazy-loaded DreamSim/HPS/Aesthetics/SSIM models
   taxonomy.py             CATEGORY_SYNONYMS — canonical hypothesis category synonyms

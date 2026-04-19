@@ -167,7 +167,8 @@ class TestSelectExperimentPortfolio:
         assert [r.hypothesis for r in selected[:3]] == ["Dir1 targeted", "Dir2 targeted", "Dir3 targeted"]
         assert [r.hypothesis for r in selected[3:]] == ["Dir1 bold", "Dir2 bold"]
 
-    def test_allows_same_category_across_directions(self) -> None:
+    def test_category_quota_caps_same_category_targeted_picks_at_two(self) -> None:
+        """A4: mode-collapse guard — even if 3 directions all target same category, at most 2 are kept."""
         results = [
             _make_refinement(
                 "D1 targeted",
@@ -199,7 +200,83 @@ class TestSelectExperimentPortfolio:
         ]
 
         selected = select_experiment_portfolio(results, num_experiments=3, num_directions=3)
-        assert [r.direction_id for r in selected] == ["D1", "D2", "D3"]
+        categories = [r.target_category for r in selected]
+        assert categories.count("subject_anchor") <= 2, (
+            f"A4 quota violated: portfolio should cap 'subject_anchor' at 2 per category, got {categories}"
+        )
+
+    def test_category_quota_caps_bold_fill_at_two_per_category(self) -> None:
+        """A4: when bold fill has many candidates in one category, cap at 2 and spread across others."""
+        # 1 targeted in D1 (style_foundation) + 6 bolds (5 style_foundation, 1 forbidden_defaults).
+        # Quota should prevent all 5 style_foundation bolds from filling remaining slots.
+        results = (
+            [
+                _make_refinement(
+                    "D1 targeted canon",
+                    target_category="style_foundation",
+                    direction_id="D1",
+                    failure_mechanism="canon flat",
+                    intervention_type="information_priority",
+                    risk_level="targeted",
+                    changed_sections=["style_foundation"],
+                ),
+            ]
+            + [
+                _make_refinement(
+                    f"style_foundation bold #{i}",
+                    target_category="style_foundation",
+                    direction_id="D1",
+                    failure_mechanism=f"canon drift variant {i}",
+                    intervention_type=f"rewrite_{i}",
+                    risk_level="bold",
+                    changed_sections=["style_foundation"],
+                )
+                for i in range(5)
+            ]
+            + [
+                _make_refinement(
+                    "forbidden_defaults bold",
+                    target_category="forbidden_defaults",
+                    direction_id="D2",
+                    failure_mechanism="halftone leak",
+                    intervention_type="add_axis",
+                    risk_level="bold",
+                    changed_sections=["forbidden_defaults"],
+                ),
+            ]
+        )
+
+        selected = select_experiment_portfolio(results, num_experiments=5, num_directions=3)
+        categories = [r.target_category for r in selected]
+        style_foundation_count = categories.count("style_foundation")
+        assert style_foundation_count <= 2, (
+            f"A4 quota violated: style_foundation appeared {style_foundation_count} times in {categories}"
+        )
+        # forbidden_defaults bold should make it in — otherwise quota is rejecting-only, not spreading.
+        assert "forbidden_defaults" in categories, (
+            f"A4 should preserve category spread — forbidden_defaults missing from {categories}"
+        )
+
+    def test_category_quota_honors_max_per_category_kwarg(self) -> None:
+        """Quota cap is configurable via max_per_category; kwarg=1 forces strict spread."""
+        results = [
+            _make_refinement(
+                f"bold {cat} #{i}",
+                target_category=cat,
+                direction_id="D1",
+                failure_mechanism=f"{cat} drift",
+                intervention_type=f"variant_{i}",
+                risk_level="bold",
+                changed_sections=[cat],
+            )
+            for cat in ("color_palette", "lighting")
+            for i in range(3)
+        ]
+
+        selected = select_experiment_portfolio(results, num_experiments=4, num_directions=3, max_per_category=1)
+        categories = [r.target_category for r in selected]
+        assert categories.count("color_palette") <= 1
+        assert categories.count("lighting") <= 1
 
 
 # ---------------------------------------------------------------------------

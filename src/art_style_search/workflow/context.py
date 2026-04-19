@@ -7,7 +7,6 @@ import concurrent.futures
 import hashlib
 import json
 import logging
-import math
 import platform as _platform
 import random
 import subprocess
@@ -22,7 +21,7 @@ from openai import AsyncOpenAI
 
 from art_style_search.config import Config
 from art_style_search.models import ModelRegistry
-from art_style_search.scoring import composite_score, per_image_composite
+from art_style_search.scoring import composite_score
 from art_style_search.state import load_manifest, save_manifest, save_state
 from art_style_search.state_codec import _Encoder, to_dict
 from art_style_search.types import IterationResult, LoopState, RunManifest
@@ -151,9 +150,8 @@ def _build_manifest(config: Config) -> RunManifest:
     if uv_lock.exists():
         uv_lock_hash = hashlib.sha256(uv_lock.read_bytes()).hexdigest()
 
-    protocol_version = "rigorous_v1" if config.protocol == "rigorous" else "classic"
     return RunManifest(
-        protocol_version=protocol_version,
+        protocol_version=config.protocol,
         seed=config.seed,
         cli_args={
             "max_iterations": config.max_iterations,
@@ -186,23 +184,15 @@ def _build_manifest(config: Config) -> RunManifest:
 
 
 def _verify_manifest(config: Config, manifest: RunManifest) -> None:
-    """Verify on resume that the manifest matches current config. Warn or abort."""
-    if config.protocol == "rigorous":
-        if manifest.protocol_version != "rigorous_v1":
-            msg = f"Protocol mismatch: state has '{manifest.protocol_version}', CLI has 'rigorous'"
-            raise RuntimeError(msg)
-        if manifest.seed != config.seed:
-            msg = f"Seed mismatch: manifest has {manifest.seed}, CLI has {config.seed}"
-            raise RuntimeError(msg)
-        if _hash_reference_images(config.reference_dir) != manifest.reference_image_hashes:
-            msg = "Reference images changed since run started — aborting resume in rigorous mode"
-            raise RuntimeError(msg)
-    else:
-        expected_protocol = "rigorous_v1" if config.protocol == "rigorous" else "classic"
-        if manifest.seed != config.seed:
-            logger.warning("Seed drift: manifest=%d, CLI=%d", manifest.seed, config.seed)
-        if manifest.protocol_version != expected_protocol:
-            logger.warning("Protocol drift: manifest=%s, CLI=%s", manifest.protocol_version, config.protocol)
+    """Verify on resume that the manifest matches current config — warn on drift."""
+    if manifest.seed != config.seed:
+        logger.warning("Seed drift: manifest=%d, CLI=%d", manifest.seed, config.seed)
+    if manifest.protocol_version != config.protocol:
+        logger.info(
+            "Protocol change on resume: manifest=%s, CLI=%s (allowed — short→classic is the refinement flow)",
+            manifest.protocol_version,
+            config.protocol,
+        )
 
 
 def ensure_manifest(config: Config) -> None:
@@ -213,21 +203,6 @@ def ensure_manifest(config: Config) -> None:
         save_manifest(_build_manifest(config), manifest_path)
         return
     _verify_manifest(config, existing_manifest)
-
-
-def _split_information_barrier(
-    fixed_refs: list[Path], protocol: str, rng: random.Random
-) -> tuple[list[Path], list[Path]]:
-    """Split fixed refs into feedback (shown to reasoning model) and silent."""
-    if protocol != "rigorous" or len(fixed_refs) < 4:
-        return list(fixed_refs), []
-    n_feedback = math.ceil(0.7 * len(fixed_refs))
-    n_silent = len(fixed_refs) - n_feedback
-    if n_silent < 2:
-        n_feedback = len(fixed_refs) - 2
-    shuffled = list(fixed_refs)
-    rng.shuffle(shuffled)
-    return shuffled[:n_feedback], shuffled[n_feedback:]
 
 
 @dataclass
@@ -322,45 +297,6 @@ async def _setup_run_context(config: Config) -> RunContext:
     )
 
 
-def _extract_silent_scores(results: list[IterationResult], silent_set: frozenset[Path]) -> list[float]:
-    """Extract per-image composite scores for silent images from results."""
-    scores: list[float] = []
-    for result in results:
-        for caption, score in zip(result.iteration_captions, result.per_image_scores, strict=False):
-            if caption.image_path in silent_set:
-                scores.append(per_image_composite(score))
-    return scores
-
-
-def _write_holdout_summary(state: LoopState, ctx: RunContext) -> None:
-    """Compute and save holdout summary for silent images."""
-    if not state.silent_refs:
-        return
-
-    silent_set = frozenset(state.silent_refs)
-    iter0_results = [result for result in state.experiment_history if result.iteration == 0 and result.kept]
-    final_results = [result for result in state.last_iteration_results if result.kept]
-    if not final_results:
-        final_results = state.last_iteration_results[:1]
-
-    iter0_scores = _extract_silent_scores(iter0_results, silent_set)
-    final_scores = _extract_silent_scores(final_results, silent_set)
-    summary = {
-        "silent_image_count": len(state.silent_refs),
-        "silent_image_names": [path.name for path in state.silent_refs],
-        "iteration_0_mean": sum(iter0_scores) / len(iter0_scores) if iter0_scores else None,
-        "final_mean": sum(final_scores) / len(final_scores) if final_scores else None,
-        "iteration_0_scores": iter0_scores,
-        "final_scores": final_scores,
-    }
-    if summary["iteration_0_mean"] is not None and summary["final_mean"] is not None:
-        summary["delta"] = summary["final_mean"] - summary["iteration_0_mean"]
-
-    holdout_path = ctx.config.run_dir / "holdout_summary.json"
-    holdout_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    logger.info("Holdout summary written to %s", holdout_path)
-
-
 def _finalize_run(state: LoopState, ctx: RunContext) -> LoopState:
     """Persist final state, write best prompt, and log the summary banner."""
     save_state(state, ctx.config.state_file)
@@ -368,12 +304,6 @@ def _finalize_run(state: LoopState, ctx: RunContext) -> LoopState:
     manifest = load_manifest(ctx.config.run_dir / "run_manifest.json")
     _save_best_prompt_md(state, ctx.config.log_dir, manifest)
     _save_best_prompt_json(state, ctx.config.log_dir)
-    _write_holdout_summary(state, ctx)
-    if ctx.config.protocol == "rigorous" and state.silent_refs:
-        holdout_path = ctx.config.run_dir / "holdout_summary.json"
-        if not holdout_path.exists():
-            msg = f"Rigorous run expected holdout_summary.json at {holdout_path}"
-            raise RuntimeError(msg)
 
     logger.info("=" * 60)
     if state.global_best_metrics:

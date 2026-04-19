@@ -258,9 +258,7 @@ def _loop_state_from_dict(d: dict[str, Any]) -> LoopState:
             ConvergenceReason(d["convergence_reason"]) if d.get("convergence_reason") is not None else None
         ),
         seed=d.get("seed", 0),
-        protocol=d.get("protocol", "classic"),
-        feedback_refs=[Path(p) for p in d.get("feedback_refs", [])],
-        silent_refs=[Path(p) for p in d.get("silent_refs", [])],
+        protocol=d.get("protocol", "short"),
         canon_edit_ledger=[_canon_edit_ledger_entry_from_dict(e) for e in d.get("canon_edit_ledger", [])],
     )
 

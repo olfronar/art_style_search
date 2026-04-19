@@ -62,14 +62,19 @@ class TestParseArgsWithAllRequired:
         assert cfg.state_file == cfg.run_dir / "state.json"
 
     def test_custom_loop_params(self, tmp_path: Path) -> None:
+        # Classic protocol respects --max-iterations; short clamps to 3 (tested separately).
         cfg = parse_args(
-            _base_args(
-                tmp_path,
-                max_iterations="50",
-                plateau_window="10",
-                num_branches="5",
-                aspect_ratio="16:9",
-            )
+            [
+                *_base_args(
+                    tmp_path,
+                    max_iterations="50",
+                    plateau_window="10",
+                    num_branches="5",
+                    aspect_ratio="16:9",
+                ),
+                "--protocol",
+                "classic",
+            ]
         )
         assert cfg.max_iterations == 50
         assert cfg.plateau_window == 10
@@ -112,10 +117,13 @@ class TestDefaults:
         return parse_args(_base_args(tmp_path))
 
     def test_max_iterations(self, cfg: Config) -> None:
-        assert cfg.max_iterations == 10
+        # Default protocol is `short` → hard-clamped to 3. Classic default is 5 (tested separately).
+        assert cfg.max_iterations == 3
 
     def test_plateau_window(self, cfg: Config) -> None:
-        assert cfg.plateau_window == 5
+        # Tighter plateau window (was 5) — replicate-gated iterations past 5 offer little
+        # marginal probability of a novel winner.
+        assert cfg.plateau_window == 3
 
     def test_num_branches(self, cfg: Config) -> None:
         assert cfg.num_branches == 9

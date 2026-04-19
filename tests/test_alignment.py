@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from art_style_search.reporting.render import _per_image_score_for
-from art_style_search.scoring import composite_score, per_image_composite
+from art_style_search.scoring import composite_score
 from art_style_search.types import (
     Caption,
     IterationResult,
@@ -94,39 +94,7 @@ class TestPerImageScoreForAlignment:
 
 
 # ---------------------------------------------------------------------------
-# _extract_silent_scores alignment
-# ---------------------------------------------------------------------------
-
-
-class TestExtractSilentScoresAlignment:
-    def test_correct_score_for_silent_image(self) -> None:
-        """Silent image scores must come from the right index, not a misaligned one."""
-        # Lazy import to avoid circular import issues
-        from art_style_search.workflow.context import _extract_silent_scores
-
-        result = _make_result(4, dreamsim_values=[0.1, 0.9, 0.2, 0.8])
-        # Mark image 1 (DreamSim=0.9) as silent
-        silent_set = frozenset({Path("/ref/img_001.png")})
-        scores = _extract_silent_scores([result], silent_set)
-        assert len(scores) == 1
-        # The score should reflect image 1's high DreamSim, not image 0's low DreamSim
-        expected = per_image_composite(_make_scores(0.9))
-        assert scores[0] == pytest.approx(expected)
-
-    def test_multiple_silent_images(self) -> None:
-        from art_style_search.workflow.context import _extract_silent_scores
-
-        result = _make_result(4, dreamsim_values=[0.1, 0.5, 0.3, 0.7])
-        silent_set = frozenset({Path("/ref/img_001.png"), Path("/ref/img_003.png")})
-        scores = _extract_silent_scores([result], silent_set)
-        assert len(scores) == 2
-        expected_1 = per_image_composite(_make_scores(0.5))
-        expected_3 = per_image_composite(_make_scores(0.7))
-        assert sorted(scores) == pytest.approx(sorted([expected_1, expected_3]))
-
-
-# ---------------------------------------------------------------------------
-# Caption diff alignment (zip at loop.py:684)
+# Caption diff alignment
 # ---------------------------------------------------------------------------
 
 

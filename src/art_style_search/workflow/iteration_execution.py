@@ -22,17 +22,14 @@ from art_style_search.scoring import (
     composite_score,
     improvement_epsilon,
     metric_deltas,
-    paired_promotion_test,
 )
-from art_style_search.types import IterationResult, LoopState, PromotionTestResult, PromptTemplate
+from art_style_search.types import IterationResult, LoopState, PromptTemplate
 from art_style_search.utils import build_ref_gen_pairs
 from art_style_search.workflow.context import RunContext
-from art_style_search.workflow.policy import _candidate_results_for_validation
 
 logger = logging.getLogger(__name__)
 
-# Confirmatory-validation replicates use a dedicated branch_id outside the regular experiment range
-# so they never collide with proposal indices in logs/state.
+# A1: incumbent replicates use a dedicated branch_id so they don't collide with proposal indices.
 _INCUMBENT_BRANCH_ID = 900
 
 
@@ -47,8 +44,11 @@ class IterationRanking:
     baseline_score: float
     epsilon: float
     synth_result: IterationResult | None = None
-    promotion_test: PromotionTestResult | None = None
+    # A1 paired-replicate gate: when ``replicates > 1``, ``_run_replicate_gate`` populates both
+    # lists with per-replicate composite scores. ``_apply_iteration_result`` in policy.py
+    # switches to ``replicate_promotion_decision`` when both are non-None.
     best_replicate_scores: list[float] | None = None
+    baseline_replicate_scores: list[float] | None = None
 
 
 async def _run_experiments_parallel(
@@ -114,10 +114,6 @@ async def _run_pairwise_comparison(ranking: IterationRanking, state: LoopState, 
     top_a, top_b = sorted_by_score[0], sorted_by_score[1]
     pairs_a = build_ref_gen_pairs(top_a)
     pairs_b = build_ref_gen_pairs(top_b)
-    if state.silent_refs:
-        feedback_set = frozenset(state.feedback_refs)
-        pairs_a = [(ref, gen) for ref, gen in pairs_a if ref in feedback_set]
-        pairs_b = [(ref, gen) for ref, gen in pairs_b if ref in feedback_set]
     if not pairs_a or not pairs_b:
         state.pairwise_feedback = ""
         return
@@ -151,91 +147,84 @@ async def _run_independent_review(
         logger.info("Review guidance: %.200s", review.strategic_guidance)
 
 
-async def _confirmatory_validation(
+async def _run_replicate_gate(
     ranking: IterationRanking,
     state: LoopState,
     ctx: RunContext,
     iteration: int,
 ) -> None:
-    """Phase 3.1: replicate top-2 candidates + incumbent for statistical testing."""
-    if ctx.config.protocol != "rigorous":
+    """A1 paired-replicate gate orchestration.
+
+    When ``config.replicates > 1``, replicate the top candidate + incumbent to populate
+    ``ranking.best_replicate_scores`` / ``ranking.baseline_replicate_scores``; the policy layer
+    (``_apply_iteration_result``) then uses ``replicate_promotion_decision`` instead of the
+    single-shot epsilon check. On any candidate OR incumbent replication failure we skip
+    silently — leaving ``baseline_replicate_scores = None`` so the policy layer falls back
+    to single-shot. A half-populated state (candidate-only) would silently auto-promote via
+    the empty-baseline branch of ``replicate_promotion_decision``, which is not what we want
+    mid-run when an incumbent actually exists.
+    """
+    if ctx.config.replicates < 2:
         return
 
-    candidates = _candidate_results_for_validation(ranking)
-    if not candidates:
-        return
-
-    logger.info("Confirmatory validation: replicating %d candidates + incumbent", len(candidates))
-    tasks = []
-    for exp in candidates:
-        tasks.append(
-            replicate_experiment(
-                template=exp.template,
-                branch_id=exp.branch_id,
-                iteration=iteration,
-                fixed_refs=state.fixed_references,
-                config=ctx.config,
-                n_replicates=3,
-                existing_result=exp,
-                services=ctx.services,
-            )
+    tasks: list = [
+        replicate_experiment(
+            template=ranking.best_exp.template,
+            branch_id=ranking.best_exp.branch_id,
+            iteration=iteration,
+            fixed_refs=state.fixed_references,
+            config=ctx.config,
+            n_replicates=ctx.config.replicates,
+            existing_result=ranking.best_exp,
+            services=ctx.services,
         )
-    if state.best_template is not None:
+    ]
+    incumbent_template = state.best_template
+    if incumbent_template is not None and incumbent_template.sections:
         tasks.append(
             replicate_experiment(
-                template=state.best_template,
+                template=incumbent_template,
                 branch_id=_INCUMBENT_BRANCH_ID,
                 iteration=iteration,
                 fixed_refs=state.fixed_references,
                 config=ctx.config,
-                n_replicates=3,
+                n_replicates=ctx.config.replicates,
                 services=ctx.services,
             )
         )
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    candidate_evals = []
-    incumbent_eval = None
-    for i, result in enumerate(results):
-        if isinstance(result, BaseException):
-            logger.warning("Confirmatory replicate %d failed: %s", i, result)
-            continue
-        if i < len(candidates):
-            candidate_evals.append((candidates[i], result))
-        else:
-            incumbent_eval = result
-
-    if not candidate_evals or incumbent_eval is None:
-        logger.warning("Confirmatory validation incomplete — falling back to single-pass scores")
+    candidate_eval = results[0]
+    incumbent_eval = results[1] if len(results) > 1 else None
+    if isinstance(candidate_eval, BaseException):
+        logger.warning(
+            "Replicate gate: candidate replication failed (%s) — falling back to single-shot", candidate_eval
+        )
         return
 
-    for exp, evaluation in candidate_evals:
-        exp.per_image_scores = list(evaluation.median_per_image)
-        exp.aggregated = evaluation.median_aggregated
+    # Incumbent-failure path must fall ALL the way back to single-shot: an empty baseline
+    # would trip replicate_promotion_decision's "first iteration" branch (median > epsilon
+    # only), silently auto-promoting mid-run candidates that haven't actually dominated.
+    # Only populate replicate fields when BOTH replications succeed (or only candidate is
+    # required when there's no incumbent to begin with).
+    if isinstance(incumbent_eval, BaseException):
+        logger.warning(
+            "Replicate gate: incumbent replication failed (%s) — falling back to single-shot",
+            incumbent_eval,
+        )
+        return
 
-    updated_agg = [result.aggregated for result in ranking.exp_results]
-    ranking.adaptive_scores = {
-        id(result): adaptive_composite_score(result.aggregated, updated_agg) for result in ranking.exp_results
-    }
+    ranking.best_replicate_scores = [composite_score(agg) for agg in candidate_eval.replicate_aggregated]
+    ranking.best_exp.aggregated = candidate_eval.median_aggregated
+    ranking.best_score = composite_score(candidate_eval.median_aggregated)
 
-    best_candidate_exp, best_candidate_eval = max(
-        candidate_evals,
-        key=lambda item: composite_score(item[1].median_aggregated),
-    )
-    ranking.best_exp = best_candidate_exp
-    ranking.best_score = composite_score(best_candidate_exp.aggregated)
-    ranking.best_replicate_scores = [composite_score(agg) for agg in best_candidate_eval.replicate_aggregated]
-    test_result = paired_promotion_test(best_candidate_eval.median_per_image, incumbent_eval.median_per_image)
-    logger.info(
-        "Promotion test: p=%.4f, effect=%.5f, CI=[%.5f, %.5f], passed=%s",
-        test_result.p_value,
-        test_result.effect_size,
-        test_result.ci_lower,
-        test_result.ci_upper,
-        test_result.passed,
-    )
-    ranking.promotion_test = test_result
-    ranking.baseline_score = composite_score(incumbent_eval.median_aggregated)
+    if incumbent_eval is None:
+        # No incumbent template yet (first iteration) — replicate_promotion_decision treats
+        # an empty baseline list as "use median-vs-epsilon only," which is the correct bootstrap.
+        ranking.baseline_replicate_scores = []
+    else:
+        ranking.baseline_replicate_scores = [composite_score(agg) for agg in incumbent_eval.replicate_aggregated]
+        ranking.baseline_score = composite_score(incumbent_eval.median_aggregated)
 
 
 async def _synthesize_reasoning(

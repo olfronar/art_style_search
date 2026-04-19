@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import random
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -14,30 +13,24 @@ import pytest
 from art_style_search.scoring import composite_score, improvement_epsilon
 from art_style_search.types import (
     AggregatedMetrics,
-    Caption,
     CategoryProgress,
     IterationResult,
     KnowledgeBase,
     MetricScores,
-    PromotionTestResult,
     PromptSection,
     PromptTemplate,
-    ReplicatedEvaluation,
 )
 from art_style_search.workflow.context import (
     RunContext,
     _build_manifest,
     _discover_images,
-    _finalize_run,
     _sample,
     _save_best_prompt_json,
     _save_best_prompt_md,
     _setup_run_context,
-    _split_information_barrier,
 )
 from art_style_search.workflow.iteration_execution import (
     IterationRanking,
-    _confirmatory_validation,
     _run_synthesis_experiment,
     _score_and_rank,
 )
@@ -48,7 +41,7 @@ from art_style_search.workflow.policy import (
     _should_honor_stop,
 )
 from art_style_search.workflow.zero_step import _sanitize_initial_templates
-from tests.conftest import make_aggregated_metrics, make_iteration_result, make_loop_state, make_prompt_template
+from tests.conftest import make_aggregated_metrics, make_loop_state, make_prompt_template
 
 # ---------------------------------------------------------------------------
 # _discover_images
@@ -250,74 +243,6 @@ class TestRunAccounting:
         assert reasoning_init["xai_api_key"] == "xai-test-key"
         assert ctx.services.evaluation.comparison_provider == "xai"
         assert ctx.services.evaluation.comparison_model == "grok-4.20-reasoning-latest"
-
-    def test_finalize_run_writes_holdout_summary_for_rigorous_runs(self, tmp_path: Path) -> None:
-        config = _make_config(tmp_path, protocol="rigorous")
-        config.run_dir.mkdir(parents=True, exist_ok=True)
-        config.log_dir.mkdir(parents=True, exist_ok=True)
-        silent_ref = tmp_path / "silent.png"
-        silent_ref.touch()
-
-        iter0 = make_iteration_result(branch_id=0, iteration=0)
-        iter0.iteration_captions = [Caption(image_path=silent_ref, text="caption")]
-        iter0.per_image_scores = [MetricScores(dreamsim_similarity=0.7, hps_score=0.25, aesthetics_score=6.0)]
-        iter0.kept = True
-
-        final = make_iteration_result(branch_id=0, iteration=1)
-        final.iteration_captions = [Caption(image_path=silent_ref, text="caption")]
-        final.per_image_scores = [MetricScores(dreamsim_similarity=0.8, hps_score=0.25, aesthetics_score=6.0)]
-        final.kept = True
-
-        state = make_loop_state(global_best_metrics=make_aggregated_metrics())
-        state.protocol = "rigorous"
-        state.silent_refs = [silent_ref]
-        state.experiment_history = [iter0]
-        state.last_iteration_results = [final]
-
-        ctx = RunContext(
-            config=config,
-            gemini_client=MagicMock(),
-            reasoning_client=MagicMock(),
-            registry=MagicMock(),
-            gemini_semaphore=MagicMock(),
-            eval_semaphore=MagicMock(),
-            services=MagicMock(),
-            rng=random.Random(42),
-        )
-
-        _finalize_run(state, ctx)
-
-        holdout_path = config.run_dir / "holdout_summary.json"
-        assert holdout_path.exists()
-        payload = json.loads(holdout_path.read_text(encoding="utf-8"))
-        assert payload["silent_image_count"] == 1
-        assert payload["iteration_0_mean"] is not None
-        assert payload["final_mean"] is not None
-
-    def test_finalize_run_fails_if_rigorous_holdout_summary_missing(self, tmp_path: Path, monkeypatch) -> None:
-        config = _make_config(tmp_path, protocol="rigorous")
-        config.run_dir.mkdir(parents=True, exist_ok=True)
-        config.log_dir.mkdir(parents=True, exist_ok=True)
-
-        state = make_loop_state(global_best_metrics=make_aggregated_metrics())
-        state.protocol = "rigorous"
-        state.silent_refs = [tmp_path / "silent.png"]
-
-        ctx = RunContext(
-            config=config,
-            gemini_client=MagicMock(),
-            reasoning_client=MagicMock(),
-            registry=MagicMock(),
-            gemini_semaphore=MagicMock(),
-            eval_semaphore=MagicMock(),
-            services=MagicMock(),
-            rng=random.Random(42),
-        )
-
-        monkeypatch.setattr("art_style_search.workflow.context._write_holdout_summary", lambda state, ctx: None)
-
-        with pytest.raises(RuntimeError, match=r"holdout_summary\.json"):
-            _finalize_run(state, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -584,6 +509,75 @@ class TestApplyIterationResult:
         assert state.best_metrics is high_agg
         assert best_result.kept is True
 
+    def test_replicate_gate_promotes_when_dominant_and_clears_epsilon(self, tmp_path: Path) -> None:
+        """A1: when IterationRanking carries replicate score lists, the replicate gate replaces
+        the single-shot epsilon check. Candidate dominates + clears epsilon → promoted."""
+        state = make_loop_state()
+        config = _make_config(tmp_path)
+        low_agg = _make_agg(dreamsim=0.55, color=0.50)
+        state.best_metrics = low_agg
+
+        high_agg = _make_agg(dreamsim=0.65, color=0.60)
+        best_result = _make_result(branch_id=0, agg=high_agg)
+
+        baseline_score = composite_score(low_agg)
+        best_score = composite_score(high_agg)
+        eps = improvement_epsilon(baseline_score)
+
+        ranking = IterationRanking(
+            exp_results=[best_result],
+            adaptive_scores={id(best_result): best_score},
+            best_exp=best_result,
+            best_score=best_score,
+            baseline_score=baseline_score,
+            epsilon=eps,
+            # Candidate replicates all > baseline's max (hard dominance), median delta > epsilon.
+            best_replicate_scores=[0.62, 0.65, 0.67],
+            baseline_replicate_scores=[0.55, 0.57, 0.59],
+        )
+
+        _apply_iteration_result(state, ranking, config)
+
+        assert state.plateau_counter == 0
+        assert state.best_metrics is high_agg
+        assert best_result.kept is True
+
+    def test_replicate_gate_rejects_overlapping_distributions_despite_epsilon_pass(self, tmp_path: Path) -> None:
+        """A1: single-shot epsilon check would promote (best_score > baseline + epsilon), but the
+        candidate's min replicate (0.55) falls below baseline's max (0.60) → hard dominance fails
+        → rejected. This is exactly the scenario A1 is designed to catch: noise-lucky candidates
+        whose single-shot delta is real but whose replicate distributions overlap the incumbent."""
+        state = make_loop_state()
+        config = _make_config(tmp_path)
+
+        baseline_agg = _make_agg(dreamsim=0.55, color=0.50)
+        state.best_metrics = baseline_agg
+        candidate_agg = _make_agg(dreamsim=0.65, color=0.60)  # single-shot much better
+        result = _make_result(branch_id=0, agg=candidate_agg)
+
+        baseline_score = composite_score(baseline_agg)
+        best_score = composite_score(candidate_agg)
+        eps = improvement_epsilon(baseline_score)
+        assert best_score > baseline_score + eps, "test precondition: single-shot delta clears epsilon"
+
+        ranking = IterationRanking(
+            exp_results=[result],
+            adaptive_scores={id(result): best_score},
+            best_exp=result,
+            best_score=best_score,
+            baseline_score=baseline_score,
+            epsilon=eps,
+            # Replicate distributions overlap — candidate's min below baseline's max.
+            best_replicate_scores=[0.55, 0.65, 0.75],
+            baseline_replicate_scores=[0.50, 0.55, 0.60],
+        )
+
+        _apply_iteration_result(state, ranking, config)
+
+        # Rejected despite single-shot epsilon pass — the replicate gate caught the overlap.
+        assert state.plateau_counter == 1
+        assert state.best_metrics is baseline_agg  # unchanged
+
     def test_plateau_increments_counter(self, tmp_path: Path) -> None:
         """best_score < baseline + epsilon should increment plateau_counter."""
         state = make_loop_state()
@@ -697,170 +691,8 @@ class TestApplyIterationResult:
 
 
 # ---------------------------------------------------------------------------
-# Rigorous-mode validation + template sanitization
+# Template sanitization
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_confirmatory_validation_overwrites_selected_result_with_replicated_median(
-    tmp_path: Path, monkeypatch
-) -> None:
-    state = make_loop_state()
-    config = _make_config(tmp_path, protocol="rigorous")
-    ctx = RunContext(
-        config=config,
-        gemini_client=MagicMock(),
-        reasoning_client=MagicMock(),
-        registry=MagicMock(),
-        gemini_semaphore=MagicMock(),
-        eval_semaphore=MagicMock(),
-        services=MagicMock(),
-    )
-
-    proposal_best = _make_result(branch_id=0, agg=_make_agg(dreamsim=0.82, color=0.78))
-    proposal_runner_up = _make_result(branch_id=1, agg=_make_agg(dreamsim=0.80, color=0.75))
-    synth = _make_result(branch_id=2, agg=_make_agg(dreamsim=0.79, color=0.76))
-
-    ranking = _score_and_rank([proposal_best, proposal_runner_up, synth], state)
-    ranking.synth_result = synth
-
-    synth_median = _make_agg(dreamsim=0.93, color=0.90)
-    incumbent_median = _make_agg(dreamsim=0.60, color=0.50)
-    median_scores = [MetricScores(dreamsim_similarity=0.93, hps_score=0.25, aesthetics_score=5.0)] * 3
-    incumbent_scores = [MetricScores(dreamsim_similarity=0.60, hps_score=0.25, aesthetics_score=5.0)] * 3
-
-    async def fake_replicate_experiment(
-        *,
-        template,
-        branch_id,
-        iteration,
-        fixed_refs,
-        config,
-        services,
-        n_replicates=3,
-        existing_result=None,
-        existing_scores=None,
-    ):
-        if branch_id == 2:
-            return ReplicatedEvaluation(
-                template=synth.template,
-                branch_id=branch_id,
-                replicate_scores=[median_scores] * 3,
-                replicate_aggregated=[synth_median] * 3,
-                median_per_image=median_scores,
-                median_aggregated=synth_median,
-            )
-        if branch_id == 900:
-            return ReplicatedEvaluation(
-                template=state.best_template,
-                branch_id=branch_id,
-                replicate_scores=[incumbent_scores] * 3,
-                replicate_aggregated=[incumbent_median] * 3,
-                median_per_image=incumbent_scores,
-                median_aggregated=incumbent_median,
-            )
-        low_agg = _make_agg(dreamsim=0.70, color=0.60)
-        low_scores = [MetricScores(dreamsim_similarity=0.70, hps_score=0.25, aesthetics_score=5.0)] * 3
-        return ReplicatedEvaluation(
-            template=_make_valid_template(),
-            branch_id=branch_id,
-            replicate_scores=[low_scores] * 3,
-            replicate_aggregated=[low_agg] * 3,
-            median_per_image=low_scores,
-            median_aggregated=low_agg,
-        )
-
-    monkeypatch.setattr(
-        "art_style_search.workflow.iteration_execution.replicate_experiment",
-        fake_replicate_experiment,
-    )
-    monkeypatch.setattr(
-        "art_style_search.workflow.iteration_execution.paired_promotion_test",
-        lambda candidate, incumbent: PromotionTestResult(
-            statistic=3.0,
-            p_value=0.01,
-            effect_size=0.05,
-            ci_lower=0.01,
-            ci_upper=0.09,
-            passed=True,
-        ),
-    )
-
-    await _confirmatory_validation(ranking, state, ctx, iteration=3)
-    _apply_iteration_result(state, ranking, config)
-
-    assert ranking.best_exp is synth
-    assert synth.aggregated is synth_median
-    assert state.best_metrics is synth_median
-    assert ranking.best_replicate_scores == [composite_score(synth_median)] * 3
-
-
-@pytest.mark.asyncio
-async def test_confirmatory_validation_seeds_candidates_with_existing_result(tmp_path: Path, monkeypatch) -> None:
-    state = make_loop_state()
-    config = _make_config(tmp_path, protocol="rigorous")
-    ctx = RunContext(
-        config=config,
-        gemini_client=MagicMock(),
-        reasoning_client=MagicMock(),
-        registry=MagicMock(),
-        gemini_semaphore=MagicMock(),
-        eval_semaphore=MagicMock(),
-        services=MagicMock(),
-    )
-
-    proposal_best = _make_result(branch_id=0, agg=_make_agg(dreamsim=0.82, color=0.78))
-    proposal_runner_up = _make_result(branch_id=1, agg=_make_agg(dreamsim=0.80, color=0.75))
-    ranking = _score_and_rank([proposal_best, proposal_runner_up], state)
-
-    seen_existing_results: dict[int, IterationResult] = {}
-
-    async def fake_replicate_experiment(
-        *,
-        template,
-        branch_id,
-        iteration,
-        fixed_refs,
-        config,
-        services,
-        n_replicates=3,
-        existing_result=None,
-        existing_scores=None,
-    ):
-        if branch_id in (0, 1):
-            seen_existing_results[branch_id] = existing_result
-            assert existing_scores is None
-        return ReplicatedEvaluation(
-            template=_make_valid_template(),
-            branch_id=branch_id,
-            replicate_scores=[[MetricScores(dreamsim_similarity=0.70, hps_score=0.25, aesthetics_score=5.0)] * 3] * 3,
-            replicate_aggregated=[_make_agg(dreamsim=0.70, color=0.60)] * 3,
-            median_per_image=[MetricScores(dreamsim_similarity=0.70, hps_score=0.25, aesthetics_score=5.0)] * 3,
-            median_aggregated=_make_agg(dreamsim=0.70, color=0.60),
-        )
-
-    monkeypatch.setattr(
-        "art_style_search.workflow.iteration_execution.replicate_experiment",
-        fake_replicate_experiment,
-    )
-    monkeypatch.setattr(
-        "art_style_search.workflow.iteration_execution.paired_promotion_test",
-        lambda candidate, incumbent: PromotionTestResult(
-            statistic=1.0,
-            p_value=0.5,
-            effect_size=0.0,
-            ci_lower=-0.01,
-            ci_upper=0.01,
-            passed=False,
-        ),
-    )
-
-    await _confirmatory_validation(ranking, state, ctx, iteration=3)
-
-    assert seen_existing_results == {
-        proposal_best.branch_id: proposal_best,
-        proposal_runner_up.branch_id: proposal_runner_up,
-    }
 
 
 def test_sanitize_initial_templates_replaces_invalid_with_fallback() -> None:
@@ -946,45 +778,6 @@ async def test_run_synthesis_experiment_skips_runtime_failure_without_traceback(
     assert "Synthesis experiment skipped" in caplog.text
     assert "below 50% threshold" in caplog.text
     assert "Traceback" not in caplog.text
-
-
-# ---------------------------------------------------------------------------
-# TestSplitInformationBarrier
-# ---------------------------------------------------------------------------
-
-
-class TestSplitInformationBarrier:
-    """Tests for _split_information_barrier(fixed_refs, protocol, rng)."""
-
-    def test_rigorous_20_refs(self) -> None:
-        """20 refs in rigorous mode → 14 feedback + 6 silent."""
-        refs = [Path(f"/fake/{i}.png") for i in range(20)]
-        rng = random.Random(42)
-        feedback, silent = _split_information_barrier(refs, "rigorous", rng)
-
-        assert len(feedback) == 14
-        assert len(silent) == 6
-        assert set(feedback) | set(silent) == set(refs)
-        assert not (set(feedback) & set(silent))
-
-    def test_rigorous_small_n(self) -> None:
-        """6 refs in rigorous mode → 4 feedback + 2 silent (minimum 2 silent)."""
-        refs = [Path(f"/fake/{i}.png") for i in range(6)]
-        rng = random.Random(42)
-        feedback, silent = _split_information_barrier(refs, "rigorous", rng)
-
-        assert len(feedback) == 4
-        assert len(silent) == 2
-        assert set(feedback) | set(silent) == set(refs)
-
-    def test_classic_no_split(self) -> None:
-        """Classic mode → all feedback, no silent."""
-        refs = [Path(f"/fake/{i}.png") for i in range(20)]
-        rng = random.Random(42)
-        feedback, silent = _split_information_barrier(refs, "classic", rng)
-
-        assert len(feedback) == 20
-        assert len(silent) == 0
 
 
 # ---------------------------------------------------------------------------

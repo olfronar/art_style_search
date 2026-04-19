@@ -48,9 +48,8 @@ class Config:
     gemini_concurrency: int
     eval_concurrency: int
 
-    # Scientific rigor
     seed: int
-    protocol: str  # "classic" or "rigorous"
+    protocol: str  # "short" (3-iter foundation, default) or "classic" (5-iter refinement)
 
     # API keys
     anthropic_api_key: str
@@ -61,6 +60,8 @@ class Config:
     comparison_provider: str = "gemini"  # "gemini" or "xai"
     comparison_model: str = ""
     raw_proposals: int = 9
+    # A1 paired-replicate gate: N>1 enables replicate-based promotion decisions (classic pass).
+    replicates: int = 1
 
     # Gemini extended-thinking levels ("MINIMAL" | "LOW" | "MEDIUM" | "HIGH")
     caption_thinking_level: str = "MINIMAL"
@@ -94,9 +95,17 @@ def parse_args(argv: list[str] | None = None) -> Config:
 
     # Loop control
     loop = parser.add_argument_group("Loop Control")
-    loop.add_argument("--max-iterations", type=int, default=10, help="Maximum optimization iterations")
     loop.add_argument(
-        "--plateau-window", type=int, default=5, help="Iterations without improvement before branch stops"
+        "--max-iterations",
+        type=int,
+        default=5,
+        help=(
+            "Maximum optimization iterations (default 5 for --protocol classic; "
+            "ignored for --protocol short which hard-codes 3 iterations)"
+        ),
+    )
+    loop.add_argument(
+        "--plateau-window", type=int, default=3, help="Iterations without improvement before branch stops"
     )
     loop.add_argument("--num-branches", type=int, default=9, help="Number of parallel population branches")
     loop.add_argument(
@@ -163,15 +172,31 @@ def parse_args(argv: list[str] | None = None) -> Config:
         ),
     )
 
-    # Scientific rigor
-    rigor = parser.add_argument_group("Scientific Rigor")
-    rigor.add_argument(
+    # Protocol
+    protocol_group = parser.add_argument_group("Protocol")
+    protocol_group.add_argument(
         "--protocol",
-        choices=["classic", "rigorous"],
-        default="classic",
-        help="Protocol: classic (current behavior) or rigorous (info barrier + replication + statistical testing)",
+        choices=["short", "classic"],
+        default="short",
+        help=(
+            "Protocol: short (default — 3-iter foundation pass, cheap) or classic "
+            "(5-iter refinement pass with replicate gate + diff-based canon editing; resumes on a prior short run)"
+        ),
     )
-    rigor.add_argument("--seed", type=int, default=None, help="RNG seed for reproducibility (random if omitted)")
+    protocol_group.add_argument(
+        "--seed", type=int, default=None, help="RNG seed for reproducibility (random if omitted)"
+    )
+    protocol_group.add_argument(
+        "--replicates",
+        type=int,
+        default=1,
+        help=(
+            "A1 paired-replicate gate: replicates per candidate (default 1 — single-shot). "
+            "Values ≥ 2 enable the replicate-based promotion gate: candidate's min replicate "
+            "score must exceed baseline's max, AND candidate's median must exceed baseline's "
+            "median + epsilon. Recommended: 3 for the classic refinement pass."
+        ),
+    )
 
     # Concurrency
     conc = parser.add_argument_group("Concurrency")
@@ -257,6 +282,8 @@ def _validate_and_build_config(args: argparse.Namespace, parser: argparse.Argume
         parser.error("XAI_API_KEY must be set via --xai-api-key or environment variable")
     if not 8 <= args.raw_proposals <= 12:
         parser.error("--raw-proposals must be between 8 and 12")
+    if args.replicates < 1:
+        parser.error("--replicates must be >= 1")
 
     # Default model based on provider
     default_models = {
@@ -286,13 +313,17 @@ def _validate_and_build_config(args: argparse.Namespace, parser: argparse.Argume
     output_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
 
+    # Phase-1 foundation pass is hard-capped at 3 iterations (plan §6). Clamp regardless of CLI
+    # so ``--protocol short --max-iterations 50`` doesn't silently balloon the budget.
+    max_iterations = 3 if args.protocol == "short" else args.max_iterations
+
     return Config(
         reference_dir=args.reference_dir,
         output_dir=output_dir,
         log_dir=log_dir,
         state_file=state_file,
         run_dir=run_dir,
-        max_iterations=args.max_iterations,
+        max_iterations=max_iterations,
         plateau_window=args.plateau_window,
         num_branches=args.num_branches,
         aspect_ratio=args.aspect_ratio,
@@ -306,6 +337,7 @@ def _validate_and_build_config(args: argparse.Namespace, parser: argparse.Argume
         eval_concurrency=args.eval_concurrency,
         seed=seed,
         protocol=args.protocol,
+        replicates=args.replicates,
         anthropic_api_key=anthropic_key,
         google_api_key=google_key,
         zai_api_key=zai_key,

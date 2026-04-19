@@ -382,46 +382,15 @@ class TestBuildReport:
         composite_block = text.split('id="composite-data">', 1)[1].split("</script>", 1)[0]
         assert json.loads(composite_block)  # parses cleanly
 
-    def test_rigorous_run_without_holdout_summary_reports_missing_artifact(self, tmp_path: Path) -> None:
-        run_dir = tmp_path / "rigorous-missing-holdout"
-        run_dir.mkdir()
-        state = make_loop_state(iteration=1)
-        state.converged = True
-        state.protocol = "rigorous"
-        state.silent_refs = [Path("/tmp/silent.png")]
-        save_state(state, run_dir / "state.json")
-
-        path = build_report(run_dir)
-        text = path.read_text(encoding="utf-8")
-
-        assert "expected for this rigorous run" in text
-        assert "Enable the rigorous protocol" not in text
-
-    def test_in_progress_rigorous_run_reports_holdout_as_pending(self, tmp_path: Path) -> None:
-        run_dir = tmp_path / "rigorous-pending-holdout"
-        run_dir.mkdir()
-        state = make_loop_state(iteration=1)
-        state.converged = False
-        state.protocol = "rigorous"
-        state.silent_refs = [Path("/tmp/silent.png")]
-        save_state(state, run_dir / "state.json")
-
-        text = build_report(run_dir).read_text(encoding="utf-8")
-
-        assert "will be written when the run finishes" in text
-        assert "expected for this rigorous run" not in text
-
-    def test_report_shows_requested_actual_and_feedback_silent_counts(self, tmp_path: Path) -> None:
+    def test_report_shows_requested_actual_counts(self, tmp_path: Path) -> None:
         run_dir = tmp_path / "counts"
         run_dir.mkdir()
         state = make_loop_state(iteration=1)
         state.fixed_references = [Path("/tmp/ref0.png"), Path("/tmp/ref1.png"), Path("/tmp/ref2.png")]
-        state.feedback_refs = state.fixed_references[:2]
-        state.silent_refs = state.fixed_references[2:]
         save_state(state, run_dir / "state.json")
 
         manifest = RunManifest(
-            protocol_version="rigorous_v1",
+            protocol_version="classic",
             seed=42,
             cli_args={},
             model_names={},
@@ -440,7 +409,6 @@ class TestBuildReport:
         text = build_report(run_dir).read_text(encoding="utf-8")
         assert "Requested refs" in text
         assert "Actual refs" in text
-        assert "Feedback / silent" in text
 
     def test_promotion_table_uses_zero_based_iteration_numbers_consistently(self, tmp_path: Path) -> None:
         run_dir = tmp_path / "promotion-iterations"

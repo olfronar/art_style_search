@@ -66,8 +66,8 @@ uv tool install pre-commit                           # Install the pre-commit CL
 Top-level modules in `src/art_style_search/`:
 
 - `__main__.py` - Entry point with `list`, `clean`, `report` subcommands; default runs `loop.run(config)`.
-- `loop.py` - Main orchestration loop: zero-step setup, per-iteration phase calls (`_build_iteration_context` → `_propose_iteration_experiments` → `_run_experiments_parallel` → `_score_and_rank` → `asyncio.gather` over synthesis/pairwise/review → `_run_synthesis_experiment` → `_confirmatory_validation` → `_apply_iteration_result` → `_update_knowledge_base_for_iteration` → `_record_iteration_state`), plus plateau-convergence check. Phase helpers live in `workflow/`.
-- `config.py` - CLI argument parsing → `Config` dataclass. Includes `--seed`, `--protocol {classic, rigorous}`, `--reasoning-provider`, `--comparison-provider`, etc.
+- `loop.py` - Main orchestration loop: zero-step setup, per-iteration phase calls (`_build_iteration_context` → `_propose_iteration_experiments` → `_run_experiments_parallel` → `_score_and_rank` → `asyncio.gather` over synthesis/pairwise/review → `_run_synthesis_experiment` → `_apply_iteration_result` → `_update_knowledge_base_for_iteration` → `_record_iteration_state`), plus plateau-convergence check. Phase helpers live in `workflow/`.
+- `config.py` - CLI argument parsing → `Config` dataclass. Includes `--seed`, `--protocol {short, classic}`, `--reasoning-provider`, `--comparison-provider`, etc.
 - `types.py` / `contracts.py` / `taxonomy.py` - Shared dataclasses, transient workflow contracts, `CATEGORY_SYNONYMS` map. See `src/art_style_search/CLAUDE.md` for the full data shape notes.
 - `analyze.py`, `caption.py`, `caption_sections.py`, `generate.py`, `experiment.py`, `evaluate.py`, `scoring.py`, `knowledge.py`, `models.py` - Pipeline: caption → generate → evaluate. See `src/art_style_search/CLAUDE.md`.
 - `reasoning_client.py`, `retry.py`, `media.py`, `utils.py` - Providers, retry, shared helpers. See `src/art_style_search/CLAUDE.md`.
@@ -79,7 +79,7 @@ Sub-packages have their own CLAUDE.md:
 
 - `src/art_style_search/CLAUDE.md` - Pipeline conventions (caption/evaluate/scoring/knowledge/state/retry).
 - `src/art_style_search/prompt/CLAUDE.md` - Reasoning-model interface (propose_experiments, synthesis, review, initial-template brainstorm→rank→expand).
-- `src/art_style_search/workflow/CLAUDE.md` - Orchestration package (iteration phases, policy, information barrier).
+- `src/art_style_search/workflow/CLAUDE.md` - Orchestration package (iteration phases, policy, protocol dispatch).
 - `src/art_style_search/reporting/CLAUDE.md` - HTML report (render, charts, document, CSS).
 
 ## Directory Conventions
@@ -115,7 +115,7 @@ Penalties subtracted from the weighted sum (result floor-clamped to 0.0):
 - **Ref-shortfall penalty** (×0.04): `max(requested - actual, 0) / requested`.
 - **Subject-floor penalty** (×0.05): active only when `vision_subject < 0.35`; scales linearly toward the floor.
 
-`per_image_composite` (used in `paired_promotion_test`) uses the same base weights minus `_W_STYLE_CON` and applies no penalties — max output 0.92.
+`per_image_composite` uses the same base weights minus `_W_STYLE_CON` and applies no penalties — max output 0.92.
 
 ## Cross-cutting Conventions
 
@@ -127,7 +127,7 @@ Penalties subtracted from the weighted sum (result floor-clamped to 0.0):
 - Scoring: `adaptive_composite_score` ranks experiments against each other (relative); `composite_score` is used for improvement checks against baseline (absolute, same scale, with `improvement_epsilon(baseline)` adaptive threshold to filter generation noise) — never compare values from different scoring functions. `improvement_epsilon(baseline)` returns `max(IMPROVEMENT_EPSILON * (1 - max(baseline, 0)), 0.001)` — threshold shrinks as score climbs with a floor of 0.001 to prevent false-positive improvements at high baselines.
 - Caption cache keys are content-derived (`p{sha256(meta_prompt)[:12]}`) in both protocol modes — identical meta-prompts share cache entries across experiments and iterations.
 - Style analysis cache is shared across runs via `runs/.cache/style_{hash}.json` keyed by sorted reference paths+mtimes. New runs with the same ref images skip the 3 API calls entirely. The cache is also copied into each run's `log_dir` for provenance.
-- Scientific rigor is controlled by `--protocol {classic, rigorous}`. Classic preserves current behavior exactly. Rigorous enables: (1) information barrier (70/30 feedback/silent split), (2) confirmatory replication (top-2 + incumbent × 3 replicates), (3) Wilcoxon signed-rank statistical test for promotion (p < 0.10). See `src/art_style_search/workflow/CLAUDE.md` for details.
+- Protocol is controlled by `--protocol {short, classic}` (default `short`). `short` = 3-iter cheap foundation pass (iter 1 structural bold exploration, iter 2 canon refinement, iter 3 synthesis with replicates); `classic` = 5-iter refinement pass with paired-replicate gate (A1), diff-based canon editing (A2), portfolio category quota (A4), and headroom-weighted scoring (A6). The classic pass typically resumes on a prior short run via `--run <name>`. See `src/art_style_search/workflow/CLAUDE.md` for details.
 - `--seed` provides deterministic reference selection via a `random.Random(seed)` instance on `RunContext`. Retry jitter in `utils.py` stays unseeded (timing, not experiment logic). Seed is persisted in `LoopState.seed` and `run_manifest.json`.
 - Number of fixed reference images is configurable via `--num-fixed-refs` (default 20). On resume, existing refs from state.json are used regardless.
 
