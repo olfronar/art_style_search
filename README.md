@@ -8,44 +8,30 @@ Inspired by [karpathy/autoresearch](https://github.com/karpathy/autoresearch).
 
 ## How It Works
 
+```mermaid
+flowchart TD
+    refs([Reference Images])
+    mp([Meta-Prompt])
+    capt([Caption<br/>Art Style · Subject · Palette · Composition · Lighting])
+    img([Generated Image])
+
+    cap["<b>Captioner</b><br/>Gemini Pro"]
+    gen["<b>Generator</b><br/>Gemini Flash"]
+    eval["<b>Evaluator</b><br/>DreamSim · HPS · SSIM · Color · Aesthetics<br/>5-axis vision judge"]
+    opt["<b>Optimizer</b><br/>Claude / GLM / GPT / Grok"]
+
+    refs --> cap
+    mp --> cap
+    cap --> capt
+    capt --> gen
+    gen --> img
+    img --> eval
+    refs -.paired.-> eval
+    eval --> opt
+    opt -->|refines + canon-edit ledger| mp
 ```
-Reference Image + Meta-Prompt
-        |
-        v
-  Captioner (Gemini Pro per-iteration;
-  at zero-step, --bootstrap-captioner claude
-  routes BOTH the 20-ref captions AND
-  the parallel visual style analysis
-  through Claude Opus 4.7)
-        |
-        v
-   Detailed Caption
-   (includes [Art Style] canon copied
-    verbatim from meta-prompt's
-    style_foundation, plus observation
-    blocks: [Subject], [Color Palette],
-    [Composition], [Lighting & Atmosphere])
-        |
-        v
-  Gemini Flash (generator)
-  (canon's MUST/NEVER invariants
-   also fed to generator system prompt)
-        |
-        v
-   Generated Image
-        |
-        v
-  Compare with Original
-  (DreamSim, Color, SSIM, HPS, Aesthetics,
-   5-axis Gemini ternary vision —
-   style/subject/composition/medium/proportions —
-   + style-gap observations + caption compliance)
-        |
-        v
-  Reasoning model (optimizer)
-  Refines the meta-prompt, tracks a
-  canon-edit ledger across iterations
-```
+
+The `[Art Style]` block of every caption is the meta-prompt's `style_foundation` copied verbatim; the same canon (plus its MUST/NEVER invariants) is fed to the generator's system prompt. The zero-step captioning + parallel visual analysis can be routed through Claude via `--bootstrap-captioner claude`.
 
 The meta-prompt is the only external artifact being optimized — but its whole **structure** is part of the search space, not just the text inside fixed slots. Each iteration the reasoner can rewrite any section's content, add new sections, drop or rename existing ones (beyond the two required anchors), reorder the `[Section]` labels the captioner emits (`caption_sections`), adjust the per-caption word-count target (`caption_length_target`), and edit the `negative_prompt`. Two anchors are fixed: `style_foundation` must be first and `subject_anchor` must be second; everything else is open.
 
