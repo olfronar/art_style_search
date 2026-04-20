@@ -85,8 +85,34 @@ async def run(config: Config) -> LoopState:
     if state is not None:
         logger.info("Resumed from iteration %d with %d fixed references", state.iteration, len(state.fixed_references))
         if state.converged:
-            logger.info("Previous run already converged (%s) — skipping loop", state.convergence_reason)
-            return _finalize_run(state, ctx)
+            # Budget-exhaustion convergence is resumable when the new invocation provides more
+            # runway: this is the short→classic flow (short reaches max=3, user re-invokes with
+            # --protocol classic --max-iterations 5 to keep going on the same state). Plateau
+            # and reasoning-stop convergence stay respected — the optimizer actively decided
+            # to stop, not just ran out of budget.
+            budget_resumable = (
+                state.convergence_reason == ConvergenceReason.MAX_ITERATIONS
+                and state.iteration + 1 < config.max_iterations
+            )
+            if budget_resumable:
+                logger.info(
+                    "Previous run hit max_iterations=%d; resuming with new budget max_iterations=%d",
+                    state.iteration + 1,
+                    config.max_iterations,
+                )
+                state.converged = False
+                state.convergence_reason = None
+                state.plateau_counter = 0
+                state.protocol = config.protocol
+                # Advance past the last completed iteration — budget-resume continues FROM the
+                # next iteration, not re-runs the final short iter.
+                state.iteration += 1
+                from art_style_search.state import save_state
+
+                save_state(state, config.state_file)
+            else:
+                logger.info("Previous run already converged (%s) — skipping loop", state.convergence_reason)
+                return _finalize_run(state, ctx)
         if await maybe_rebuild_canon_on_resume(state, ctx):
             from art_style_search.state import save_state
 
