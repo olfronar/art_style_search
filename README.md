@@ -1,6 +1,8 @@
 # Art Style Search
 
-Self-improving loop that finds the best prompt to define and follow an art style from reference images. A meta-prompt instructs a captioner (Gemini Pro) how to describe images so a generator (Gemini Flash) can recreate them from the captions. A reasoning model (Claude, GLM-5.1, GPT-5.4, or Grok 4.20 — swappable via `--reasoning-provider`) optimizes the meta-prompt through hypothesis-driven experiments, image comparison can run on either Gemini or Grok via `--comparison-provider`, and the one-time zero-step (20-ref captioning + parallel visual analysis that seeds the first meta-prompt) can optionally be routed through Anthropic Claude via `--bootstrap-captioner claude` for a richer initial style read.
+Self-improving loop that finds the best prompt to define and follow an art style from reference images. A meta-prompt instructs a captioner (Gemini Pro) how to describe images so a generator (Gemini Flash) can recreate them from the captions. A reasoning model (Claude, GLM-5.1, GPT-5.4, or Grok 4.20) optimizes the meta-prompt through hypothesis-driven experiments.
+
+Every model in the stack is swappable: `--reasoning-provider` picks the optimizer, `--comparison-provider` picks the vision judge (Gemini or Grok), and `--bootstrap-captioner claude` optionally routes the one-time zero-step (20-ref captioning + parallel visual analysis) through Anthropic Claude for a richer initial style read.
 
 Inspired by [karpathy/autoresearch](https://github.com/karpathy/autoresearch).
 

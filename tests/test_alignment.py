@@ -81,9 +81,9 @@ class TestPerImageScoreForAlignment:
         assert score.dreamsim_similarity == pytest.approx(0.55)
 
     def test_score_with_dropped_generations(self) -> None:
-        """Reproduces the homescapes bug: filename stems skip dropped slots
-        (10, 15) but per_image_scores is pruned to surviving positions.
-        Using the stem as an index returned the score for the *next* slot.
+        """Regression: filename stems skip dropped slots (10, 15) but
+        per_image_scores is pruned to surviving positions. Using the stem as
+        an index returned the score for the *next* slot.
         """
         result = _make_result(3, dreamsim_values=[0.1, 0.2, 0.3])
         # Emulate slots 0, 11, 16 surviving from a 20-ref batch.
@@ -135,8 +135,8 @@ class TestBuildRefGenPairs:
     def test_with_gaps(self) -> None:
         """Dropped generations prune image_paths AND iteration_captions in
         lockstep. Filename stems preserve the original fixed-refs slot; list
-        position is what pairs them. Reproduces the homescapes-run bug where
-        a ref_slot==10 drop caused every later pair to shift by one."""
+        position is what pairs them. Regression: a ref_slot==10 drop used
+        to shift every later pair by one."""
         # Simulates fixed_refs of 6 where slots 1, 3, 4 failed generation.
         # Surviving slots: 0, 2, 5 → filenames 00, 02, 05.
         result = IterationResult(
