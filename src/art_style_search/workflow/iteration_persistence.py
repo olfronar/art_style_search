@@ -33,7 +33,10 @@ _CANON_EDIT_LEDGER_MAX = 5
 # Max canon excerpt length preserved per ledger entry; ~400 chars shows each side's shape.
 _CANON_EDIT_EXCERPT_CHARS = 400
 # Canon-affected metric axes surfaced in the ledger (style / medium / subject / consistency).
+# MegaStyle is the primary continuous style-similarity signal (8% composite weight) — canon
+# edits move it directly, so the ledger must surface its delta alongside the Gemini vision dims.
 _CANON_LEDGER_METRIC_AXES: tuple[str, ...] = (
+    "megastyle_similarity_mean",
     "vision_style",
     "vision_medium",
     "vision_subject",
@@ -41,6 +44,12 @@ _CANON_LEDGER_METRIC_AXES: tuple[str, ...] = (
     "style_consistency",
 )
 # Axes that count as "canon-relevant improvement" when retiring resolved style-gap observations.
+# Observations come from the Gemini vision judge — they represent the judge's textual
+# complaints. A MegaStyle improvement is a different signal entirely (continuous, image-space,
+# anti-correlates with the ternary judge in practice — see the 2026-04 rebalance rationale),
+# so it must NOT retire judge-sourced observations: the judge's concern is live until the
+# judge's verdict changes. MegaStyle still appears in `_CANON_LEDGER_METRIC_AXES` so its
+# delta shows on ledger entries; retirement gating stays on judge-accepting axes only.
 _RETIRE_METRIC_AXES: tuple[str, ...] = (
     "vision_style",
     "vision_medium",

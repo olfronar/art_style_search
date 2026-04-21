@@ -183,18 +183,21 @@ def _experiment_system_prompt(
             "### Metrics\n"
             "| Metric | Range | Good | Description |\n"
             "|--------|-------|------|-------------|\n"
-            "| DreamSim | 0-1 | 0.6+ | Perceptual similarity |\n"
+            "| DreamSim | 0-1 | 0.6+ | Perceptual similarity (human-aligned) |\n"
             "| Color histogram | 0-1 | 0.7+ | Palette match |\n"
             "| SSIM | 0-1 | 0.7+ | Structural similarity |\n"
             "| HPS v2 | 0.2-0.3 | >0.25 | Caption-image alignment |\n"
-            "| Aesthetics | 1-10 | 7+ | Visual quality |\n"
-            "| vision_style/subject/composition | 0-1 | MATCH=1.0, PARTIAL=0.5, MISS=0.0 | Gemini ternary |\n"
+            "| Aesthetics | 1-10 | 7+ | Visual quality (LAION predictor) |\n"
+            "| MegaStyle | 0-1 | 0.6+ | Style-space cosine (SigLIP fine-tuned; content-disentangled, primary style signal) |\n"
+            "| vision_style/subject/composition/medium/proportions | 0-1 | MATCH=1.0, PARTIAL=0.5, MISS=0.0 | Gemini ternary verdicts (coarse) |\n"
+            "| style_consistency | 0-1 | 0.8+ | Jaccard word-overlap across caption [Art Style] blocks (canon pull-through alarm) |\n"
             "Weights are ADAPTIVE — metrics with more variance across experiments get higher weight.\n\n"
         )
     else:
         context = (
             "## Metrics reminder\n"
-            "Same pipeline and metrics as before: DreamSim, Color histogram, SSIM, HPS v2, Aesthetics, Vision (style/subject/composition).\n\n"
+            "Same pipeline and metrics as before: DreamSim, Color histogram, SSIM, HPS v2, Aesthetics, "
+            "MegaStyle, Vision (style/subject/composition/medium/proportions), style_consistency.\n\n"
         )
 
     strategy = (

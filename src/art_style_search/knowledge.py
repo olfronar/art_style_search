@@ -269,12 +269,16 @@ def _manage_open_problems(
                 OpenProblem(text=prob_text, category=prob_cat, priority=priority, metric_gap=gap, since_iteration=since)
             )
 
-        # Auto-add open problems from low Gemini vision dimension scores
+        # Auto-add open problems from low Gemini vision dimension scores. All five verdicts
+        # need to surface so the reasoner can target the failing dim — medium + proportions
+        # were added in v5 alongside the dim-specific categories in `taxonomy.CATEGORY_SYNONYMS`.
         agg = result.aggregated
         vision_dims = [
             ("style", agg.vision_style, "technique"),
             ("subject", agg.vision_subject, "subject_matter"),
             ("composition", agg.vision_composition, "composition"),
+            ("medium", agg.vision_medium, "rendering_dimensionality"),
+            ("proportions", agg.vision_proportions, "proportions"),
         ]
         for dim_name, score, cat_name in vision_dims:
             if score < 0.5:
@@ -343,9 +347,13 @@ def update_knowledge_base(
             "aesthetics": result.aggregated.aesthetics_score_mean - best_metrics.aesthetics_score_mean,
             "color_histogram": result.aggregated.color_histogram_mean - best_metrics.color_histogram_mean,
             "ssim": result.aggregated.ssim_mean - best_metrics.ssim_mean,
+            "megastyle": result.aggregated.megastyle_similarity_mean - best_metrics.megastyle_similarity_mean,
             "vision_style": result.aggregated.vision_style - best_metrics.vision_style,
             "vision_subject": result.aggregated.vision_subject - best_metrics.vision_subject,
             "vision_composition": result.aggregated.vision_composition - best_metrics.vision_composition,
+            "vision_medium": result.aggregated.vision_medium - best_metrics.vision_medium,
+            "vision_proportions": result.aggregated.vision_proportions - best_metrics.vision_proportions,
+            "style_consistency": result.aggregated.style_consistency - best_metrics.style_consistency,
         }
 
     lessons = proposal.lessons

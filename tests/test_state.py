@@ -710,3 +710,94 @@ class TestLoopStateNewFields:
         assert loaded.protocol == "classic"  # migrated away from rigorous
         assert not hasattr(loaded, "feedback_refs")
         assert not hasattr(loaded, "silent_refs")
+
+    def test_legacy_v8_state_backfills_megastyle(self, tmp_path: Path) -> None:
+        """v8 state.json with experiment_history entries lacking megastyle_* keys → loads with 0.0 defaults.
+
+        Regression guard for the v9 codec bug where `_metric_scores_from_dict` /
+        `_aggregated_metrics_from_dict` silently dropped the megastyle fields because
+        the migration ran only under a version-guarded cascade that skipped v8→v9.
+        """
+        import json
+
+        state_file = tmp_path / "state.json"
+        legacy_aggregated = {
+            "dreamsim_similarity_mean": 0.7,
+            "dreamsim_similarity_std": 0.03,
+            "hps_score_mean": 0.25,
+            "hps_score_std": 0.01,
+            "aesthetics_score_mean": 6.0,
+            "aesthetics_score_std": 0.3,
+            # v9 fields deliberately omitted: megastyle_similarity_mean/_std
+        }
+        legacy_per_image_scores = [
+            {
+                "dreamsim_similarity": 0.71,
+                "hps_score": 0.26,
+                "aesthetics_score": 6.1,
+                # v9 field deliberately omitted: megastyle_similarity
+            }
+        ]
+        legacy_iteration_result = {
+            "branch_id": 0,
+            "iteration": 0,
+            "template": {"sections": [], "negative_prompt": None, "caption_sections": [], "caption_length_target": 0},
+            "rendered_prompt": "",
+            "image_paths": [],
+            "per_image_scores": legacy_per_image_scores,
+            "aggregated": legacy_aggregated,
+            "claude_analysis": "",
+            "template_changes": "",
+            "kept": False,
+            "hypothesis": "",
+            "experiment": "",
+            "vision_feedback": "",
+            "roundtrip_feedback": "",
+            "iteration_captions": [],
+        }
+        legacy_payload = {
+            "_schema_version": 8,
+            "iteration": 1,
+            "current_template": {
+                "sections": [],
+                "negative_prompt": None,
+                "caption_sections": [],
+                "caption_length_target": 0,
+            },
+            "best_template": {
+                "sections": [],
+                "negative_prompt": None,
+                "caption_sections": [],
+                "caption_length_target": 0,
+            },
+            "best_metrics": legacy_aggregated,
+            "knowledge_base": {"hypotheses": [], "categories": {}, "open_problems": [], "next_id": 1},
+            "captions": [],
+            "style_profile": {
+                "color_palette": "",
+                "composition": "",
+                "technique": "",
+                "mood_atmosphere": "",
+                "subject_matter": "",
+                "influences": "",
+                "gemini_raw_analysis": "",
+                "claude_raw_analysis": "",
+            },
+            "fixed_references": [],
+            "seed": 42,
+            "protocol": "classic",
+            "experiment_history": [legacy_iteration_result],
+            "last_iteration_results": [legacy_iteration_result],
+        }
+        state_file.write_text(json.dumps(legacy_payload), encoding="utf-8")
+
+        loaded = load_state(state_file)
+        assert loaded is not None
+        # Best-metrics codec path: megastyle fields default to 0.0.
+        assert loaded.best_metrics is not None
+        assert loaded.best_metrics.megastyle_similarity_mean == 0.0
+        assert loaded.best_metrics.megastyle_similarity_std == 0.0
+        # Nested-in-history codec path (the one that previously slipped past version-guarded migration).
+        assert loaded.experiment_history[0].aggregated.megastyle_similarity_mean == 0.0
+        assert loaded.experiment_history[0].per_image_scores[0].megastyle_similarity == 0.0
+        assert loaded.last_iteration_results[0].aggregated.megastyle_similarity_mean == 0.0

@@ -279,9 +279,11 @@ async def _run_synthesis_experiment(
         return
     merged_score = composite_score(synth_result.aggregated)
     logger.info(
-        "Synthesis result: DS=%.4f (best individual: %.4f)",
+        "Synthesis result: DS=%.4f Mega=%.4f (best individual: DS=%.4f Mega=%.4f)",
         synth_result.aggregated.dreamsim_similarity_mean,
+        synth_result.aggregated.megastyle_similarity_mean,
         ranking.best_exp.aggregated.dreamsim_similarity_mean,
+        ranking.best_exp.aggregated.megastyle_similarity_mean,
     )
 
     ranking.exp_results.append(synth_result)

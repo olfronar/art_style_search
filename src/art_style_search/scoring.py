@@ -138,6 +138,7 @@ _METRIC_DELTA_ATTRS: tuple[tuple[str, str], ...] = (
     ("ssim_mean", "ssim_mean"),
     ("hps_score_mean", "hps_score_mean"),
     ("aesthetics_score_mean", "aesthetics_score_mean"),
+    ("megastyle_similarity_mean", "megastyle_similarity_mean"),
     ("vision_style", "vision_style"),
     ("vision_subject", "vision_subject"),
     ("vision_composition", "vision_composition"),

@@ -20,6 +20,7 @@ _SYNTHESIS_DELTA_LABELS: dict[str, str] = {
     "ssim_mean": "SSIM",
     "hps_score_mean": "HPS v2",
     "aesthetics_score_mean": "Aesthetics",
+    "megastyle_similarity_mean": "MegaStyle",
     "vision_style": "vision_style",
     "vision_subject": "vision_subject",
     "vision_composition": "vision_composition",

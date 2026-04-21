@@ -168,12 +168,12 @@ Each metric compares a generated image against its specific paired original; wei
 | **DreamSim** | 34% | Human-aligned perceptual similarity | Higher |
 | **Color histogram** | 17% | HSV histogram intersection | Higher |
 | **HPS v2** | 7% | Caption-image alignment (normalized / 0.35) | Higher |
+| **MegaStyle** | 8% | Cosine similarity in the [MegaStyle-Encoder](https://arxiv.org/abs/2604.08364) embedding (SigLIP SoViT-400M fine-tuned on 1.4M style-paired images) — content-disentangled style-space signal, independent of DreamSim and the vision judge. Primary style-similarity weight since the homescapes rebalance showed the ternary `vision_style` judge systematically demoting high-MegaStyle branches. | Higher |
 | **Vision (subject)** | 7% | Gemini ternary subject fidelity (paired with subject-floor penalty) | Higher |
-| **Vision (style)** | 6% | Gemini ternary style fidelity | Higher |
 | **Aesthetics** | 6% | Visual quality (LAION predictor, 1-10) | Higher |
 | **SSIM** | 6% | Structural similarity index | Higher |
-| **MegaStyle** | 5% | Cosine similarity in the [MegaStyle-Encoder](https://arxiv.org/abs/2604.08364) embedding (SigLIP SoViT-400M fine-tuned on 1.4M style-paired images) — content-disentangled style-space signal, independent of DreamSim and the vision judge | Higher |
 | **Vision (composition)** | 4% | Gemini ternary spatial layout | Higher |
+| **Vision (style)** | 3% | Gemini ternary style fidelity — regression-alarm role since the rebalance (MegaStyle is now the primary style weight). | Higher |
 | **Style consistency** | 3% | Jaccard overlap of [Art Style] blocks (canon-pull-through alarm; demoted from 8% when MegaStyle was added since token-overlap on captions has Spearman ≈0 with image-space style similarity) | Higher |
 | **Vision (proportions)** | 3% | Gemini ternary head-heights + character archetype | Higher |
 | **Vision (medium)** | 2% | Gemini ternary agreement on rendering medium (plain observable vocabulary) | Higher |

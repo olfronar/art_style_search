@@ -323,7 +323,7 @@ def _render_trajectories_section(composite_json: str, multi_json: str) -> str:
   <div class="section-head">
     <span class="section-numeral">I</span>
     <h2>Metric trajectories</h2>
-    <p class="section-kicker">Composite score and nine component metrics over the run.</p>
+    <p class="section-kicker">Composite score and twelve component metrics over the run.</p>
   </div>
   <figure class="chart-figure">
     <div id="composite-chart" class="chart"></div>
@@ -331,7 +331,7 @@ def _render_trajectories_section(composite_json: str, multi_json: str) -> str:
   </figure>
   <figure class="chart-figure">
     <div id="metrics-chart" class="chart"></div>
-    <figcaption>Figure 2 · All nine components of the composite score. Vermilion = best-of-iteration; cream = batch mean.</figcaption>
+    <figcaption>Figure 2 · All twelve components of the composite score. Vermilion = best-of-iteration; cream = batch mean.</figcaption>
   </figure>
   <script type="application/json" id="composite-data">{composite_json}</script>
   <script type="application/json" id="metrics-data">{multi_json}</script>
@@ -521,9 +521,12 @@ def _render_iteration_drilldown(data: ReportData, report_dir: Path) -> str:
         "<div class='kv-row'><dt>SSIM</dt><dd>Structural similarity index</dd></div>"
         "<div class='kv-row'><dt>HPS</dt><dd>Human Preference Score v2 (caption-image alignment)</dd></div>"
         "<div class='kv-row'><dt>Aes</dt><dd>LAION Aesthetics predictor (1-10 scale)</dd></div>"
+        "<div class='kv-row'><dt>Mega</dt><dd>MegaStyle-Encoder cosine similarity (SigLIP fine-tuned, content-disentangled)</dd></div>"
         "<div class='kv-row'><dt>V[S]</dt><dd>Vision style fidelity (MATCH/PARTIAL/MISS)</dd></div>"
         "<div class='kv-row'><dt>V[Su]</dt><dd>Vision subject fidelity</dd></div>"
         "<div class='kv-row'><dt>V[Co]</dt><dd>Vision composition fidelity</dd></div>"
+        "<div class='kv-row'><dt>V[Me]</dt><dd>Vision medium agreement</dd></div>"
+        "<div class='kv-row'><dt>V[Pr]</dt><dd>Vision proportions agreement (head-heights, archetype)</dd></div>"
         "</dl></details>"
     )
 

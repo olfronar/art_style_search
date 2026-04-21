@@ -130,27 +130,18 @@ def _migrate_state_payload(raw: dict[str, Any], version: int) -> dict[str, Any]:
         data.setdefault("protocol", "classic")
         data.setdefault("feedback_refs", [])
         data.setdefault("silent_refs", [])
-    if version < 3:
-        results = data.get("experiment_history", [])
-        data["experiment_history"] = [
+    # Cascade the per-iteration migrator over every historical payload unconditionally.
+    # The inner migrators (`_migrate_metric_scores_payload`, `_migrate_aggregated_metrics_payload`)
+    # are all idempotent `setdefault` calls, so re-running on already-migrated data is a no-op.
+    # Running on every load guards against future schema bumps that add fields to nested
+    # IterationResult payloads inside `experiment_history` / `last_iteration_results`:
+    # otherwise a v8→v9-style gap silently relies on codec `.get(..., default)` fallbacks
+    # instead of proper backfill. Version-guards on this cascade previously missed v8→v9.
+    for list_key in ("experiment_history", "last_iteration_results"):
+        results = data.get(list_key, [])
+        data[list_key] = [
             _migrate_iteration_result_payload(dict(result)) if isinstance(result, dict) else result
             for result in results
-        ]
-        last_results = data.get("last_iteration_results", [])
-        data["last_iteration_results"] = [
-            _migrate_iteration_result_payload(dict(result)) if isinstance(result, dict) else result
-            for result in last_results
-        ]
-    if version < 4:
-        results = data.get("experiment_history", [])
-        data["experiment_history"] = [
-            _migrate_iteration_result_payload(dict(result)) if isinstance(result, dict) else result
-            for result in results
-        ]
-        last_results = data.get("last_iteration_results", [])
-        data["last_iteration_results"] = [
-            _migrate_iteration_result_payload(dict(result)) if isinstance(result, dict) else result
-            for result in last_results
         ]
     if "best_metrics" in data and isinstance(data["best_metrics"], dict):
         data["best_metrics"] = _migrate_aggregated_metrics_payload(dict(data["best_metrics"]))

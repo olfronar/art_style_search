@@ -76,6 +76,7 @@ _REVIEW_DELTA_LABELS: dict[str, str] = {
     "hps_score_mean": "HPS",
     "ssim_mean": "SSIM",
     "aesthetics_score_mean": "Aes",
+    "megastyle_similarity_mean": "MegaStyle",
     "vision_style": "vision_style",
     "vision_subject": "vision_subject",
     "vision_composition": "vision_composition",
@@ -120,6 +121,7 @@ def _noise_floor_summary(experiments: list[IterationResult]) -> str:
         "hps_score_mean": [m.hps_score_mean for m in metrics],
         "ssim_mean": [m.ssim_mean for m in metrics],
         "aesthetics_score_mean": [m.aesthetics_score_mean for m in metrics],
+        "megastyle_similarity_mean": [m.megastyle_similarity_mean for m in metrics],
         "vision_style": [m.vision_style for m in metrics],
         "vision_subject": [m.vision_subject for m in metrics],
         "vision_composition": [m.vision_composition for m in metrics],
@@ -140,6 +142,10 @@ def _noise_floor_summary(experiments: list[IterationResult]) -> str:
         ("vision_style", "dreamsim_similarity_mean", "r(vision_style,DS)"),
         ("vision_subject", "dreamsim_similarity_mean", "r(vision_subject,DS)"),
         ("vision_composition", "ssim_mean", "r(vision_composition,SSIM)"),
+        # MegaStyle is intended as a content-disentangled style axis — if it correlates
+        # strongly with DreamSim (content) in a given run, MegaStyle is likely tracking
+        # content rather than style and its movement should be discounted.
+        ("megastyle_similarity_mean", "dreamsim_similarity_mean", "r(MegaStyle,DS)"),
     )
     corr_bits: list[str] = []
     for axis_a, axis_b, label in correlation_pairs:

@@ -205,11 +205,13 @@ class TestCompletionPenalty:
         assert delta_50 == pytest.approx(0.075, abs=1e-6)
 
     def test_full_completion_no_penalty(self) -> None:
-        base = make_aggregated_metrics()
+        # At completion_rate=1.0, the (1 - rate) * _W_COMPLETION_PENALTY term is zero —
+        # dropping a partial-completion run back to 1.0 should bump the score by exactly
+        # (1 - original_rate) * _W_COMPLETION_PENALTY.
+        base = replace(make_aggregated_metrics(), completion_rate=0.6)
         full = replace(base, completion_rate=1.0)
-        # Completion penalty should be 0 when rate is 1.0
-        no_rate = replace(base)  # default completion_rate=1.0
-        assert composite_score(full) == pytest.approx(composite_score(no_rate))
+        expected_bump = (1.0 - 0.6) * 0.15  # _W_COMPLETION_PENALTY
+        assert composite_score(full) - composite_score(base) == pytest.approx(expected_bump, abs=1e-6)
 
 
 # ---------------------------------------------------------------------------

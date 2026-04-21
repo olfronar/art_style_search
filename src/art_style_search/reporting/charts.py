@@ -18,11 +18,13 @@ _METRIC_SPECS: list[tuple[str, str]] = [
     ("ssim_mean", "SSIM"),
     ("hps_score_mean", "HPS v2"),
     ("aesthetics_score_mean", "Aesthetics"),
-    ("style_consistency", "Style Consistency"),
     ("megastyle_similarity_mean", "MegaStyle"),
+    ("style_consistency", "Style Consistency"),
     ("vision_style", "Vision · Style"),
     ("vision_subject", "Vision · Subject"),
     ("vision_composition", "Vision · Composition"),
+    ("vision_medium", "Vision · Medium"),
+    ("vision_proportions", "Vision · Proportions"),
 ]
 
 
@@ -135,7 +137,7 @@ def _build_composite_trajectory(data: ReportData) -> str:
 
 
 def _build_per_metric_trajectories(data: ReportData) -> str:
-    """4x3 subplot grid of the 10 component metrics (best + mean per iter)."""
+    """4x3 subplot grid of the 12 component metrics (best + mean per iter)."""
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 

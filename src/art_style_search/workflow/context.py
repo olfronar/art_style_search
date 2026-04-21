@@ -110,16 +110,20 @@ def _log_experiment_results(results: list[IterationResult], log_dir: Path, save_
         save_iteration_log(result, log_dir)
         metrics = result.aggregated
         logger.info(
-            "Exp %d — DS=%.3f Color=%.3f SSIM=%.3f HPS=%.3f Aes=%.1f V[S=%.2f Su=%.2f Co=%.2f] %s",
+            "Exp %d — DS=%.3f Color=%.3f SSIM=%.3f HPS=%.3f Aes=%.1f Mega=%.3f "
+            "V[S=%.2f Su=%.2f Co=%.2f Me=%.2f Pr=%.2f] %s",
             result.branch_id,
             metrics.dreamsim_similarity_mean,
             metrics.color_histogram_mean,
             metrics.ssim_mean,
             metrics.hps_score_mean,
             metrics.aesthetics_score_mean,
+            metrics.megastyle_similarity_mean,
             metrics.vision_style,
             metrics.vision_subject,
             metrics.vision_composition,
+            metrics.vision_medium,
+            metrics.vision_proportions,
             "KEPT" if result.kept else "discarded",
         )
 
@@ -309,10 +313,11 @@ def _finalize_run(state: LoopState, ctx: RunContext) -> LoopState:
     if state.global_best_metrics:
         metrics = state.global_best_metrics
         logger.info(
-            "FINAL BEST — DS=%.4f HPS=%.4f Aes=%.2f",
+            "FINAL BEST — DS=%.4f HPS=%.4f Aes=%.2f Mega=%.4f",
             metrics.dreamsim_similarity_mean,
             metrics.hps_score_mean,
             metrics.aesthetics_score_mean,
+            metrics.megastyle_similarity_mean,
         )
     logger.info("BEST META-PROMPT: %s", state.global_best_prompt)
     logger.info("Convergence: %s", state.convergence_reason)

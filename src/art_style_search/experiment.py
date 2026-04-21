@@ -90,7 +90,13 @@ def _format_experiment_feedback(
     for i in order:
         sc, fb = original_scores[i], vision_feedbacks[i]
         ref_path = pairs[i][0]
-        vl = f"S={verdict_label(sc.vision_style)} Su={verdict_label(sc.vision_subject)} Co={verdict_label(sc.vision_composition)}"
+        vl = (
+            f"S={verdict_label(sc.vision_style)} "
+            f"Su={verdict_label(sc.vision_subject)} "
+            f"Co={verdict_label(sc.vision_composition)} "
+            f"Me={verdict_label(sc.vision_medium)} "
+            f"Pr={verdict_label(sc.vision_proportions)}"
+        )
         vision_parts.append(f"**{ref_path.name}** [{vl}]: {fb[:300]}")
     vision_feedback = "\n".join(vision_parts)
 
@@ -112,12 +118,19 @@ def _format_experiment_feedback(
         if prev_ds is not None:
             arrow = "↑" if sc.dreamsim_similarity > prev_ds else "↓" if sc.dreamsim_similarity < prev_ds else "="
             trend = f" [prev DS={prev_ds:.3f} → {sc.dreamsim_similarity:.3f} {arrow}]"
-        vl = f"V[S={verdict_label(sc.vision_style)} Su={verdict_label(sc.vision_subject)} Co={verdict_label(sc.vision_composition)}]"
+        vl = (
+            f"V[S={verdict_label(sc.vision_style)} "
+            f"Su={verdict_label(sc.vision_subject)} "
+            f"Co={verdict_label(sc.vision_composition)} "
+            f"Me={verdict_label(sc.vision_medium)} "
+            f"Pr={verdict_label(sc.vision_proportions)}]"
+        )
         caption_text = cap.text if idx < 3 else f"{cap.text[:300]}..."
         roundtrip_details.append(
             f"Image ({ref_p.name}): DS={sc.dreamsim_similarity:.3f} "
             f"Color={sc.color_histogram:.3f} SSIM={sc.ssim:.3f} "
-            f"HPS={sc.hps_score:.3f} Aes={sc.aesthetics_score:.1f} {vl}{trend}\n"
+            f"HPS={sc.hps_score:.3f} Aes={sc.aesthetics_score:.1f} "
+            f"Mega={sc.megastyle_similarity:.3f} {vl}{trend}\n"
             f"  Caption: {caption_text}"
         )
     roundtrip_feedback = "\n".join(roundtrip_details)
