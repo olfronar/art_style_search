@@ -1076,6 +1076,7 @@ def aggregate(scores: list[MetricScores], *, completion_rate: float = 1.0) -> Ag
     v_composition = [s.vision_composition for s in genuine]
     v_medium = [s.vision_medium for s in genuine]
     v_proportions = [s.vision_proportions for s in genuine]
+    megastyle_vals = [s.megastyle_similarity for s in genuine]
 
     return AggregatedMetrics(
         dreamsim_similarity_mean=_mean(dreamsim_vals),
@@ -1098,6 +1099,8 @@ def aggregate(scores: list[MetricScores], *, completion_rate: float = 1.0) -> Ag
         vision_medium_std=_std(v_medium),
         vision_proportions=_mean(v_proportions),
         vision_proportions_std=_std(v_proportions),
+        megastyle_similarity_mean=_mean(megastyle_vals),
+        megastyle_similarity_std=_std(megastyle_vals),
         completion_rate=completion_rate,
     )
 
@@ -1113,6 +1116,7 @@ _ZERO_SCORES = MetricScores(
     vision_composition=0.0,
     vision_medium=0.0,
     vision_proportions=0.0,
+    megastyle_similarity=0.0,
     is_fallback=True,
 )
 
@@ -1122,14 +1126,22 @@ def _compute_single_sync(
     generated: Image.Image,
     reference: Image.Image,
     prompt: str,
+    reference_key: str | None = None,
 ) -> MetricScores:
-    """Compute all per-image metrics for one generated image (synchronous)."""
+    """Compute all per-image metrics for one generated image (synchronous).
+
+    ``reference_key`` (typically ``str(ref_path)``) lets the MegaStyle-Encoder
+    reuse a cached reference embedding across generated images paired to the
+    same reference — a meaningful saving across experiments in an iteration
+    since ``num_branches`` experiments all re-embed the same fixed refs.
+    """
     return MetricScores(
         dreamsim_similarity=registry.compute_dreamsim(generated, reference),
         hps_score=registry.compute_hps(generated, prompt),
         aesthetics_score=registry.compute_aesthetics(generated),
         color_histogram=registry.compute_color_histogram(generated, reference),
         ssim=registry.compute_ssim(generated, reference),
+        megastyle_similarity=registry.compute_megastyle(generated, reference, reference_key=reference_key),
     )
 
 
@@ -1158,7 +1170,9 @@ async def evaluate_images(
             try:
                 gen_image = Image.open(gen_path).convert("RGB")
                 ref_image = Image.open(ref_path).convert("RGB")
-                scores = await asyncio.to_thread(_compute_single_sync, registry, gen_image, ref_image, caption)
+                scores = await asyncio.to_thread(
+                    _compute_single_sync, registry, gen_image, ref_image, caption, str(ref_path)
+                )
                 return scores
             except Exception as exc:
                 logger.warning("Evaluation failed for %s: %s", gen_path.name, exc)

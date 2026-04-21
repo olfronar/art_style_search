@@ -59,6 +59,7 @@ _PAIRED_TOLERANCES: dict[str, float] = {
     "dreamsim_similarity": 0.9999,
     "color_histogram": 0.999,
     "ssim": 0.999,
+    "megastyle_similarity": 0.9999,
 }
 
 
@@ -320,10 +321,19 @@ def _build_case_rows(scores: MetricScores, vision: VisionScores, *, case: str) -
                 _classify(scores.ssim, minimum=_PAIRED_TOLERANCES["ssim"]),
             )
         )
+        rows.append(
+            MetricRow(
+                "megastyle_similarity",
+                scores.megastyle_similarity,
+                f">= {_PAIRED_TOLERANCES['megastyle_similarity']}",
+                _classify(scores.megastyle_similarity, minimum=_PAIRED_TOLERANCES["megastyle_similarity"]),
+            )
+        )
     else:  # zero
         rows.append(MetricRow("dreamsim_similarity", scores.dreamsim_similarity, "(expected low)", "INFO"))
         rows.append(MetricRow("color_histogram", scores.color_histogram, "(expected low)", "INFO"))
         rows.append(MetricRow("ssim", scores.ssim, "(expected low)", "INFO"))
+        rows.append(MetricRow("megastyle_similarity", scores.megastyle_similarity, "(expected low)", "INFO"))
 
     rows.append(MetricRow("hps_score", scores.hps_score, "(informational)", "INFO"))
     rows.append(MetricRow("aesthetics_score", scores.aesthetics_score, "(informational)", "INFO"))

@@ -17,7 +17,7 @@ flowchart TD
 
     cap["<b>Captioner</b><br/>Gemini Pro"]
     gen["<b>Generator</b><br/>Gemini Flash"]
-    eval["<b>Evaluator</b><br/>DreamSim · HPS · SSIM · Color · Aesthetics<br/>5-axis vision judge"]
+    eval["<b>Evaluator</b><br/>DreamSim · HPS · SSIM · Color · Aesthetics · MegaStyle<br/>5-axis vision judge"]
     opt["<b>Optimizer</b><br/>Claude / GLM / GPT / Grok"]
 
     refs --> cap
@@ -54,7 +54,7 @@ The meta-prompt is the only external artifact being optimized — but its whole 
 Running this loop is not free. Know the order-of-magnitude before you start:
 
 - **API calls**. The default `--protocol short` runs 3 iterations × 9 branches × 20 references -- on the order of 540 Gemini Pro captions, 540 Gemini Flash generations, 540 image-comparison calls (Gemini by default, optionally Grok), and ~10-15 reasoning-model calls. `--protocol classic` extends that with up to 5 more iterations on the short run's output. `--replicates 3` roughly triples the per-iteration cost (candidate + incumbent each replicated). Expect low single-digit US dollars for a short run and several US dollars for short+classic at current 2026 prices.
-- **First-run ML model downloads**. The first invocation pulls ~2 GB of weights from Hugging Face Hub: DreamSim `dino_vitb16` (~870 MB), LAION-Aesthetics CLIP-L, and HPSv2 CLIP-H. These are cached under `~/.cache/huggingface/` plus the local package caches used by DreamSim/OpenCLIP.
+- **First-run ML model downloads**. The first invocation pulls ~3 GB of weights from Hugging Face Hub: DreamSim `dino_vitb16` (~870 MB), LAION-Aesthetics CLIP-L, HPSv2 CLIP-H, and the [MegaStyle-Encoder](https://huggingface.co/Gaojunyao/MegaStyle) fine-tune of SigLIP SoViT-400M (~860 MB) for the content-disentangled style-similarity axis. These are cached under `~/.cache/huggingface/` plus the local package caches used by DreamSim/OpenCLIP.
 - **GPU is optional**. CPU works but is slow. Apple Silicon uses MPS automatically. NVIDIA CUDA users have to pick a matching `torch` wheel (see Troubleshooting).
 - **Smoke-test recipe** (~1% of the cost of a default run):
 
@@ -167,13 +167,14 @@ Each metric compares a generated image against its specific paired original; wei
 |--------|--------|----------|--------|
 | **DreamSim** | 34% | Human-aligned perceptual similarity | Higher |
 | **Color histogram** | 17% | HSV histogram intersection | Higher |
-| **Style consistency** | 8% | Jaccard overlap of [Art Style] blocks (canon-pull-through alarm) | Higher |
 | **HPS v2** | 7% | Caption-image alignment (normalized / 0.35) | Higher |
 | **Vision (subject)** | 7% | Gemini ternary subject fidelity (paired with subject-floor penalty) | Higher |
 | **Vision (style)** | 6% | Gemini ternary style fidelity | Higher |
 | **Aesthetics** | 6% | Visual quality (LAION predictor, 1-10) | Higher |
 | **SSIM** | 6% | Structural similarity index | Higher |
+| **MegaStyle** | 5% | Cosine similarity in the [MegaStyle-Encoder](https://arxiv.org/abs/2604.08364) embedding (SigLIP SoViT-400M fine-tuned on 1.4M style-paired images) — content-disentangled style-space signal, independent of DreamSim and the vision judge | Higher |
 | **Vision (composition)** | 4% | Gemini ternary spatial layout | Higher |
+| **Style consistency** | 3% | Jaccard overlap of [Art Style] blocks (canon-pull-through alarm; demoted from 8% when MegaStyle was added since token-overlap on captions has Spearman ≈0 with image-space style similarity) | Higher |
 | **Vision (proportions)** | 3% | Gemini ternary head-heights + character archetype | Higher |
 | **Vision (medium)** | 2% | Gemini ternary agreement on rendering medium (plain observable vocabulary) | Higher |
 
@@ -185,7 +186,7 @@ Additional penalties (subtracted from the weighted sum, floor-clamped to 0):
 - **Ref-shortfall penalty** (×0.04): fraction of requested reference images that were skipped.
 - **Subject-floor penalty** (×0.05): triggers only when `vision_subject < 0.35`, scaling linearly to the floor.
 
-`per_image_composite` applies the same base weights minus `style_consistency` (experiment-level only) and without any penalties — max output 0.92. Used for the paired-replicate promotion decision when `--replicates > 1`.
+`per_image_composite` applies the same base weights minus `style_consistency` (experiment-level only) and without any penalties — max output 0.97 (includes the MegaStyle per-image signal). Used for the paired-replicate promotion decision when `--replicates > 1`.
 
 ## Protocol Modes
 
@@ -232,7 +233,7 @@ src/art_style_search/
   evaluate.py             Per-image paired metrics + Gemini vision comparison + caption compliance
   scoring.py              Composite scoring (base + headroom-weighted), per-image scoring, replicate promotion gate
   knowledge.py            Knowledge Base maintenance (hypothesis tracking)
-  models.py               Lazy-loaded DreamSim/HPS/Aesthetics/SSIM models
+  models.py               Lazy-loaded DreamSim/HPS/Aesthetics/SSIM/MegaStyle-Encoder models
   taxonomy.py             CATEGORY_SYNONYMS — canonical hypothesis category synonyms
   contracts.py            Transient workflow dataclasses (Lessons, RefinementResult, ExperimentProposal)
   reasoning_client.py     Provider-agnostic ReasoningClient (Anthropic/OpenAI/xAI/Z.AI/local)
@@ -282,6 +283,7 @@ This project stands on the shoulders of:
 
 - [**DreamSim**](https://github.com/ssundaram21/dreamsim) (Fu et al.) -- human-aligned perceptual similarity, the main reproduction metric.
 - [**HPS v2**](https://github.com/tgxs002/HPSv2) (Wu et al.) -- human preference score for caption-image alignment.
+- [**MegaStyle**](https://arxiv.org/abs/2604.08364) (Gao et al. 2026) -- MegaStyle-Encoder (SigLIP SoViT-400M fine-tuned on 1.4M style-paired images) provides the content-disentangled style-space cosine-similarity axis.
 - [**LAION-Aesthetics-Predictor-v2**](https://laion.ai/blog/laion-aesthetics/) via [`simple-aesthetics-predictor`](https://github.com/shunk031/simple-aesthetics-predictor).
 - [**scikit-image**](https://scikit-image.org/) -- SSIM implementation.
 - [**Google Gemini**](https://ai.google.dev/) -- captioner, image generator, and default vision comparator.

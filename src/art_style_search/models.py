@@ -54,6 +54,11 @@ class ModelRegistry:
     _aesthetics_processor: object | None = field(default=None, init=False, repr=False)
     _aesthetics_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
+    _megastyle_encoder: torch.nn.Module | None = field(default=None, init=False, repr=False)
+    _megastyle_processor: object | None = field(default=None, init=False, repr=False)
+    _megastyle_ref_cache: dict[str, torch.Tensor] = field(default_factory=dict, init=False, repr=False)
+    _megastyle_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+
     # ------------------------------------------------------------------
     # Construction
     # ------------------------------------------------------------------
@@ -83,6 +88,35 @@ class ModelRegistry:
         model.eval()
         self._dreamsim_model = model
         self._dreamsim_preprocess = preprocess
+
+    def _ensure_megastyle(self) -> None:
+        if self._megastyle_encoder is not None:
+            return
+        from huggingface_hub import hf_hub_download
+        from transformers import AutoImageProcessor, SiglipVisionModel
+
+        logger.info("Loading MegaStyle-Encoder (SigLIP SoViT-400M + Gaojunyao/MegaStyle fine-tune) ...")
+        self._megastyle_processor = AutoImageProcessor.from_pretrained("google/siglip-so400m-patch14-384")
+        encoder = SiglipVisionModel.from_pretrained("google/siglip-so400m-patch14-384")
+        ckpt_path = hf_hub_download(repo_id="Gaojunyao/MegaStyle", filename="megastyle_encoder.pth")
+        ckpt = torch.load(ckpt_path, map_location="cpu")
+        state = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
+        encoder.load_state_dict(state, strict=False)
+        self._megastyle_encoder = encoder.eval().to(self.device)
+
+    def _embed_megastyle(self, image: Image.Image) -> torch.Tensor:
+        if self._megastyle_encoder is None or self._megastyle_processor is None:
+            raise RuntimeError("MegaStyle-Encoder failed to load")
+        inputs = self._megastyle_processor(images=[image.convert("RGB")], return_tensors="pt")
+        pixel_values = inputs["pixel_values"].to(self.device)
+        # SigLIP's default fp16 path breaks the pooler matmul on MPS; force fp32 there.
+        if self.device.type == "mps":
+            pixel_values = pixel_values.to(torch.float32)
+        with torch.no_grad():
+            out = self._megastyle_encoder(pixel_values=pixel_values)
+        emb = out.pooler_output
+        emb = emb / emb.norm(p=2, dim=-1, keepdim=True)
+        return emb.squeeze(0).float().cpu()
 
     def _ensure_aesthetics(self) -> None:
         if self._aesthetics_model is not None:
@@ -166,6 +200,34 @@ class ModelRegistry:
             similarities.append(float(np.minimum(gen_hist, ref_hist).sum()))
 
         return float(np.mean(similarities))
+
+    def compute_megastyle(
+        self,
+        generated: Image.Image,
+        reference: Image.Image,
+        *,
+        reference_key: str | None = None,
+    ) -> float:
+        """MegaStyle-Encoder cosine similarity between generated and reference.
+
+        Returns a float in [0, 1]; higher is better. Reference embeddings are
+        memoized by ``reference_key`` (typically ``str(ref_path)``) so that
+        multiple generated images paired to the same reference only pay for one
+        reference forward pass per run.
+
+        The cosine is clamped to [0, 1] — values below 0 aren't observed on
+        natural image pairs but the clamp is defensive against edge cases.
+        """
+        with self._megastyle_lock:
+            self._ensure_megastyle()
+            ref_emb = self._megastyle_ref_cache.get(reference_key) if reference_key else None
+            if ref_emb is None:
+                ref_emb = self._embed_megastyle(reference)
+                if reference_key is not None:
+                    self._megastyle_ref_cache[reference_key] = ref_emb
+            gen_emb = self._embed_megastyle(generated)
+            cos = float((gen_emb * ref_emb).sum().item())
+            return max(0.0, min(1.0, cos))
 
     def compute_ssim(self, generated: Image.Image, reference: Image.Image) -> float:
         """Structural Similarity Index (SSIM) for pixel-level comparison.

@@ -18,7 +18,8 @@ _HPS_CEILING = 0.35  # default empirical max for HPS v2 scores; used to normaliz
 
 # Fixed metric weights for composite scoring.
 # Base weights sum to 1.00 for composite_score (experiment-level).
-# per_image_composite omits _W_STYLE_CON → its weights sum to 0.92 (max output 0.92).
+# per_image_composite omits _W_STYLE_CON (experiment-level only) but includes _W_MEGASTYLE
+# (per-image paired similarity) → its weights sum to 0.97 (max output 0.97).
 # Rebalanced for the canon-first regime: since every caption's [Art Style] block is expected
 # to be a verbatim copy of the meta-prompt's ``style_foundation`` canon, ``style_consistency``
 # (Jaccard across [Art Style] blocks) is now a regression alarm — divergence means the canon
@@ -29,7 +30,16 @@ _W_HPS = 0.07
 _W_AESTHETICS = 0.06
 _W_COLOR = 0.17
 _W_SSIM = 0.06
-_W_STYLE_CON = 0.08
+# style_consistency demoted 0.08 → 0.03 with the MegaStyle-Encoder addition: the 754-pair
+# homescapes sweep found token-overlap on caption [Art Style] blocks has Spearman ≈0 with
+# image-space style similarity, so it was carrying essentially noise at 0.08. The 0.05
+# funded _W_MEGASTYLE, which measures the thing style_consistency was supposed to proxy.
+_W_STYLE_CON = 0.03
+# MegaStyle-Encoder cosine similarity (ref vs gen) in SigLIP SoViT-400M embedding space
+# fine-tuned on 1.4M style-paired images (arxiv 2604.08364). Independent axis vs DreamSim
+# (content) and the Gemini vision judge (ternary); Spearman ≈0 with both across 754 pairs,
+# so it adds a continuous, content-disentangled style-space signal not captured elsewhere.
+_W_MEGASTYLE = 0.05
 # Vision slice rebalanced to make room for the medium-class + proportions dims.
 # The medium verdict diagnoses a root cause of many style misses (2D/3D misclassification)
 # and the proportions verdict diagnoses subject-fidelity misses at the anatomy level, so
@@ -160,6 +170,7 @@ _COMPOSITE_AXES: tuple[tuple[float, Callable[[AggregatedMetrics], float]], ...] 
     (_W_COLOR, lambda m: m.color_histogram_mean),
     (_W_SSIM, lambda m: m.ssim_mean),
     (_W_STYLE_CON, lambda m: m.style_consistency),
+    (_W_MEGASTYLE, lambda m: m.megastyle_similarity_mean),
     (_W_VISION_STYLE, lambda m: m.vision_style),
     (_W_VISION_SUBJECT, lambda m: m.vision_subject),
     (_W_VISION_COMP, lambda m: m.vision_composition),
@@ -200,8 +211,8 @@ def composite_score(m: AggregatedMetrics) -> float:
     """Fixed-weight composite score used for absolute quality comparison.
 
     All metrics normalized to ~[0, 1] before weighting.
-    Weights: DreamSim 34%, HPS 7%, Aesthetics 6%, Color 17%, SSIM 10%,
-    StyleConsistency 4%, Vision(style) 6%, Vision(subject) 7%,
+    Weights: DreamSim 34%, HPS 7%, Aesthetics 6%, Color 17%, SSIM 6%,
+    StyleConsistency 3%, MegaStyle 5%, Vision(style) 6%, Vision(subject) 7%,
     Vision(composition) 4%, Vision(medium) 2%, Vision(proportions) 3%.
     Total = 1.00.
     Includes a consistency penalty based on per-image score variance.
@@ -252,6 +263,7 @@ def adaptive_composite_score(
         lambda r: r.color_histogram_mean,
         lambda r: r.ssim_mean,
         lambda r: r.style_consistency,
+        lambda r: r.megastyle_similarity_mean,
         lambda r: r.vision_style,
         lambda r: r.vision_subject,
         lambda r: r.vision_composition,
@@ -336,7 +348,8 @@ def per_image_composite(s: MetricScores) -> float:
 
     Unlike ``composite_score`` (which operates on aggregated means), this computes
     the score for a single image — no variance penalty since there's only one observation.
-    Omits ``_W_STYLE_CON`` (style consistency is experiment-level), so max output is 0.96.
+    Omits ``_W_STYLE_CON`` (style consistency is experiment-level only) but includes
+    ``_W_MEGASTYLE`` (per-image paired similarity), so max output is 0.97.
     """
     return (
         _W_DREAMSIM * s.dreamsim_similarity
@@ -344,6 +357,7 @@ def per_image_composite(s: MetricScores) -> float:
         + _W_AESTHETICS * (s.aesthetics_score / 10.0)
         + _W_COLOR * s.color_histogram
         + _W_SSIM * s.ssim
+        + _W_MEGASTYLE * s.megastyle_similarity
         + _W_VISION_STYLE * s.vision_style
         + _W_VISION_SUBJECT * s.vision_subject
         + _W_VISION_COMP * s.vision_composition

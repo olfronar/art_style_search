@@ -19,6 +19,7 @@ _METRIC_SPECS: list[tuple[str, str]] = [
     ("hps_score_mean", "HPS v2"),
     ("aesthetics_score_mean", "Aesthetics"),
     ("style_consistency", "Style Consistency"),
+    ("megastyle_similarity_mean", "MegaStyle"),
     ("vision_style", "Vision · Style"),
     ("vision_subject", "Vision · Subject"),
     ("vision_composition", "Vision · Composition"),
@@ -134,15 +135,15 @@ def _build_composite_trajectory(data: ReportData) -> str:
 
 
 def _build_per_metric_trajectories(data: ReportData) -> str:
-    """3x3 subplot grid of the 9 component metrics (best + mean per iter)."""
+    """4x3 subplot grid of the 10 component metrics (best + mean per iter)."""
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 
     fig = make_subplots(
-        rows=3,
+        rows=4,
         cols=3,
         subplot_titles=[title for _, title in _METRIC_SPECS],
-        vertical_spacing=0.14,
+        vertical_spacing=0.11,
         horizontal_spacing=0.09,
     )
     for idx, (attr, _title) in enumerate(_METRIC_SPECS):

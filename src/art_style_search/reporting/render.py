@@ -145,6 +145,7 @@ def _metric_scores_tooltip(scores: MetricScores) -> str:
         f"SSIM={scores.ssim:.3f}",
         f"HPS={scores.hps_score:.3f}",
         f"Aes={scores.aesthetics_score:.1f}",
+        f"Mega={scores.megastyle_similarity:.3f}",
         (
             f"V[S={scores.vision_style:.1f} Su={scores.vision_subject:.1f} "
             f"Co={scores.vision_composition:.1f} Me={scores.vision_medium:.1f} "

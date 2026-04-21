@@ -44,6 +44,12 @@ class MetricScores:
     # (see scoring._W_VISION_MEDIUM / _W_VISION_PROPORTIONS).
     vision_medium: float = 0.5  # higher = better, ternary agreement on the observed rendering medium (described in plain observable vocabulary)
     vision_proportions: float = 0.5  # higher = better, ternary agreement on character head-heights + archetype
+    # MegaStyle-Encoder cosine similarity [0, 1]. Higher = better. Ref vs gen in a SigLIP
+    # SoViT-400M embedding space fine-tuned on 1.4M style-paired images
+    # (MegaStyle, Gao et al. 2026, arxiv 2604.08364). Independent axis from DreamSim
+    # (content) and the ternary vision judge (Gemini) — Spearman ~0 with both on the
+    # 754-pair homescapes analysis, so it adds a new, continuous style-space signal.
+    megastyle_similarity: float = 0.0
     # Canon-actionable style-gap observation from the vision judge (2-4 sentences describing what the
     # generated image lacks relative to the reference, phrased as observations the canon could sharpen).
     # Aggregated across the experiment into ``AggregatedMetrics.style_gap_notes``.
@@ -181,6 +187,13 @@ class AggregatedMetrics:
     vision_medium_std: float = 0.0
     vision_proportions: float = 0.5
     vision_proportions_std: float = 0.0
+
+    # MegaStyle-Encoder cosine mean + std across paired (ref, gen) images [0, 1].
+    # Adds a continuous, content-disentangled style-space similarity axis to composite_score
+    # (see scoring._W_MEGASTYLE). Zero default preserves pre-upgrade numeric semantics on
+    # legacy state.json files — the migration in state_migrations keeps old runs loadable.
+    megastyle_similarity_mean: float = 0.0
+    megastyle_similarity_std: float = 0.0
 
     # Structured caption-compliance signals [0, 1]
     compliance_topic_coverage: float = 1.0

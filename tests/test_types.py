@@ -326,6 +326,8 @@ class TestAggregatedMetricsSummaryDict:
             "vision_medium_std",
             "vision_proportions",
             "vision_proportions_std",
+            "megastyle_similarity_mean",
+            "megastyle_similarity_std",
             "completion_rate",
             "compliance_topic_coverage",
             "compliance_marker_coverage",
@@ -378,9 +380,9 @@ class TestAggregatedMetricsSummaryDict:
         )
         # 25 base metrics + 4 diagnostic vision dims (vision_medium + vision_medium_std
         # + vision_proportions + vision_proportions_std) + 2 canon compliance fields
-        # (style_canon_fidelity + observation_boilerplate_purity). The style_gap_notes
-        # tuple is non-numeric and is excluded by summary_dict.
-        assert len(m.summary_dict()) == 31
+        # (style_canon_fidelity + observation_boilerplate_purity) +2 for megastyle
+        # (mean + std). The style_gap_notes tuple is non-numeric and is excluded.
+        assert len(m.summary_dict()) == 33
 
 
 # -- ConvergenceReason --------------------------------------------------------

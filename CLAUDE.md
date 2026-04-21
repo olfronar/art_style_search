@@ -98,13 +98,14 @@ Each metric compares a generated image against its specific paired original (not
 
 - **DreamSim** (34%): Human-aligned perceptual similarity capturing semantic content, layout, color, pose (replaces DINO + LPIPS). Higher = better.
 - **Color histogram** (17%): HSV histogram intersection. Higher = better.
-- **Style consistency** (8%): Jaccard word-overlap of [Art Style] blocks across captions (experiment-level, omitted from `per_image_composite`). Under the canon-first contract the [Art Style] block is copied verbatim from the meta-prompt's `style_foundation`; this metric becomes a regression alarm for canon-pull-through rather than a small-weight consistency nudge. Higher = better.
 - **HPS v2** (7%): Caption-image alignment (normalized: raw / 0.35, clamped to 1.0). Higher = better.
 - **Vision subject** (7%): Per-image Gemini ternary comparison of subject fidelity. Paired with a floor penalty (see below). Higher = better.
 - **Vision style** (6%): Per-image Gemini ternary comparison of style fidelity (MATCH=1.0, PARTIAL=0.5, MISS=0.0). Higher = better.
 - **LAION Aesthetics** (6%): Aesthetic quality predictor (1-10 scale, normalized /10). Higher = better.
 - **SSIM** (6%): Structural similarity index for pixel-level comparison. Higher = better.
+- **MegaStyle** (5%): Cosine similarity between ref and gen in a SigLIP SoViT-400M embedding fine-tuned on 1.4M style-paired images ([MegaStyle, Gao et al. 2026, arXiv:2604.08364](https://arxiv.org/abs/2604.08364)). Continuous, content-disentangled style-space signal — Spearman ~0 with DreamSim (content) and the ternary vision judge (Gemini) on a 754-pair calibration sweep, so it adds a new independent axis. Higher = better. Entered the composite at 5% funded by demoting `style_consistency` (see below) after that metric's 38-experiment Spearman correlation with image-space style similarity was measured at ~0.
 - **Vision composition** (4%): Per-image Gemini ternary comparison of spatial layout. Higher = better.
+- **Style consistency** (3%): Jaccard word-overlap of [Art Style] blocks across captions (experiment-level, omitted from `per_image_composite`). Under the canon-first contract the [Art Style] block is copied verbatim from the meta-prompt's `style_foundation`; this metric is now a small regression alarm for canon-pull-through, demoted from 8% when the MegaStyle metric was added (token-overlap on captions is a poor proxy for image-space style similarity — the 754-pair calibration sweep measured Spearman ≈−0.006). Higher = better.
 - **Vision proportions** (3%): Per-image Gemini ternary comparison of head-heights + character archetype. Higher = better.
 - **Vision medium** (2%): Per-image Gemini ternary agreement on the rendering medium — described in plain observable vocabulary that matches the specific surface behavior each image exhibits; no letter buckets, no implicit menu. A medium mismatch is a style MISS in the vision judge, so this dim catches that failure explicitly. Higher = better.
 
@@ -115,7 +116,7 @@ Penalties subtracted from the weighted sum (result floor-clamped to 0.0):
 - **Ref-shortfall penalty** (×0.04): `max(requested - actual, 0) / requested`.
 - **Subject-floor penalty** (×0.05): active only when `vision_subject < 0.35`; scales linearly toward the floor.
 
-`per_image_composite` uses the same base weights minus `_W_STYLE_CON` and applies no penalties — max output 0.92.
+`per_image_composite` uses the same base weights minus `_W_STYLE_CON` (experiment-level only) and applies no penalties — max output 0.97 (0.92 pre-MegaStyle era + 0.05 MegaStyle).
 
 ## Cross-cutting Conventions
 

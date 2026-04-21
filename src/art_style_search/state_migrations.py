@@ -13,7 +13,11 @@ _SCHEMA_VERSION = (
     #     measured effect, rendered into the reasoner's brainstorm context as "Canon Edit History"
     # v8: rigorous protocol removed — drops feedback_refs/silent_refs; protocol enum collapsed to
     #     {"short", "classic"} with short as the default foundation pass.
-    8
+    # v9: MegaStyle-Encoder paired-similarity metric added — MetricScores.megastyle_similarity
+    #     and AggregatedMetrics.megastyle_similarity_mean/_std. Pre-upgrade runs default to 0.0
+    #     (no MegaStyle signal available), so their composite scores are comparable within the
+    #     run but MegaStyle contributes zero — no behavioural change for legacy state.
+    9
 )
 _ITERATION_LOG_SCHEMA_VERSION = 1
 _MANIFEST_SCHEMA_VERSION = 3
@@ -28,6 +32,8 @@ def _migrate_metric_scores_payload(data: dict[str, Any]) -> dict[str, Any]:
     data.setdefault("vision_proportions", 0.5)
     # v6: vision judge style_gap observation
     data.setdefault("style_gap", "")
+    # v9: MegaStyle-Encoder paired similarity (0.0 = no signal on legacy runs)
+    data.setdefault("megastyle_similarity", 0.0)
     return data
 
 
@@ -48,6 +54,12 @@ def _migrate_aggregated_metrics_payload(data: dict[str, Any]) -> dict[str, Any]:
     data.setdefault("style_canon_fidelity", 1.0)
     data.setdefault("observation_boilerplate_purity", 1.0)
     data.setdefault("style_gap_notes", [])
+    # v9: MegaStyle-Encoder aggregated similarity (mean + std). 0.0 default preserves
+    # pre-upgrade composite values for legacy runs — MegaStyle contributes zero,
+    # the style_consistency weight dropped (0.08 -> 0.03), so legacy composites drift
+    # downward by at most 0.05 * style_consistency (max -0.05 at the extreme).
+    data.setdefault("megastyle_similarity_mean", 0.0)
+    data.setdefault("megastyle_similarity_std", 0.0)
     return data
 
 

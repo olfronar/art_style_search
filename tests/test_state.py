@@ -70,6 +70,7 @@ class TestToDict:
             "vision_composition",
             "vision_medium",
             "vision_proportions",
+            "megastyle_similarity",
             "style_gap",
             "is_fallback",
         }

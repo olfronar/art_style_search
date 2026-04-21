@@ -34,6 +34,7 @@ def _make_metrics(**overrides: float) -> AggregatedMetrics:
         "vision_composition": 0.5,
         "vision_medium": 0.5,
         "vision_proportions": 0.5,
+        "megastyle_similarity_mean": 0.5,
         "requested_ref_count": 20,
         "actual_ref_count": 20,
     }
@@ -62,6 +63,7 @@ class TestHeadroomCompositeScore:
             "vision_composition": 1.0,
             "vision_medium": 1.0,
             "vision_proportions": 1.0,
+            "megastyle_similarity_mean": 1.0,
         }
         a = _make_metrics(dreamsim_similarity_mean=0.5, **sat)
         b = _make_metrics(dreamsim_similarity_mean=0.6, **sat)
@@ -99,6 +101,7 @@ class TestHeadroomCompositeScore:
             vision_composition=1.0,
             vision_medium=1.0,
             vision_proportions=1.0,
+            megastyle_similarity_mean=1.0,
         )
         assert headroom_composite_score(m) == composite_score(m)
 
