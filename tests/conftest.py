@@ -37,6 +37,7 @@ def make_metric_scores(*, seed: float = 0.0) -> MetricScores:
         dreamsim_similarity=0.72 + seed * 0.01,
         hps_score=0.26 + seed * 0.002,
         aesthetics_score=6.1 + seed * 0.1,
+        megastyle_similarity=0.68 + seed * 0.01,
     )
 
 
@@ -48,6 +49,8 @@ def make_aggregated_metrics(*, seed: float = 0.0) -> AggregatedMetrics:
         hps_score_std=0.01,
         aesthetics_score_mean=5.9 + seed * 0.1,
         aesthetics_score_std=0.4,
+        megastyle_similarity_mean=0.67 + seed * 0.01,
+        megastyle_similarity_std=0.02,
     )
 
 
