@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 from art_style_search.runs import DEFAULT_RUNS_DIR, resolve_run_dir
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 @dataclass(frozen=True)

@@ -586,7 +586,7 @@ def _compose_case(
 
 
 async def _run(args: argparse.Namespace) -> int:
-    load_dotenv()
+    load_dotenv(override=True)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     logging.getLogger("google_genai").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
