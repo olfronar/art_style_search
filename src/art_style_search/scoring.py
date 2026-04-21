@@ -39,12 +39,20 @@ _W_STYLE_CON = 0.03
 # fine-tuned on 1.4M style-paired images (arxiv 2604.08364). Independent axis vs DreamSim
 # (content) and the Gemini vision judge (ternary); Spearman ≈0 with both across 754 pairs,
 # so it adds a continuous, content-disentangled style-space signal not captured elsewhere.
-_W_MEGASTYLE = 0.05
+# Promoted 0.05 → 0.08 after the homescapes run showed vision_style (ternary, Gemini)
+# systematically demoting branches with the highest MegaStyle — two nominal "style" signals
+# anti-correlating in practice. MegaStyle is continuous/cheap, vision_style is coarse/costly;
+# making MegaStyle the primary style weight (0.08 vs vision_style 0.03) lets fine gradients
+# drive selection while keeping the Gemini verdict as a regression alarm alongside
+# style_consistency (also 0.03).
+_W_MEGASTYLE = 0.08
 # Vision slice rebalanced to make room for the medium-class + proportions dims.
 # The medium verdict diagnoses a root cause of many style misses (2D/3D misclassification)
 # and the proportions verdict diagnoses subject-fidelity misses at the anatomy level, so
 # weight reductions on vision_style (-0.02) and vision_subject (-0.03) fund them cleanly.
-_W_VISION_STYLE = 0.06
+# vision_style further demoted 0.06 → 0.03 (funding MegaStyle's promotion above) — see the
+# _W_MEGASTYLE comment for rationale.
+_W_VISION_STYLE = 0.03
 _W_VISION_SUBJECT = 0.07
 _W_VISION_COMP = 0.04
 _W_VISION_MEDIUM = 0.02
@@ -212,7 +220,7 @@ def composite_score(m: AggregatedMetrics) -> float:
 
     All metrics normalized to ~[0, 1] before weighting.
     Weights: DreamSim 34%, HPS 7%, Aesthetics 6%, Color 17%, SSIM 6%,
-    StyleConsistency 3%, MegaStyle 5%, Vision(style) 6%, Vision(subject) 7%,
+    StyleConsistency 3%, MegaStyle 8%, Vision(style) 3%, Vision(subject) 7%,
     Vision(composition) 4%, Vision(medium) 2%, Vision(proportions) 3%.
     Total = 1.00.
     Includes a consistency penalty based on per-image score variance.

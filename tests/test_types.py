@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from art_style_search.prompt._format import format_knowledge_base
 from art_style_search.scoring import (
+    _COMPOSITE_AXES,
     IMPROVEMENT_EPSILON,
     classify_hypothesis,
     composite_score,
@@ -32,21 +33,24 @@ class TestCompositeScore:
             aesthetics_score_mean=7.0,
             aesthetics_score_std=0.5,
         )
-        # Current formula: DreamSim 34%, HPS 7%, Aesthetics 6%, Color 17%,
-        # SSIM 10%, StyleConsistency 4%, Vision(style) 8% + Vision(subject) 10%
-        # + Vision(composition) 4% = 22%.
-        # color_histogram/ssim default to 0.0, vision_* default to 0.5
+        # Current formula: DreamSim 34%, HPS 7%, Aesthetics 6%, Color 17%, SSIM 6%,
+        # StyleConsistency 3%, MegaStyle 8%, Vision(style) 3%, Vision(subject) 7%,
+        # Vision(composition) 4%, Vision(medium) 2%, Vision(proportions) 3%. Sum = 1.00.
+        # color_histogram/ssim/style_consistency/mega default to 0.0, vision_* default to 0.5
         # HPS normalized: min(0.28/0.35, 1.0) = 0.8
         base = (
             0.34 * 0.8
             + 0.07 * min(0.28 / 0.35, 1.0)
             + 0.06 * (7.0 / 10.0)
             + 0.17 * 0.0  # color_histogram
-            + 0.10 * 0.0  # ssim
-            + 0.04 * 0.0  # style_consistency
-            + 0.08 * 0.5  # vision_style
-            + 0.10 * 0.5  # vision_subject
+            + 0.06 * 0.0  # ssim
+            + 0.03 * 0.0  # style_consistency
+            + 0.08 * 0.0  # megastyle_similarity
+            + 0.03 * 0.5  # vision_style
+            + 0.07 * 0.5  # vision_subject
             + 0.04 * 0.5  # vision_composition
+            + 0.02 * 0.5  # vision_medium
+            + 0.03 * 0.5  # vision_proportions
         )
         # Consistency penalty: 0.30 * (dreamsim_std + color_histogram_std) / 2.0
         penalty = 0.30 * (0.01 + 0.0) / 2.0
@@ -62,38 +66,79 @@ class TestCompositeScore:
             aesthetics_score_mean=0.0,
             aesthetics_score_std=0.0,
         )
-        # vision_style/subject/composition default to 0.5; all other metrics zero
-        expected = 0.08 * 0.5 + 0.10 * 0.5 + 0.04 * 0.5
+        # All five vision dims default to 0.5; everything else zero
+        expected = (0.03 + 0.07 + 0.04 + 0.02 + 0.03) * 0.5
         assert abs(composite_score(m) - expected) < 1e-9
 
     def test_higher_dreamsim_yields_higher_score(self) -> None:
-        base = dict(
+        low = AggregatedMetrics(
+            dreamsim_similarity_mean=0.2,
             dreamsim_similarity_std=0.0,
             hps_score_mean=0.0,
             hps_score_std=0.0,
             aesthetics_score_mean=0.0,
             aesthetics_score_std=0.0,
         )
-        low = AggregatedMetrics(dreamsim_similarity_mean=0.2, **base)
-        high = AggregatedMetrics(dreamsim_similarity_mean=0.9, **base)
+        high = AggregatedMetrics(
+            dreamsim_similarity_mean=0.9,
+            dreamsim_similarity_std=0.0,
+            hps_score_mean=0.0,
+            hps_score_std=0.0,
+            aesthetics_score_mean=0.0,
+            aesthetics_score_std=0.0,
+        )
         assert composite_score(high) > composite_score(low)
 
     def test_higher_color_histogram_yields_higher_score(self) -> None:
-        base = dict(
+        low_color = AggregatedMetrics(
             dreamsim_similarity_mean=0.5,
             dreamsim_similarity_std=0.0,
             hps_score_mean=0.0,
             hps_score_std=0.0,
             aesthetics_score_mean=0.0,
             aesthetics_score_std=0.0,
+            color_histogram_mean=0.1,
         )
-        low_color = AggregatedMetrics(color_histogram_mean=0.1, **base)
-        high_color = AggregatedMetrics(color_histogram_mean=0.9, **base)
+        high_color = AggregatedMetrics(
+            dreamsim_similarity_mean=0.5,
+            dreamsim_similarity_std=0.0,
+            hps_score_mean=0.0,
+            hps_score_std=0.0,
+            aesthetics_score_mean=0.0,
+            aesthetics_score_std=0.0,
+            color_histogram_mean=0.9,
+        )
         assert composite_score(high_color) > composite_score(low_color)
 
+    def test_higher_megastyle_yields_higher_score(self) -> None:
+        low_mega = AggregatedMetrics(
+            dreamsim_similarity_mean=0.5,
+            dreamsim_similarity_std=0.0,
+            hps_score_mean=0.0,
+            hps_score_std=0.0,
+            aesthetics_score_mean=0.0,
+            aesthetics_score_std=0.0,
+            megastyle_similarity_mean=0.1,
+        )
+        high_mega = AggregatedMetrics(
+            dreamsim_similarity_mean=0.5,
+            dreamsim_similarity_std=0.0,
+            hps_score_mean=0.0,
+            hps_score_std=0.0,
+            aesthetics_score_mean=0.0,
+            aesthetics_score_std=0.0,
+            megastyle_similarity_mean=0.9,
+        )
+        assert composite_score(high_mega) > composite_score(low_mega)
+
     def test_weights_sum_to_one(self) -> None:
-        """Verify the coefficient magnitudes sum to 1.0 (9 metrics)."""
-        assert abs((0.34 + 0.07 + 0.06 + 0.17 + 0.10 + 0.04 + 0.08 + 0.10 + 0.04) - 1.0) < 1e-9
+        """Verify that the live `_COMPOSITE_AXES` weights sum to 1.0.
+
+        Derives from the source-of-truth enumeration in scoring.py so any future rebalance
+        that forgets to keep the total at 1.0 fails here without a test-side update.
+        """
+        total = sum(weight for weight, _ in _COMPOSITE_AXES)
+        assert abs(total - 1.0) < 1e-9
 
     def test_hps_normalized(self) -> None:
         """HPS v2 scores (~0.25-0.35) should be normalized to [0,1] via /0.35 ceiling."""
@@ -105,8 +150,8 @@ class TestCompositeScore:
             aesthetics_score_mean=0.0,
             aesthetics_score_std=0.0,
         )
-        # HPS: 0.07 * min(0.35/0.35, 1.0) = 0.07, plus vision defaults at 0.5
-        expected = 0.07 * 1.0 + 0.08 * 0.5 + 0.10 * 0.5 + 0.04 * 0.5
+        # HPS: 0.07 * min(0.35/0.35, 1.0) = 0.07, plus five vision dims at their 0.5 default.
+        expected = 0.07 * 1.0 + (0.03 + 0.07 + 0.04 + 0.02 + 0.03) * 0.5
         assert abs(composite_score(m) - expected) < 1e-9
 
     def test_hps_clamped_above_ceiling(self) -> None:
@@ -119,8 +164,8 @@ class TestCompositeScore:
             aesthetics_score_mean=0.0,
             aesthetics_score_std=0.0,
         )
-        # Clamped: min(0.50/0.35, 1.0) = 1.0
-        expected = 0.07 * 1.0 + 0.08 * 0.5 + 0.10 * 0.5 + 0.04 * 0.5
+        # Clamped: min(0.50/0.35, 1.0) = 1.0; plus five vision dims at their 0.5 default.
+        expected = 0.07 * 1.0 + (0.03 + 0.07 + 0.04 + 0.02 + 0.03) * 0.5
         assert abs(composite_score(m) - expected) < 1e-9
 
     def test_aesthetics_divided_by_ten(self) -> None:
@@ -133,8 +178,8 @@ class TestCompositeScore:
             aesthetics_score_mean=10.0,
             aesthetics_score_std=0.0,
         )
-        # Aesthetics: 0.06 * (10.0 / 10.0) = 0.06, plus vision defaults at 0.5
-        expected = 0.06 * (10.0 / 10.0) + 0.08 * 0.5 + 0.10 * 0.5 + 0.04 * 0.5
+        # Aesthetics: 0.06 * (10.0 / 10.0) = 0.06, plus five vision dims at their 0.5 default.
+        expected = 0.06 * (10.0 / 10.0) + (0.03 + 0.07 + 0.04 + 0.02 + 0.03) * 0.5
         assert abs(composite_score(m) - expected) < 1e-9
 
     def test_composite_score_floor_clamp(self) -> None:
@@ -162,9 +207,9 @@ class TestCompositeScore:
             vision_subject=0.0,
         )
         # Base contribution from default 0.5 on the four non-subject vision dims:
-        # style (0.06) + composition (0.04) + medium (0.02) + proportions (0.03) = 0.15 * 0.5 = 0.075.
+        # style (0.03) + composition (0.04) + medium (0.02) + proportions (0.03) = 0.12 * 0.5 = 0.06.
         # Subject floor penalty at vision_subject=0.0 is 0.05.
-        expected = (0.06 * 0.5 + 0.04 * 0.5 + 0.02 * 0.5 + 0.03 * 0.5) - 0.05
+        expected = (0.03 * 0.5 + 0.04 * 0.5 + 0.02 * 0.5 + 0.03 * 0.5) - 0.05
         assert abs(composite_score(m) - expected) < 1e-9
 
 
