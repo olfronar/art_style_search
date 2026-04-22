@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from art_style_search.report_data import ReportData
 from art_style_search.scoring import composite_score
 
@@ -133,7 +135,7 @@ def _build_composite_trajectory(data: ReportData) -> str:
             ),
         )
     )
-    return fig.to_json()
+    return fig.to_json() or ""
 
 
 def _build_per_metric_trajectories(data: ReportData) -> str:
@@ -209,7 +211,8 @@ def _build_per_metric_trajectories(data: ReportData) -> str:
         zerolinecolor=_COLOR_RULE,
         tickfont=dict(family='"IBM Plex Mono", monospace', size=10, color=_COLOR_INK_MUTED),
     )
-    for annotation in fig["layout"]["annotations"]:
+    layout: Any = fig["layout"]
+    for annotation in layout["annotations"]:
         annotation["font"] = dict(family='"Fraunces", Georgia, serif', size=13, color=_COLOR_INK)
     fig.update_xaxes(title_text="iteration", row=3)
-    return fig.to_json()
+    return fig.to_json() or ""

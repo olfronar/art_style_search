@@ -847,7 +847,7 @@ class TestShouldHonorStop:
 def test_run_context_requires_services(tmp_path: Path) -> None:
     config = _make_config(tmp_path)
     with pytest.raises(TypeError):
-        RunContext(
+        RunContext(  # type: ignore[call-arg]
             config=config,
             gemini_client=MagicMock(),
             reasoning_client=MagicMock(),

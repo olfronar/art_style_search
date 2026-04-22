@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from art_style_search.types import DirectionId, PromptTemplate, RiskLevel
+from art_style_search.types import CanonOps, DirectionId, PromptTemplate, RiskLevel
 
 
 @dataclass
@@ -66,6 +66,7 @@ class RefinementResult:
     risk_level: RiskLevel | str = "targeted"
     expected_primary_metric: str = ""
     expected_tradeoff: str = ""
+    canon_ops: CanonOps = field(default_factory=list)
 
 
 @dataclass
@@ -90,3 +91,4 @@ class ExperimentProposal:
     risk_level: RiskLevel | str = "targeted"
     expected_primary_metric: str = ""
     expected_tradeoff: str = ""
+    canon_ops: CanonOps = field(default_factory=list)

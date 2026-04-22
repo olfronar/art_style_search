@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -15,7 +16,7 @@ class TestGenerateSingle:
     @pytest.mark.asyncio
     async def test_passes_system_instruction_with_negative_prompt(self, tmp_path: Path) -> None:
         output_path = tmp_path / "gen.png"
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         async def fake_generate_content(**kwargs):
             captured.update(kwargs)

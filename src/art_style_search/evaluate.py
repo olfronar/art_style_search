@@ -330,7 +330,7 @@ async def _compare_vision_single_gemini(
     second_label = "### ORIGINAL reference:" if swapped else "### GENERATED reproduction:"
     first_image = gen_path if swapped else ref_path
     second_image = ref_path if swapped else gen_path
-    contents: list[object] = [
+    contents: list[Any] = [
         first_label,
         image_to_gemini_part(first_image),
         second_label,
@@ -580,7 +580,7 @@ async def pairwise_compare_experiments(
         if client is None:
             msg = "Gemini comparison requires a Gemini client"
             raise ValueError(msg)
-        contents: list[object] = []
+        contents: list[Any] = []
         for idx in indices:
             ref_a, gen_a = pairs_a[idx]
             _, gen_b = pairs_b[idx]
@@ -767,10 +767,14 @@ def extract_style_canon(meta_prompt: str) -> str:
 
 
 def _trigram_overlap(sample_tokens: list[str], reference_tokens: list[str]) -> float | None:
-    """Return Jaccard-like coverage of ``sample_tokens`` trigrams found in ``reference_tokens``.
+    """Asymmetric trigram containment ``|sample ∩ reference| / |sample|``.
 
-    ``None`` signals "no meaningful signal" (short/empty inputs) so callers can pick a
-    direction-appropriate neutral default.
+    Returns the fraction of the sample's trigrams that also appear in the reference —
+    i.e. one-sided coverage (Szymkiewicz-Simpson overlap when sample is the smaller set).
+    This is NOT Jaccard (which would divide by the union) — contamination detection needs
+    to know what fraction of the sample came from the reference, independent of how long
+    the reference is. ``None`` signals "no meaningful signal" (short/empty inputs) so
+    callers can pick a direction-appropriate neutral default.
     """
     if len(sample_tokens) < _STYLE_PURITY_MIN_CAPTION_TOKENS:
         return None

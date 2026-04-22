@@ -7,7 +7,15 @@ from typing import TYPE_CHECKING
 
 from art_style_search.knowledge import IterationDecision
 from art_style_search.state import append_promotion_log
-from art_style_search.types import ConvergenceReason, IterationResult, LoopState, PromotionDecision
+from art_style_search.types import (
+    AggregatedMetrics,
+    ConvergenceReason,
+    IterationResult,
+    LoopState,
+    PromotionDecision,
+    Protocol,
+    ScoringFunction,
+)
 from art_style_search.utils import CATEGORY_SYNONYMS
 
 if TYPE_CHECKING:
@@ -15,7 +23,25 @@ if TYPE_CHECKING:
     from art_style_search.workflow.context import RunContext
     from art_style_search.workflow.iteration_execution import IterationRanking
 
-from art_style_search.scoring import composite_score, replicate_promotion_decision
+from art_style_search.scoring import composite_score, headroom_composite_score, replicate_promotion_decision
+
+
+def _promotion_score(m: AggregatedMetrics, *, protocol: Protocol | str) -> float:
+    """A6 dispatch: classic = headroom-weighted (saturated axes carry no marginal utility),
+    short = plain composite (foundation pass hasn't saturated anything yet).
+
+    A1 composes with A6 under classic — every scalar in ``replicate_promotion_decision``
+    must pass through here so dominance + median-epsilon never mixes scales.
+    """
+    if protocol == "classic":
+        return headroom_composite_score(m)
+    return composite_score(m)
+
+
+def _scoring_function_name(protocol: Protocol | str) -> ScoringFunction:
+    """Audit label for ``promotion_log.jsonl`` — mirrors ``_promotion_score``'s branch."""
+    return "headroom" if protocol == "classic" else "composite"
+
 
 logger = logging.getLogger(__name__)
 
@@ -26,13 +52,22 @@ _MIN_ITER_FRACTION_FOR_STOP = 0.5
 
 
 def _apply_best_result(state: LoopState, result: IterationResult) -> None:
-    """Update state with a genuine improvement."""
+    """Update state with a genuine improvement.
+
+    ``global_best_*`` guard uses the run's current scoring function so a classic iteration
+    never regresses to a short-protocol incumbent on a mixed scale.
+    """
     result.kept = True
     state.current_template = result.template
     state.best_template = result.template
     state.best_metrics = result.aggregated
-    global_score = composite_score(state.global_best_metrics) if state.global_best_metrics else float("-inf")
-    if composite_score(result.aggregated) > global_score:
+    score = _promotion_score(result.aggregated, protocol=state.protocol)
+    global_score = (
+        _promotion_score(state.global_best_metrics, protocol=state.protocol)
+        if state.global_best_metrics
+        else float("-inf")
+    )
+    if score > global_score:
         state.global_best_prompt = result.rendered_prompt
         state.global_best_metrics = result.aggregated
 
@@ -93,7 +128,11 @@ def _log_promotion_decision(
 ) -> None:
     """Log a promotion decision to promotion_log.jsonl."""
     selected = candidate or ranking.best_exp
-    score = candidate_score if candidate_score is not None else composite_score(selected.aggregated)
+    score = (
+        candidate_score
+        if candidate_score is not None
+        else _promotion_score(selected.aggregated, protocol=config.protocol)
+    )
     decision_record = PromotionDecision(
         iteration=state.iteration,
         candidate_score=score,
@@ -105,6 +144,7 @@ def _log_promotion_decision(
         candidate_branch_id=selected.branch_id,
         candidate_hypothesis=selected.hypothesis,
         replicate_scores=replicate_scores,
+        scoring_function=_scoring_function_name(config.protocol),
     )
     append_promotion_log(decision_record, config.run_dir / "promotion_log.jsonl")
 

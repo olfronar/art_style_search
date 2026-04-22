@@ -24,7 +24,7 @@ commit — this module is just the mechanical apply function.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 _REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
@@ -71,7 +71,7 @@ def _apply_op(canon: str, op: Mapping[str, Any]) -> str:
     return op["value"]
 
 
-def apply_canon_ops(canon: str, ops: list[Mapping[str, Any]]) -> str:
+def apply_canon_ops(canon: str, ops: Sequence[Mapping[str, Any]]) -> str:
     """Apply a sequence of canon ops to *canon*, returning the edited canon.
 
     Ops are applied in order — the second op sees the first op's output as its input.

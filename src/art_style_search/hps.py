@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 import huggingface_hub
 import open_clip
@@ -29,7 +30,7 @@ def _resolve_device(device: str | None) -> str:
 
 
 @lru_cache(maxsize=len(_HPS_CHECKPOINTS) * 3)
-def _load_artifacts(device: str, hps_version: str):
+def _load_artifacts(device: str, hps_version: str) -> tuple[Any, Any, Any]:
     try:
         checkpoint_name = _HPS_CHECKPOINTS[hps_version]
     except KeyError as exc:
@@ -70,7 +71,7 @@ def score(
 ) -> list[float]:
     resolved_device = _resolve_device(device)
     model, preprocess, tokenizer = _load_artifacts(resolved_device, hps_version)
-    autocast = (lambda: torch.amp.autocast("cuda")) if resolved_device.startswith("cuda") else nullcontext
+    autocast = (lambda: torch.amp.autocast("cuda")) if resolved_device.startswith("cuda") else nullcontext  # type: ignore[attr-defined]
 
     inputs = image_input if isinstance(image_input, list) else [image_input]
     text = tokenizer([prompt]).to(device=resolved_device, non_blocking=True)

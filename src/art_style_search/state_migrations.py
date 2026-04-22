@@ -17,7 +17,11 @@ _SCHEMA_VERSION = (
     #     and AggregatedMetrics.megastyle_similarity_mean/_std. Pre-upgrade runs default to 0.0
     #     (no MegaStyle signal available), so their composite scores are comparable within the
     #     run but MegaStyle contributes zero — no behavioural change for legacy state.
-    9
+    # v10: A2 diff-edit canon ops wired through RefinementResult → ExperimentProposal →
+    #     IterationResult → CanonEditLedgerEntry. New `canon_ops` field defaults to `[]` on
+    #     legacy entries (pre-v10 runs still rendered full rewrites, so the absence of ops is
+    #     semantically correct — the reasoner emitted a `replace_slot` equivalent).
+    10
 )
 _ITERATION_LOG_SCHEMA_VERSION = 1
 _MANIFEST_SCHEMA_VERSION = 3
@@ -84,6 +88,8 @@ def _migrate_iteration_result_payload(data: dict[str, Any]) -> dict[str, Any]:
     data.setdefault("vision_feedback", "")
     data.setdefault("roundtrip_feedback", "")
     data.setdefault("iteration_captions", [])
+    # v10: A2 canon_ops on IterationResult. Empty = full-rewrite edit (pre-v10 shape).
+    data.setdefault("canon_ops", [])
     return data
 
 
@@ -151,6 +157,13 @@ def _migrate_state_payload(raw: dict[str, Any], version: int) -> dict[str, Any]:
         data["knowledge_base"] = _migrate_knowledge_base_payload(dict(data["knowledge_base"]))
     # v7: canon edit ledger — backfill empty on pre-v7 payloads
     data.setdefault("canon_edit_ledger", [])
+    # v10: A2 — backfill empty canon_ops on legacy ledger entries (pre-v10 = full-rewrite edits).
+    ledger_entries = data.get("canon_edit_ledger", [])
+    if isinstance(ledger_entries, list):
+        data["canon_edit_ledger"] = [
+            {**entry, "canon_ops": entry.get("canon_ops", [])} if isinstance(entry, dict) else entry
+            for entry in ledger_entries
+        ]
     # v8: rigorous protocol removal — drop legacy info-barrier refs and normalize protocol string.
     data.pop("feedback_refs", None)
     data.pop("silent_refs", None)
@@ -186,4 +199,7 @@ def _migrate_promotion_payload(raw: dict[str, Any], version: int) -> dict[str, A
     # from historical promotion_log.jsonl lines so load_promotion_log doesn't choke.
     data.pop("p_value", None)
     data.pop("test_statistic", None)
+    # v10: A6 scoring-function label. Legacy logs predate the headroom path, so they were
+    # all plain composite — default matches reality.
+    data.setdefault("scoring_function", "composite")
     return data

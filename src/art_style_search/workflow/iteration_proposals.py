@@ -279,6 +279,7 @@ async def _propose_iteration_experiments(
                 risk_level=refinement.risk_level,
                 expected_primary_metric=refinement.expected_primary_metric,
                 expected_tradeoff=refinement.expected_tradeoff,
+                canon_ops=list(refinement.canon_ops),
             )
         )
 

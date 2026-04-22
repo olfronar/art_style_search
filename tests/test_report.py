@@ -142,8 +142,10 @@ class TestReportDataSelection:
             iteration_logs={1: [top_raw, kept]},
         )
 
-        assert data.kept_of(1).branch_id == 1
-        assert data.top_scoring_of(1).branch_id == 0
+        kept = data.kept_of(1)
+        top = data.top_scoring_of(1)
+        assert kept is not None and kept.branch_id == 1
+        assert top is not None and top.branch_id == 0
 
 
 # ---------------------------------------------------------------------------

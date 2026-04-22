@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from art_style_search.contracts import ExperimentProposal, Lessons
@@ -78,7 +80,7 @@ class _Result:
 class TestReviewIteration:
     @pytest.mark.asyncio
     async def test_injects_noise_floors_and_richer_deltas(self) -> None:
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         class FakeClient:
             async def call_json(self, **kwargs):
@@ -94,7 +96,7 @@ class TestReviewIteration:
             [_Result(0, _metrics(0.0)), _Result(1, _metrics(0.03))],  # type: ignore[list-item]
             [_proposal(), _proposal()],
             _metrics(0.0),
-            knowledge_base=type("KB", (), {"hypotheses": [], "categories": {}, "open_problems": []})(),
+            knowledge_base=type("KB", (), {"hypotheses": [], "categories": {}, "open_problems": []})(),  # type: ignore[arg-type]
             client=FakeClient(),  # type: ignore[arg-type]
             model="fake-model",
         )

@@ -176,6 +176,7 @@ def _iteration_result_from_dict(d: dict[str, Any]) -> IterationResult:
         risk_level=d.get("risk_level", "targeted"),
         expected_primary_metric=d.get("expected_primary_metric", ""),
         expected_tradeoff=d.get("expected_tradeoff", ""),
+        canon_ops=list(d.get("canon_ops", [])),
     )
 
 
@@ -275,4 +276,5 @@ def _canon_edit_ledger_entry_from_dict(d: dict[str, Any]) -> CanonEditLedgerEntr
         hypothesis_summary=d.get("hypothesis_summary", ""),
         metric_deltas=dict(d.get("metric_deltas", {})),
         accepted=bool(d.get("accepted", False)),
+        canon_ops=list(d.get("canon_ops", [])),
     )

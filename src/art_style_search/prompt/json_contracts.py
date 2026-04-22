@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from art_style_search.contracts import ExperimentSketch, InitialTemplateSketch, Lessons, RefinementResult
+from art_style_search.prompt._canon_ops import apply_canon_ops
 from art_style_search.prompt._parse import validate_template
 from art_style_search.types import PromptSection, PromptTemplate, ReviewResult, StyleProfile
 from art_style_search.utils import CATEGORY_SYNONYMS
+
+_logger = logging.getLogger(__name__)
 
 
 def _require_dict(data: object, *, label: str) -> dict[str, Any]:
@@ -226,9 +230,53 @@ def validate_initial_expansion_payload(data: object) -> PromptTemplate:
     return _validate_template_or_raise(payload_to_template(data, label="initial_expansion_response"), label="template")
 
 
-def _refinement_result_from_payload(data: object, *, label: str) -> RefinementResult:
+def _normalize_canon_ops(data: object, *, label: str) -> list[dict[str, Any]]:
+    """Parse an optional ``canon_ops`` payload field into a list of op dicts.
+
+    Missing/None → empty list (back-compat). Non-list raises. Non-dict entries raise.
+    Content is not validated here — ``apply_canon_ops`` enforces schema when applied.
+    """
+    if data is None:
+        return []
+    raw = _require_list(data, label=label)
+    ops: list[dict[str, Any]] = []
+    for i, item in enumerate(raw):
+        ops.append(_require_dict(item, label=f"{label}[{i}]"))
+    return ops
+
+
+def _apply_canon_ops_to_template(
+    template: PromptTemplate,
+    canon_ops: list[dict[str, Any]],
+    prior_canon: str,
+) -> None:
+    """Apply ``canon_ops`` to ``prior_canon`` and overwrite ``style_foundation.value`` in place.
+
+    Ops-derived canon is authoritative when apply succeeds — the reasoner may send any
+    placeholder (or valid full rewrite) as the payload value; ops override it. Apply failure
+    (bad match, unknown op, malformed field) falls through to the payload value with a warning,
+    preserving reasoner intent for the fallback path.
+    """
+    if not canon_ops:
+        return
+    if not template.sections:
+        return
+    try:
+        new_canon = apply_canon_ops(prior_canon, canon_ops)
+    except ValueError as exc:
+        _logger.warning(
+            "canon_ops apply failed (%s); falling back to payload style_foundation.value",
+            exc,
+        )
+        return
+    template.sections[0].value = new_canon
+
+
+def _refinement_result_from_payload(data: object, *, label: str, prior_canon: str = "") -> RefinementResult:
     exp = _require_dict(data, label=label)
     template = payload_to_template(exp.get("template") or {}, label=f"{label}.template")
+    canon_ops = _normalize_canon_ops(exp.get("canon_ops"), label=f"{label}.canon_ops")
+    _apply_canon_ops_to_template(template, canon_ops, prior_canon)
     changed_section, changed_sections = _normalize_changed_sections(exp, label=label)
     return RefinementResult(
         template=template,
@@ -269,6 +317,7 @@ def _refinement_result_from_payload(data: object, *, label: str) -> RefinementRe
             exp.get("expected_tradeoff"),
             label=f"{label}.expected_tradeoff",
         ),
+        canon_ops=canon_ops,
     )
 
 
@@ -325,8 +374,17 @@ def validate_ranking_payload(data: object, *, num_sketches: int) -> list[int]:
     return ranked
 
 
-def validate_expansion_payload(data: object) -> RefinementResult:
-    result = _refinement_result_from_payload(data, label="expansion_response")
+def validate_expansion_payload(data: object, *, prior_canon: str = "") -> RefinementResult:
+    """Parse + validate an expansion response from the reasoner.
+
+    ``prior_canon`` is the incumbent ``style_foundation.value`` (the canon the reasoner
+    was shown as "what I'm editing from"). When the payload contains ``canon_ops``, those
+    ops are applied to ``prior_canon`` and the result overwrites the payload's
+    ``style_foundation.value`` BEFORE template validation. Empty/missing ``prior_canon``
+    means no incumbent (fresh run) — ops are still attempted and fall back silently on
+    match failure, so callers can pass ``""`` safely when there is no prior canon.
+    """
+    result = _refinement_result_from_payload(data, label="expansion_response", prior_canon=prior_canon)
     _validate_template_or_raise(result.template, label="expansion_response.template")
     return result
 

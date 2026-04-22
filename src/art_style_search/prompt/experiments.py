@@ -475,7 +475,20 @@ def _expand_user(shared_user: str, sketch: ExperimentSketch) -> str:
         f"{shared_user}\n\n## Sketch to Expand\n"
         f"{_render_sketch(sketch, 0)}\n"
         "Expand this sketch into one complete experiment proposal with a full template, lessons, change metadata, "
-        "open problems, and expected tradeoff."
+        "open problems, and expected tradeoff.\n\n"
+        "## Canon edit channel (optional)\n"
+        "When the proposed edit touches style_foundation, you MAY emit a `canon_ops` JSON array alongside "
+        "the full template — a list of diff ops applied against the incumbent canon shown under "
+        "`## Current Template`. Ops are authoritative when present; the payload's style_foundation.value "
+        "may be a stub. Prefer ops for targeted sentence-level edits (they keep the ledger readable); "
+        "fall back to a full style_foundation.value rewrite when the change is structural.\n"
+        "Ops shape:\n"
+        '  {"op": "replace_sentence", "match": "<exact substring from incumbent>", "replace": "<new text>"}\n'
+        '  {"op": "add_sentence", "where": "start"|"end", "value": "<new sentence>"}\n'
+        '  {"op": "replace_slot", "value": "<entire new canon>"}\n'
+        "Rules: `match` must be copied verbatim from the incumbent canon; bad matches fail loudly. "
+        "Multiple ops apply in sequence (second op sees first op's output). `replace_sentence` with an "
+        "empty `replace` deletes the matched span."
     )
 
 
@@ -866,12 +879,19 @@ async def expand_experiment_sketches(
         canon_edit_ledger=canon_edit_ledger,
     )
     system = _expand_system(current_template, is_first_iteration=is_first_iteration)
+    # A2: bind the incumbent canon as prior_canon so reasoner-emitted canon_ops apply against
+    # the canon the reasoner was shown (style_foundation is the first section by the anchor contract).
+    prior_canon = current_template.sections[0].value if current_template.sections else ""
+
+    def _bound_validator(data: object) -> RefinementResult:
+        return validate_expansion_payload(data, prior_canon=prior_canon)
+
     tasks = [
         client.call_json(
             model=model,
             system=system,
             user=_expand_user(shared_user, sketch),
-            validator=validate_expansion_payload,
+            validator=_bound_validator,
             response_name=f"expansion_{idx}",
             schema_hint=schema_hint("expansion"),
             response_schema=response_schema("expansion"),

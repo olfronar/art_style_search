@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from PIL import Image
@@ -192,7 +193,7 @@ class TestAnalyzePrompts:
 
     @pytest.mark.asyncio
     async def test_reasoning_compile_uses_larger_output_budget(self) -> None:
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         class FakeClient:
             async def call_json(self, **kwargs):
@@ -212,7 +213,7 @@ class TestAnalyzePrompts:
     async def test_gemini_analyze_uses_system_instruction(self, tmp_path: Path) -> None:
         image_path = tmp_path / "ref.png"
         Image.new("RGB", (8, 8), color="blue").save(image_path)
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         async def fake_generate_content(**kwargs):
             captured.update(kwargs)
@@ -230,7 +231,7 @@ class TestAnalyzePrompts:
     async def test_visual_analyze_routes_claude_through_reasoning_client(self, tmp_path: Path) -> None:
         image_path = tmp_path / "ref.png"
         Image.new("RGB", (8, 8), color="red").save(image_path)
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         class FakeReasoning:
             provider = "anthropic"

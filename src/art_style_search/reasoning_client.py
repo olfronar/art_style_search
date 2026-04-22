@@ -10,7 +10,7 @@ import re
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, TypeVar, cast
 
 import anthropic
 import httpcore
@@ -247,7 +247,7 @@ def parse_json_response(text: str) -> object:
     return json.loads(payload)
 
 
-async def stream_message(client: anthropic.AsyncAnthropic, **kwargs: object) -> Message:
+async def stream_message(client: anthropic.AsyncAnthropic, **kwargs: Any) -> Message:
     """Call messages.create with streaming and return the final Message."""
     last_exc: Exception | None = None
     for attempt in range(_STREAM_MAX_RETRIES):
@@ -416,7 +416,7 @@ class ReasoningClient:
         validator: Callable[[object], T],
         response_name: str,
         schema_hint: str = "",
-        response_schema: dict[str, object] | None = None,
+        response_schema: dict[str, Any] | None = None,
         max_tokens: int = 16000,
         repair_retries: int = 1,
         final_failure_log_level: int = logging.WARNING,
@@ -509,7 +509,7 @@ class ReasoningClient:
         system: str,
         user: str,
         response_name: str,
-        response_schema: dict[str, object] | None,
+        response_schema: dict[str, Any] | None,
         max_tokens: int,
         temperature: float | None = None,
         reasoning_effort: str | None = None,
@@ -537,7 +537,7 @@ class ReasoningClient:
             stage=stage,
         )
 
-    def _anthropic_thinking_block(self, reasoning_effort: str | None, max_tokens: int) -> dict[str, object]:
+    def _anthropic_thinking_block(self, reasoning_effort: str | None, max_tokens: int) -> dict[str, Any]:
         if reasoning_effort == "high":
             if max_tokens <= _ANTHROPIC_HIGH_BUDGET_TOKENS:
                 msg = (
@@ -555,7 +555,7 @@ class ReasoningClient:
         self,
         *,
         model: str,
-        messages: list[dict[str, object]],
+        messages: list[dict[str, Any]],
         system: str,
         max_tokens: int,
         temperature: float | None,
@@ -566,11 +566,11 @@ class ReasoningClient:
         # Wrap system as a cacheable block when the system prompt is stable across calls within a run
         # (brainstorm/expand share a ~150-line prompt fired many times per iteration; synthesis/review
         # fire their own ~100-line prompts every iteration). Reads from the 5-minute prefix cache.
-        system_blocks: list[dict[str, object]] = [{"type": "text", "text": system}]
+        system_blocks: list[dict[str, Any]] = [{"type": "text", "text": system}]
         if cache_system:
             system_blocks[0]["cache_control"] = {"type": "ephemeral"}
 
-        kwargs: dict[str, object] = {
+        kwargs: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
             "thinking": self._anthropic_thinking_block(reasoning_effort, max_tokens),
@@ -669,7 +669,7 @@ class ReasoningClient:
             msg = f"call_with_images is only supported for anthropic provider (got {self.provider!r})"
             raise NotImplementedError(msg)
 
-        content: list[dict[str, object]] = [image_to_anthropic_block(path) for path in image_paths]
+        content: list[dict[str, Any]] = [image_to_anthropic_block(path) for path in image_paths]
         content.append({"type": "text", "text": user})
 
         effective_effort = (
@@ -700,10 +700,10 @@ class ReasoningClient:
         if reasoning_effort:
             _warn_silent_drop("zai", "reasoning_effort", reasoning_effort)
 
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         def _sync_call() -> str:
-            kwargs: dict[str, object] = {
+            kwargs: dict[str, Any] = {
                 "model": model,
                 "messages": [
                     {"role": "system", "content": system},
@@ -713,9 +713,9 @@ class ReasoningClient:
             }
             if temperature is not None:
                 kwargs["temperature"] = temperature
-            response = self._zai.chat.completions.create(**kwargs)
+            response: Any = self._zai.chat.completions.create(**kwargs)
             captured["response"] = response
-            return response.choices[0].message.content
+            return response.choices[0].message.content or ""
 
         async def _call() -> str:
             return await asyncio.to_thread(_sync_call)
@@ -775,14 +775,14 @@ class ReasoningClient:
         if temperature is not None:
             _warn_silent_drop("openai", "temperature", temperature)
         effort = reasoning_effort or "medium"
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         async def _call() -> str:
             response = await self._openai.responses.create(
                 model=model,
                 instructions=system,
                 input=user,
-                reasoning={"effort": effort},
+                reasoning=cast("Any", {"effort": effort}),
                 max_output_tokens=max_tokens,
             )
             captured["response"] = response
@@ -839,7 +839,7 @@ class ReasoningClient:
         system: str,
         user: str,
         response_name: str,
-        response_schema: dict[str, object] | None,
+        response_schema: dict[str, Any] | None,
         max_tokens: int,
         temperature: float | None = None,
         reasoning_effort: str | None = None,
@@ -850,14 +850,14 @@ class ReasoningClient:
         format_name = re.sub(r"[^A-Za-z0-9_-]+", "_", response_name)[:64] or "response"
         json_schema = response_schema or {"type": "object", "additionalProperties": True}
         effort = reasoning_effort or "medium"
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         async def _call() -> str:
             response = await self._openai.responses.create(
                 model=model,
                 instructions=system,
                 input=user,
-                reasoning={"effort": effort},
+                reasoning=cast("Any", {"effort": effort}),
                 max_output_tokens=max_tokens,
                 text={
                     "format": {
@@ -930,10 +930,10 @@ class ReasoningClient:
         if reasoning_effort:
             _warn_silent_drop("xai", "reasoning_effort", reasoning_effort)
 
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         async def _call() -> str:
-            kwargs: dict[str, object] = {
+            kwargs: dict[str, Any] = {
                 "model": model,
                 "input": [
                     {"role": "system", "content": system},
@@ -1003,10 +1003,10 @@ class ReasoningClient:
         if reasoning_effort:
             _warn_silent_drop("local", "reasoning_effort", reasoning_effort)
 
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         async def _call() -> str:
-            kwargs: dict[str, object] = {
+            kwargs: dict[str, Any] = {
                 "model": model,
                 "messages": [
                     {"role": "system", "content": system},

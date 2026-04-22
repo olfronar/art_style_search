@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 from google import genai  # type: ignore[attr-defined]
 from google.genai import types as genai_types  # type: ignore[attr-defined]
@@ -220,7 +221,7 @@ async def _gemini_analyze(
     model: str,
 ) -> str:
     """Send all reference images to Gemini and get a style analysis."""
-    contents: list[object] = []
+    contents: list[Any] = []
 
     for img_path in reference_paths:
         contents.append(image_to_gemini_part(img_path))
@@ -238,7 +239,7 @@ async def _gemini_analyze(
             ),
             timeout=_ANALYSIS_TIMEOUT_S,
         )
-        return response.text
+        return response.text or ""
 
     return await async_retry(_call, label="Gemini style analysis", circuit_breaker=vision_circuit_breaker)
 

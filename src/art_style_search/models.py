@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 import torch
@@ -44,18 +45,18 @@ class ModelRegistry:
     device: torch.device = field(default_factory=_auto_device)
 
     # Private lazy-init state — populated on first use via properties.
-    _dreamsim_model: object | None = field(default=None, init=False, repr=False)
-    _dreamsim_preprocess: object | None = field(default=None, init=False, repr=False)
+    _dreamsim_model: Any = field(default=None, init=False, repr=False)
+    _dreamsim_preprocess: Any = field(default=None, init=False, repr=False)
     _dreamsim_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     _hps_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     _aesthetics_model: torch.nn.Module | None = field(default=None, init=False, repr=False)
-    _aesthetics_processor: object | None = field(default=None, init=False, repr=False)
+    _aesthetics_processor: Any = field(default=None, init=False, repr=False)
     _aesthetics_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     _megastyle_encoder: torch.nn.Module | None = field(default=None, init=False, repr=False)
-    _megastyle_processor: object | None = field(default=None, init=False, repr=False)
+    _megastyle_processor: Any = field(default=None, init=False, repr=False)
     _megastyle_ref_cache: dict[str, torch.Tensor] = field(default_factory=dict, init=False, repr=False)
     _megastyle_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
@@ -84,7 +85,7 @@ class ModelRegistry:
         from dreamsim import dreamsim
 
         logger.info("Loading DreamSim (dino_vitb16) ...")
-        model, preprocess = dreamsim(pretrained=True, dreamsim_type="dino_vitb16", device=self.device)
+        model, preprocess = dreamsim(pretrained=True, dreamsim_type="dino_vitb16", device=str(self.device))
         model.eval()
         self._dreamsim_model = model
         self._dreamsim_preprocess = preprocess
@@ -102,7 +103,7 @@ class ModelRegistry:
         ckpt = torch.load(ckpt_path, map_location="cpu")
         state = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
         encoder.load_state_dict(state, strict=False)
-        self._megastyle_encoder = encoder.eval().to(self.device)
+        self._megastyle_encoder = encoder.eval().to(self.device)  # type: ignore[arg-type]
 
     def _embed_megastyle(self, image: Image.Image) -> torch.Tensor:
         if self._megastyle_encoder is None or self._megastyle_processor is None:
@@ -128,7 +129,9 @@ class ModelRegistry:
         clip_name = "openai/clip-vit-large-patch14"
         logger.info("Loading LAION Aesthetics (%s) ...", model_name)
         self._aesthetics_processor = CLIPProcessor.from_pretrained(clip_name)
-        self._aesthetics_model = AestheticsPredictorV2Linear.from_pretrained(model_name).to(self.device).eval()
+        self._aesthetics_model = (
+            AestheticsPredictorV2Linear.from_pretrained(model_name).to(self.device).eval()  # type: ignore[arg-type]
+        )
 
     # ------------------------------------------------------------------
     # Public compute methods
@@ -239,4 +242,5 @@ class ModelRegistry:
 
         gen_gray = np.array(generated.convert("L").resize((256, 256)), dtype=np.float64)
         ref_gray = np.array(reference.convert("L").resize((256, 256)), dtype=np.float64)
-        return float(structural_similarity(gen_gray, ref_gray, data_range=255.0))
+        result = structural_similarity(gen_gray, ref_gray, data_range=255.0)
+        return float(result) if not isinstance(result, tuple) else float(result[0])

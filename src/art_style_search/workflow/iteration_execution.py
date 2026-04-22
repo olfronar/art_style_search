@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from functools import partial
 
 from art_style_search.contracts import ExperimentProposal
 from art_style_search.experiment import (
@@ -26,6 +27,7 @@ from art_style_search.scoring import (
 from art_style_search.types import IterationResult, LoopState, PromptTemplate
 from art_style_search.utils import build_ref_gen_pairs
 from art_style_search.workflow.context import RunContext
+from art_style_search.workflow.policy import _promotion_score
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +82,7 @@ async def _run_experiments_parallel(
             risk_level=proposal.risk_level,
             expected_primary_metric=proposal.expected_primary_metric,
             expected_tradeoff=proposal.expected_tradeoff,
+            canon_ops=proposal.canon_ops,
             services=ctx.services,
         )
         for i, proposal in enumerate(proposals)
@@ -88,12 +91,20 @@ async def _run_experiments_parallel(
 
 
 def _score_and_rank(exp_results: list[IterationResult], state: LoopState) -> IterationRanking:
-    """Phase 3: compute aggregates, adaptive scores, pick best."""
+    """Phase 3: compute aggregates, adaptive scores, pick best.
+
+    ``adaptive_composite_score`` is relative (min-max across the peer set) and stays unchanged —
+    its job is ranking experiments against each other, not gating promotion. ``best_score`` /
+    ``baseline_score`` are the absolute scores the promotion gate compares with epsilon, so they
+    use ``_promotion_score`` — headroom-weighted under classic, plain composite under short.
+    """
     all_agg = [result.aggregated for result in exp_results]
     adaptive_scores = {id(result): adaptive_composite_score(result.aggregated, all_agg) for result in exp_results}
     best_exp = max(exp_results, key=lambda result: adaptive_scores[id(result)])
-    best_score = composite_score(best_exp.aggregated)
-    baseline_score = composite_score(state.best_metrics) if state.best_metrics else float("-inf")
+    best_score = _promotion_score(best_exp.aggregated, protocol=state.protocol)
+    baseline_score = (
+        _promotion_score(state.best_metrics, protocol=state.protocol) if state.best_metrics else float("-inf")
+    )
     return IterationRanking(
         exp_results=exp_results,
         adaptive_scores=adaptive_scores,
@@ -214,17 +225,21 @@ async def _run_replicate_gate(
         )
         return
 
-    ranking.best_replicate_scores = [composite_score(agg) for agg in candidate_eval.replicate_aggregated]
+    # A1 ∘ A6: every scalar in ``replicate_promotion_decision`` must come from the same
+    # protocol-appropriate scoring function — mixing composite and headroom scales across
+    # replicates would corrupt the dominance check. Bind once.
+    score = partial(_promotion_score, protocol=ctx.config.protocol)
+    ranking.best_replicate_scores = [score(agg) for agg in candidate_eval.replicate_aggregated]
     ranking.best_exp.aggregated = candidate_eval.median_aggregated
-    ranking.best_score = composite_score(candidate_eval.median_aggregated)
+    ranking.best_score = score(candidate_eval.median_aggregated)
 
     if incumbent_eval is None:
         # No incumbent template yet (first iteration) — replicate_promotion_decision treats
         # an empty baseline list as "use median-vs-epsilon only," which is the correct bootstrap.
         ranking.baseline_replicate_scores = []
     else:
-        ranking.baseline_replicate_scores = [composite_score(agg) for agg in incumbent_eval.replicate_aggregated]
-        ranking.baseline_score = composite_score(incumbent_eval.median_aggregated)
+        ranking.baseline_replicate_scores = [score(agg) for agg in incumbent_eval.replicate_aggregated]
+        ranking.baseline_score = score(incumbent_eval.median_aggregated)
 
 
 async def _synthesize_reasoning(

@@ -20,6 +20,7 @@ from art_style_search.evaluate import (
 from art_style_search.knowledge import aggregate_style_gap_notes
 from art_style_search.types import (
     AggregatedMetrics,
+    CanonOps,
     Caption,
     DirectionId,
     IterationResult,
@@ -236,6 +237,7 @@ async def run_experiment(
     risk_level: RiskLevel | str = "targeted",
     expected_primary_metric: str = "",
     expected_tradeoff: str = "",
+    canon_ops: CanonOps | None = None,
 ) -> IterationResult:
     """Execute one experiment: caption -> generate -> evaluate (no reasoning-model call here)."""
     meta_prompt = template.render()
@@ -351,6 +353,7 @@ async def run_experiment(
         risk_level=risk_level,
         expected_primary_metric=expected_primary_metric,
         expected_tradeoff=expected_tradeoff,
+        canon_ops=list(canon_ops or []),
     )
 
 

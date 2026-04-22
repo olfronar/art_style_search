@@ -14,6 +14,7 @@ import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import TYPE_CHECKING, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -36,6 +37,9 @@ from art_style_search.types import (
     VisionDimensionScore,
     VisionScores,
 )
+
+if TYPE_CHECKING:
+    from art_style_search.workflow.services import RunServices
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -253,7 +257,7 @@ def _apply_all_patches(monkeypatch, tmp_path: Path, ref_paths: list[Path]):
             registry=MagicMock(),
             gemini_semaphore=asyncio.Semaphore(5),
             eval_semaphore=asyncio.Semaphore(2),
-            services=fake_services,
+            services=cast("RunServices", fake_services),
         )
 
     monkeypatch.setattr("art_style_search.loop._setup_run_context", fake_setup_run_context)
@@ -297,6 +301,7 @@ def _apply_all_patches(monkeypatch, tmp_path: Path, ref_paths: list[Path]):
         risk_level="targeted",
         expected_primary_metric="",
         expected_tradeoff="",
+        canon_ops=None,
     ):
         from art_style_search.types import IterationResult
 

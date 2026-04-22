@@ -9,10 +9,19 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import Any, Literal
 
-if TYPE_CHECKING:
-    from typing import Any
+# A2 diff-edit op shape. Kept as a dict type alias for now — the reasoner's output is JSON
+# so a TypedDict discriminated on ``op`` would need validated narrowing at parse time.
+# Centralize here so the 4 dataclasses (``RefinementResult``, ``ExperimentProposal``,
+# ``IterationResult``, ``CanonEditLedgerEntry``) that carry canon_ops don't drift.
+CanonOp = dict[str, Any]
+CanonOps = list[CanonOp]
+
+# Protocol / scoring-function string unions — pinned so ``if protocol == "classic"`` catches typos
+# at type-check time. Keep ``str`` fallback on persisted fields for forward-compat.
+Protocol = Literal["short", "classic"]
+ScoringFunction = Literal["composite", "headroom"]
 
 # Shared enum-like aliases for directional-search metadata.  Keeping these here (not in
 # ``taxonomy.py``) because they travel with every IterationResult / proposal / contract.
@@ -542,6 +551,7 @@ class IterationResult:
     risk_level: RiskLevel | str = "targeted"
     expected_primary_metric: str = ""
     expected_tradeoff: str = ""
+    canon_ops: CanonOps = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -561,6 +571,7 @@ class CanonEditLedgerEntry:
     hypothesis_summary: str  # short summary of the proposed hypothesis
     metric_deltas: dict[str, float]  # per-metric delta vs baseline (only meaningful axes)
     accepted: bool  # True if the edit was promoted to incumbent
+    canon_ops: CanonOps = field(default_factory=list)
 
 
 @dataclass
@@ -623,7 +634,9 @@ class RunManifest:
 
 @dataclass(frozen=True)
 class PromotionDecision:
-    """One promotion decision logged per iteration."""
+    """One promotion decision logged per iteration. ``scoring_function`` records which
+    ``_promotion_score`` branch decided the outcome — needed for auditability on resumes
+    that cross protocols."""
 
     iteration: int
     candidate_score: float
@@ -635,6 +648,7 @@ class PromotionDecision:
     candidate_branch_id: int
     candidate_hypothesis: str
     replicate_scores: list[float] | None = None
+    scoring_function: ScoringFunction | str = "composite"
 
 
 @dataclass

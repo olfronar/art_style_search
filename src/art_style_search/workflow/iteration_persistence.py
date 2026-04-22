@@ -105,6 +105,7 @@ def append_canon_edit_ledger(
         hypothesis_summary=(ranking.best_exp.hypothesis or "")[:300],
         metric_deltas=deltas_raw,
         accepted=decision in _ACCEPTED_DECISIONS,
+        canon_ops=list(ranking.best_exp.canon_ops or []),
     )
     state.canon_edit_ledger.append(entry)
     if len(state.canon_edit_ledger) > _CANON_EDIT_LEDGER_MAX:

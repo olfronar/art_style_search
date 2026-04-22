@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -800,7 +801,7 @@ class TestJsonContracts:
 class TestProposeExperiments:
     @pytest.mark.asyncio
     async def test_uses_two_repair_retries_and_concrete_changed_section_instructions(self) -> None:
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         class FakeClient:
             async def call_json(self, **kwargs):
@@ -870,7 +871,7 @@ class TestPromptSurfaceExamples:
 
     @pytest.mark.asyncio
     async def test_synthesis_prompt_example_keeps_subject_anchor_in_caption_sections(self) -> None:
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         class FakeClient:
             async def call_json(self, **kwargs):
@@ -911,7 +912,7 @@ class TestPromptSurfaceExamples:
     async def test_experiment_expansion_uses_large_template_budget(self) -> None:
         from art_style_search.prompt.experiments import expand_experiment_sketches
 
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
         sketch = contracts.ExperimentSketch(
             hypothesis="Subject identity is too diffuse.",
             target_category="subject_anchor",
@@ -1024,7 +1025,7 @@ class TestPromptSurfaceExamples:
             make_style_profile(),
             _make_valid_template(),
             KnowledgeBase(),
-            best.aggregated,
+            best.aggregated,  # type: ignore[attr-defined]
             [best, worst],  # type: ignore[list-item]
             vision_feedback="",
             roundtrip_feedback="",
@@ -1058,7 +1059,7 @@ class TestRankInitialSketches:
                 distinguishing_feature="Pushes explicit palette transfer.",
             ),
         ]
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         class FakeClient:
             async def call_json(self, **kwargs):
@@ -1100,7 +1101,7 @@ class TestRankExperimentSketches:
                 expected_primary_metric="vision_composition",
             ),
         ]
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         class FakeClient:
             async def call_json(self, **kwargs):

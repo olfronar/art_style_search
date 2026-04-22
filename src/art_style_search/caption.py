@@ -8,6 +8,7 @@ import logging
 import re
 import time
 from pathlib import Path
+from typing import Any, cast
 
 from google import genai  # type: ignore[attr-defined]
 from google.genai import types as genai_types  # type: ignore[attr-defined]
@@ -180,12 +181,12 @@ async def caption_single(
 
     # Gemini 3.1 Pro rejects thinking_level="MINIMAL" (only LOW/MEDIUM/HIGH are valid), so
     # for MINIMAL we leave thinking_config unset and let the model pick its own default depth.
-    config_kwargs: dict[str, object] = {
+    config_kwargs: dict[str, Any] = {
         "system_instruction": CAPTION_SYSTEM,
         "max_output_tokens": _CAPTIONER_MAX_OUTPUT_TOKENS,
     }
     if thinking_level != "MINIMAL":
-        config_kwargs["thinking_config"] = genai_types.ThinkingConfig(thinking_level=thinking_level)
+        config_kwargs["thinking_config"] = genai_types.ThinkingConfig(thinking_level=cast("Any", thinking_level))
 
     min_caption_length = _minimum_caption_chars(prompt)
 

@@ -8,6 +8,7 @@ import os
 import tempfile
 import time
 from pathlib import Path
+from typing import Any, cast
 
 from google import genai  # type: ignore[attr-defined]
 from google.genai import types as genai_types  # type: ignore[attr-defined]
@@ -89,7 +90,7 @@ async def generate_single(
                     config=genai_types.GenerateContentConfig(
                         system_instruction=system_instruction,
                         response_modalities=["IMAGE"],
-                        thinking_config=genai_types.ThinkingConfig(thinking_level=thinking_level),
+                        thinking_config=genai_types.ThinkingConfig(thinking_level=cast("Any", thinking_level)),
                         image_config=genai_types.ImageConfig(
                             aspect_ratio=aspect_ratio,
                             image_size="1K",
@@ -99,20 +100,23 @@ async def generate_single(
                 timeout=_REQUEST_TIMEOUT,
             )
 
-        if not response.candidates or not response.candidates[0].content.parts:
+        content = response.candidates[0].content if response.candidates else None
+        parts = content.parts if content is not None else None
+        if not parts:
             msg = f"Image {index}: empty response from model"
             raise RuntimeError(msg)
 
-        for part in response.candidates[0].content.parts:
-            if part.inline_data is not None:
+        for part in parts:
+            if part.inline_data is not None and part.inline_data.data is not None:
                 _atomic_write(part.inline_data.data, output_path)
                 return output_path
-            if hasattr(part, "image") and part.image is not None:
-                _atomic_write(part.image.image_bytes, output_path)
+            image_attr = getattr(part, "image", None)
+            if image_attr is not None:
+                _atomic_write(image_attr.image_bytes, output_path)
                 return output_path
 
-        part_types = [type(p).__name__ for p in response.candidates[0].content.parts]
-        text_parts = [p.text for p in response.candidates[0].content.parts if hasattr(p, "text") and p.text]
+        part_types = [type(p).__name__ for p in parts]
+        text_parts = [p.text for p in parts if hasattr(p, "text") and p.text]
         text_summary = "; ".join(t[:200] for t in text_parts) if text_parts else "none"
         logger.warning(
             "Image %d: response parts=%s, text=%s",

@@ -43,10 +43,13 @@ def make_metric_scores(*, seed: float = 0.0) -> MetricScores:
         aesthetics_score=6.1 + seed * 0.1,
         color_histogram=0.64 + seed * 0.01,
         ssim=0.58 + seed * 0.01,
+        # Ternary verdicts deliberately alternate MATCH (1.0) / MISS (0.0) across the five
+        # dimensions rather than defaulting any to 0.5 — a default-value match would mask
+        # a codec round-trip drop (see test_architecture_invariants.TestCodecReflection).
         vision_style=1.0,
-        vision_subject=0.5,
+        vision_subject=0.0,
         vision_composition=1.0,
-        vision_medium=0.5,
+        vision_medium=0.0,
         vision_proportions=1.0,
         megastyle_similarity=0.68 + seed * 0.01,
         style_gap="rim light reads hotter than the reference; warm it toward magenta",

@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TypeVar
+from typing import Any, TypeVar
 
 import pytest
 
@@ -113,7 +113,7 @@ class TestCaptionSingle:
     async def test_sets_explicit_max_output_tokens_for_long_captions(self, tmp_path: Path) -> None:
         image_path = tmp_path / "ref.png"
         image_path.write_bytes(b"fake-image")
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         class FakeModels:
             async def generate_content(self, **kwargs):

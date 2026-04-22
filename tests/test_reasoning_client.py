@@ -42,7 +42,7 @@ class TestCallJson:
 
         client = ReasoningClient.__new__(ReasoningClient)
         client.provider = "openai"
-        client._openai = SimpleNamespace(responses=SimpleNamespace(create=fake_create))
+        client._openai = SimpleNamespace(responses=SimpleNamespace(create=fake_create))  # type: ignore[assignment]
 
         result = await ReasoningClient.call_json(
             client,
@@ -203,7 +203,7 @@ class TestCallText:
 
         client = ReasoningClient.__new__(ReasoningClient)
         client.provider = "xai"
-        client._xai = SimpleNamespace(responses=SimpleNamespace(create=fake_create))
+        client._xai = SimpleNamespace(responses=SimpleNamespace(create=fake_create))  # type: ignore[assignment]
 
         result = await ReasoningClient.call(
             client,
@@ -232,7 +232,7 @@ class TestAnthropicBudgetGuard:
 
         client = ReasoningClient.__new__(ReasoningClient)
         client.provider = "anthropic"
-        client._anthropic = SimpleNamespace()
+        client._anthropic = SimpleNamespace()  # type: ignore[assignment]
 
         with pytest.raises(ValueError, match="budget_tokens"):
             await ReasoningClient.call(
@@ -258,7 +258,7 @@ class TestAnthropicBudgetGuard:
 
         client = ReasoningClient.__new__(ReasoningClient)
         client.provider = "anthropic"
-        client._anthropic = SimpleNamespace()
+        client._anthropic = SimpleNamespace()  # type: ignore[assignment]
 
         result = await ReasoningClient.call(
             client,
@@ -289,7 +289,7 @@ class TestSilentDropWarnings:
 
         client = ReasoningClient.__new__(ReasoningClient)
         client.provider = "zai"
-        client._zai = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+        client._zai = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))  # type: ignore[assignment]
 
         with caplog.at_level(logging.WARNING):
             for _ in range(3):
@@ -317,7 +317,7 @@ class TestSilentDropWarnings:
 
         client = ReasoningClient.__new__(ReasoningClient)
         client.provider = "openai"
-        client._openai = SimpleNamespace(responses=SimpleNamespace(create=fake_create))
+        client._openai = SimpleNamespace(responses=SimpleNamespace(create=fake_create))  # type: ignore[assignment]
 
         with caplog.at_level(logging.WARNING):
             for _ in range(3):
@@ -409,7 +409,7 @@ class TestTruncationDetection:
 
         client = ReasoningClient.__new__(ReasoningClient)
         client.provider = "anthropic"
-        client._anthropic = SimpleNamespace()
+        client._anthropic = SimpleNamespace()  # type: ignore[assignment]
 
         with pytest.raises(TruncationError) as excinfo:
             await ReasoningClient.call(
@@ -445,7 +445,7 @@ class TestTruncationDetection:
 
         client = ReasoningClient.__new__(ReasoningClient)
         client.provider = "openai"
-        client._openai = SimpleNamespace(responses=SimpleNamespace(create=fake_create))
+        client._openai = SimpleNamespace(responses=SimpleNamespace(create=fake_create))  # type: ignore[assignment]
 
         with pytest.raises(TruncationError) as excinfo:
             await ReasoningClient.call(
@@ -477,7 +477,7 @@ class TestTruncationDetection:
 
         client = ReasoningClient.__new__(ReasoningClient)
         client.provider = "zai"
-        client._zai = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+        client._zai = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))  # type: ignore[assignment]
 
         with pytest.raises(TruncationError) as excinfo:
             await ReasoningClient.call(
@@ -527,7 +527,7 @@ class TestCallWithImages:
 
         client = ReasoningClient.__new__(ReasoningClient)
         client.provider = "anthropic"
-        client._anthropic = SimpleNamespace()
+        client._anthropic = SimpleNamespace()  # type: ignore[assignment]
         client.default_reasoning_effort = "medium"
 
         result = await ReasoningClient.call_with_images(
@@ -552,7 +552,7 @@ class TestCallWithImages:
         assert content[-1] == {"type": "text", "text": "describe"}
         # low effort disables thinking; no cache_control on system block for one-shot bootstrap calls
         assert captured["thinking"] == {"type": "disabled"}
-        assert "cache_control" not in captured["system"][0]
+        assert "cache_control" not in captured["system"][0]  # type: ignore[index]
 
     @pytest.mark.asyncio
     async def test_non_anthropic_provider_raises(self, tmp_path) -> None:

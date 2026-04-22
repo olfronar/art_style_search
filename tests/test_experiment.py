@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -15,6 +16,9 @@ from art_style_search.experiment import (
 )
 from art_style_search.types import Caption
 from tests.conftest import make_iteration_result, make_metric_scores, make_prompt_template
+
+if TYPE_CHECKING:
+    from art_style_search.workflow.services import RunServices
 
 # ---------------------------------------------------------------------------
 # collect_experiment_results
@@ -31,7 +35,7 @@ class TestCollectExperimentResults:
 
     def test_keeps_all_successes(self) -> None:
         items = [make_iteration_result(branch_id=i, iteration=1) for i in range(3)]
-        results = collect_experiment_results(items, label="test")
+        results = collect_experiment_results(items, label="test")  # type: ignore[arg-type]
         assert results == items
 
     def test_empty_input(self) -> None:
@@ -153,7 +157,7 @@ class TestReplicateExperiment:
             iteration=existing_result.iteration,
             fixed_refs=[],
             config=config,
-            services=object(),
+            services=cast("RunServices", object()),
             n_replicates=1,
             existing_result=existing_result,
         )
@@ -248,7 +252,7 @@ class TestReplicateExperiment:
             iteration=1,
             fixed_refs=[ref_path],
             config=config,
-            services=services,
+            services=cast("RunServices", services),
             n_replicates=1,
         )
 
@@ -323,7 +327,7 @@ class TestCaptionAndGenerate:
             negative_prompt="Avoid watermarks and signatures.",
             style_canon="",
             config=config,
-            services=services,
+            services=cast("RunServices", services),
             iteration=1,
             experiment_id=0,
         )
