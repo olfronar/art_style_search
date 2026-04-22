@@ -8,7 +8,7 @@ import shutil
 from pathlib import Path
 
 from art_style_search.analyze import _reasoning_compile, _save_cache, analyze_style
-from art_style_search.caption import caption_bootstrap
+from art_style_search.caption import CAPTION_SYSTEM_BOOTSTRAP, caption_bootstrap
 from art_style_search.experiment import collect_experiment_results, run_experiment
 from art_style_search.prompt._parse import validate_template
 from art_style_search.prompt.initial import propose_initial_templates
@@ -145,6 +145,7 @@ async def _zero_step(ctx: RunContext, all_ref_paths: list[Path]) -> LoopState:
             fixed_refs,
             cache_dir=caption_cache_dir,
             cache_key=bootstrap_cache_key,
+            system=CAPTION_SYSTEM_BOOTSTRAP,
         )
 
     logger.info("Zero-step: analyzing art style (visual=%s)...", config.bootstrap_captioner)

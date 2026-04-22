@@ -46,10 +46,13 @@ _ANCHOR_SECTION_MAX_WORDS: dict[str, int] = {
     "Subject": 4000,
 }
 
-CAPTION_SYSTEM = (
+_CAPTION_ROLE_FRAMING = (
     "You are an expert art analyst producing captions that function as both faithful descriptions and "
     "ready-to-use text-to-image prompts. Your captions will be fed directly to an image generator, so every "
     "detail you write must be specific enough to reproduce the original image visually.\n\n"
+)
+
+_CAPTION_QUALITY_STANDARDS = (
     "Quality standards:\n"
     "- Lead with concrete subject identity and scene-defining information before softer stylistic interpretation.\n"
     "- Prefer direct positive phrasing and generation-ready wording over hedged narration.\n"
@@ -64,7 +67,36 @@ CAPTION_SYSTEM = (
     "visible in this image. Use no menu, no checklist, and no letter bucket. The observation drives the vocabulary, "
     "not the other way around. Don't mix vocabulary from incompatible media in the same image — technique words "
     "must be self-consistent with the surface you just named.\n\n"
-    "[Art Style] is the STYLE CANON — shared style DNA, copied verbatim into every caption.\n"
+)
+
+# Shared discipline bullets that appear in both CAPTION_SYSTEM and CAPTION_SYSTEM_BOOTSTRAP
+# verbatim — factored out so wording fixes propagate to both variants.
+_CAPTION_OBSERVATIONS_VS_RULES_BULLET = (
+    "- Observations-vs-rules: specific body parts, named objects, proper nouns, actual colors, pose details NEVER "
+    "appear in [Art Style]. A sentence inside [Art Style] is well-formed only if it would still be true of a "
+    "DIFFERENT image in the same style. Character proportions (heads-tall, archetype, silhouette shape) "
+    "belong in the [Subject] Proportions sub-block, not here.\n"
+)
+
+_CAPTION_ANTI_NAME_BULLET = (
+    "- Anti-name: phrases like '3D CGI of X', 'cel-shaded anime', '{Artist}-style', 'watercolor illustration' are "
+    "forbidden inside [Art Style]. Describe the technique from observable surface cues, not from genre labels.\n"
+)
+
+_CAPTION_OUTPUT_FORMAT_HEADER = (
+    "Output-format discipline:\n"
+    "- Write section labels as PLAIN TEXT: `[Art Style]`, `[Subject]`. Never wrap in markdown bolding, backticks, or angle brackets.\n"
+)
+
+_CAPTION_FORBIDDEN_TERMS = (
+    "Forbidden terms (never use — no exceptions):\n"
+    "  cartoon, cartoonish, stylised, stylized (as bare adjective), beautiful, epic, whimsical, charming, cinematic."
+)
+
+CAPTION_SYSTEM = (
+    _CAPTION_ROLE_FRAMING
+    + _CAPTION_QUALITY_STANDARDS
+    + "[Art Style] is the STYLE CANON — shared style DNA, copied verbatim into every caption.\n"
     "- The meta-prompt's `style_foundation` section already contains the canon: concrete assertive rules about this "
     "specific art style (medium, shading stack, color principle, surfaces, invariants). Your job is to **reproduce "
     "that canon content verbatim (or near-verbatim) as the body of [Art Style]** — do not paraphrase it, do not "
@@ -72,22 +104,30 @@ CAPTION_SYSTEM = (
     "`Shading & Light:` / `Color Principle:` / `Surface & Texture:` / `Style Invariants:` markers if the canon has them.\n"
     "- Your per-image writing freedom lives entirely in the observation blocks ([Subject], [Color Palette], "
     "[Composition], [Lighting & Atmosphere], and any other per-image sections the meta-prompt defines).\n"
-    "- Observations-vs-rules: specific body parts, named objects, proper nouns, actual colors, pose details NEVER "
-    "appear in [Art Style]. A sentence inside [Art Style] is well-formed only if it would still be true of a "
-    "DIFFERENT image in the same style. Character proportions (heads-tall, archetype, silhouette shape) "
-    "belong in the [Subject] Proportions sub-block, not here.\n"
-    "- Anti-name: phrases like '3D CGI of X', 'cel-shaded anime', '{Artist}-style', 'watercolor illustration' are "
-    "forbidden inside [Art Style]. Describe the technique from observable surface cues, not from genre labels.\n"
-    "- If the meta-prompt's `style_foundation` does not yet cover a slot, leave that slot's canonical marker in "
+    + _CAPTION_OBSERVATIONS_VS_RULES_BULLET
+    + _CAPTION_ANTI_NAME_BULLET
+    + "- If the meta-prompt's `style_foundation` does not yet cover a slot, leave that slot's canonical marker in "
     "place and keep the section compact — do not fabricate rules that are not in the canon.\n"
     "- [Art Style] length target: the same 400-800 words that the canon itself targets.\n\n"
-    "Output-format discipline:\n"
-    "- Write section labels as PLAIN TEXT: `[Art Style]`, `[Subject]`. Never wrap in markdown bolding, backticks, or angle brackets.\n"
-    "- Emit labeled blocks in the exact order the meta-prompt's ## Caption Sections block specifies. "
+    + _CAPTION_OUTPUT_FORMAT_HEADER
+    + "- Emit labeled blocks in the exact order the meta-prompt's ## Caption Sections block specifies. "
     "Target the word count in ## Caption Length Target. Let [Subject] carry the per-image weight; "
-    "keep [Art Style] as the verbatim style canon from `style_foundation`.\n\n"
-    "Forbidden terms (never use — no exceptions):\n"
-    "  cartoon, cartoonish, stylised, stylized (as bare adjective), beautiful, epic, whimsical, charming, cinematic."
+    "keep [Art Style] as the verbatim style canon from `style_foundation`.\n\n" + _CAPTION_FORBIDDEN_TERMS
+)
+
+CAPTION_SYSTEM_BOOTSTRAP = (
+    _CAPTION_ROLE_FRAMING
+    + _CAPTION_QUALITY_STANDARDS
+    + "[Art Style] carries reusable style DNA only — RULES that apply to every image in this style, never "
+    "per-image observations.\n"
+    "- Your per-image writing freedom lives entirely in the observation blocks ([Subject], [Color Palette], "
+    "[Composition], [Lighting & Atmosphere]).\n"
+    + _CAPTION_OBSERVATIONS_VS_RULES_BULLET
+    + _CAPTION_ANTI_NAME_BULLET
+    + "- [Art Style] length target: 400-800 words.\n\n"
+    + _CAPTION_OUTPUT_FORMAT_HEADER
+    + "- Emit labeled blocks in the exact order the user message specifies. Let [Subject] carry the per-image weight.\n\n"
+    + _CAPTION_FORBIDDEN_TERMS
 )
 
 CAPTION_PROMPT = (
@@ -157,6 +197,7 @@ async def caption_single(
     cache_key: str = "",
     thinking_level: str = "MINIMAL",
     style_canon: str = "",
+    system: str = CAPTION_SYSTEM,
 ) -> Caption:
     """Caption a single image, optionally using disk cache.
 
@@ -182,7 +223,7 @@ async def caption_single(
     # Gemini 3.1 Pro rejects thinking_level="MINIMAL" (only LOW/MEDIUM/HIGH are valid), so
     # for MINIMAL we leave thinking_config unset and let the model pick its own default depth.
     config_kwargs: dict[str, Any] = {
-        "system_instruction": CAPTION_SYSTEM,
+        "system_instruction": system,
         "max_output_tokens": _CAPTIONER_MAX_OUTPUT_TOKENS,
     }
     if thinking_level != "MINIMAL":
@@ -304,11 +345,15 @@ async def caption_references(
     cache_key: str = "",
     thinking_level: str = "MINIMAL",
     style_canon: str = "",
+    system: str = CAPTION_SYSTEM,
 ) -> list[Caption]:
     """Caption all reference images concurrently with disk caching.
 
     When *prompt* is None, uses the default CAPTION_PROMPT.
     The *cache_key* invalidates cached entries when the prompt changes.
+    Pass *system* to override the default CAPTION_SYSTEM — zero-step callers
+    should use CAPTION_SYSTEM_BOOTSTRAP so the canon-reproduction clause
+    (vacuous before the first canon exists) doesn't contradict CAPTION_PROMPT.
     """
     effective_prompt = prompt or CAPTION_PROMPT
     tasks = [
@@ -322,6 +367,7 @@ async def caption_references(
             cache_key=cache_key,
             thinking_level=thinking_level,
             style_canon=style_canon,
+            system=system,
         )
         for path in reference_paths
     ]
@@ -405,7 +451,7 @@ async def caption_bootstrap(
     so cached entries from a different provider aren't mistakenly reused.
     """
     effective_prompt = prompt or CAPTION_PROMPT
-    effective_system = system or CAPTION_SYSTEM
+    effective_system = system or CAPTION_SYSTEM_BOOTSTRAP
     reasoning_effort = ANTHROPIC_EFFORT_FROM_THINKING.get(thinking_level.upper(), "low")
     min_caption_length = _minimum_caption_chars(effective_prompt)
     semaphore = asyncio.Semaphore(concurrency)

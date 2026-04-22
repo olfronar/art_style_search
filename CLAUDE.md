@@ -164,6 +164,7 @@ Guarded by:
 ## Diagnostics
 
 - Pyright is the type checker. Config at `pyrightconfig.json` (basic mode, pinned to the uv-managed `.venv`). Run with `uv run --with pyright pyright [paths]`.
+- **Pyright must be clean project-wide** — `uv run --with pyright pyright` must report `0 errors, 0 warnings, 0 informations` before any change is considered done. This is stricter than "clean on files you touched": cross-file refactors and shared-type changes can introduce errors in files you never opened, and those must be fixed too. The in-editor "new-diagnostics" harness sometimes surfaces stale/cached warnings that the CLI disagrees with — when they conflict, the CLI is authoritative; rerun `uv run --with pyright pyright` to confirm before believing any warning.
 - **Fix diagnostic issues in any file you touch** — whether the error is from your change or pre-existed. "Pre-existing" is not a reason to leave a file with errors after editing it. If a pre-existing error in a file you're editing is out of scope for the current task, fix it anyway (same edit pass) or explicitly flag it to the user before moving on. This includes: unresolved imports, type mismatches, undefined-variable warnings, and unused-import errors.
 - Acceptable exceptions: third-party libraries without stubs (guard with `useLibraryCodeForTypes` — already configured) and `reportUnusedVariable` on intentional-unused params (rename to `_name` or use `# noqa` with a reason).
 - Ruff lint + format (`uv run ruff check .` / `uv run ruff format .`) must also be clean before considering work done.

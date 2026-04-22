@@ -234,7 +234,15 @@ def _apply_all_patches(monkeypatch, tmp_path: Path, ref_paths: list[Path]):
     """Monkeypatch all external dependencies for loop.run()."""
 
     async def fake_caption_references(
-        reference_paths, *, model=None, client=None, cache_dir=None, semaphore=None, prompt=None, cache_key=""
+        reference_paths,
+        *,
+        model=None,
+        client=None,
+        cache_dir=None,
+        semaphore=None,
+        prompt=None,
+        cache_key="",
+        system=None,
     ):
         return [_fake_caption(p) for p in reference_paths]
 

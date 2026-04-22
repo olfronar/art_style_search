@@ -10,7 +10,7 @@ from typing import TypeVar
 
 from google import genai  # type: ignore[attr-defined]
 
-from art_style_search.caption import caption_references, caption_single
+from art_style_search.caption import CAPTION_SYSTEM, caption_references, caption_single
 from art_style_search.evaluate import compare_vision_per_image, evaluate_images, pairwise_compare_experiments
 from art_style_search.generate import generate_single
 from art_style_search.models import ModelRegistry
@@ -37,6 +37,7 @@ class CaptioningService:
         cache_dir: Path | None,
         cache_key: str = "",
         style_canon: str = "",
+        system: str = CAPTION_SYSTEM,
     ) -> Caption:
         return await caption_single(
             image_path,
@@ -48,6 +49,7 @@ class CaptioningService:
             cache_key=cache_key,
             thinking_level=self.thinking_level,
             style_canon=style_canon,
+            system=system,
         )
 
     async def caption_references(
@@ -58,6 +60,7 @@ class CaptioningService:
         prompt: str | None = None,
         cache_key: str = "",
         style_canon: str = "",
+        system: str = CAPTION_SYSTEM,
     ) -> list[Caption]:
         return await caption_references(
             reference_paths,
@@ -69,6 +72,7 @@ class CaptioningService:
             cache_key=cache_key,
             thinking_level=self.thinking_level,
             style_canon=style_canon,
+            system=system,
         )
 
 
