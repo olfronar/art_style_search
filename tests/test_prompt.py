@@ -1160,3 +1160,103 @@ class TestRankExperimentSketches:
         assert ranked == sketches
         assert "Ranking failed; falling back to brainstorm order" in caplog.text
         assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
+
+
+class TestHowToDrawSlotAntiConstructionGuard:
+    """The "How to Draw:" slot must describe observable surface behavior, not drawing procedure.
+
+    Every seeder prompt that describes slot 1 of the 5-facet skeleton must:
+    (a) NOT list "construction order" / "construction" / "primitives" / "fabrication" as
+        expected content of the slot — those prime the reasoner toward artist-procedure prose
+        like "built from inflated spheres fused into composite forms" which is useless to the
+        generator;
+    (b) carry an explicit negative-guard sentence telling the reasoner to describe the finished
+        surface and NOT construction/primitives/fabrication.
+
+    The validator error message in prompt/_parse.py must also drop "construction order" and
+    "silhouette primitives" from its enumerated hints.
+    """
+
+    _GUARD_PHRASE = "finished surface"
+    _FORBIDDEN_SLOT_CONTENT_TOKENS = (
+        "construction order",
+        "construction + line policy",
+        "construction, line policy",
+    )
+
+    def _slot_description_window(self, text: str) -> str:
+        """Return text between 'How to Draw' and the next facet boundary.
+
+        The guard rail applies only to the slot-1 instruction, not to the full seeder prompt
+        (which might legitimately discuss 'prompt construction' or similar unrelated words).
+        """
+        idx = text.find("How to Draw")
+        if idx < 0:
+            return ""
+        tail = text[idx:]
+        for boundary in ("Shading & Light", "Style Invariants", "\n\n"):
+            cut = tail.find(boundary)
+            if cut > 0:
+                tail = tail[:cut]
+                break
+        return tail
+
+    def _assert_clean_and_guarded(self, text: str, *, label: str) -> None:
+        window = self._slot_description_window(text)
+        assert window, f"{label}: no 'How to Draw' slot description found"
+        for token in self._FORBIDDEN_SLOT_CONTENT_TOKENS:
+            assert token not in window.lower(), (
+                f"{label}: slot description still lists '{token}' as expected content. Window: {window[:200]}"
+            )
+        assert self._GUARD_PHRASE in window.lower(), (
+            f"{label}: slot description lacks the '{self._GUARD_PHRASE}' negative-guard phrase. Window: {window[:200]}"
+        )
+
+    def test_analyze_compilation_prompt_strips_construction_and_adds_guard(self) -> None:
+        from art_style_search.analyze import _COMPILATION_PROMPT
+
+        self._assert_clean_and_guarded(_COMPILATION_PROMPT, label="_COMPILATION_PROMPT")
+
+    def test_initial_base_requirements_strips_construction_and_adds_guard(self) -> None:
+        from art_style_search.prompt.initial import _BASE_REQUIREMENTS
+
+        self._assert_clean_and_guarded(_BASE_REQUIREMENTS, label="initial._BASE_REQUIREMENTS")
+
+    def test_initial_expand_system_strips_construction_and_adds_guard(self) -> None:
+        from art_style_search.prompt.initial import _expand_system
+
+        text = _expand_system()
+        self._assert_clean_and_guarded(text, label="initial._expand_system()")
+
+    def test_json_contracts_skeleton_prefix_strips_construction_and_adds_guard(self) -> None:
+        from art_style_search.prompt.json_contracts import _STYLE_FOUNDATION_DRAWING_PREFIX
+
+        self._assert_clean_and_guarded(_STYLE_FOUNDATION_DRAWING_PREFIX, label="_STYLE_FOUNDATION_DRAWING_PREFIX")
+
+    def test_zero_step_caption_prompt_strips_construction_and_adds_guard(self) -> None:
+        from art_style_search.caption import CAPTION_PROMPT
+
+        self._assert_clean_and_guarded(CAPTION_PROMPT, label="CAPTION_PROMPT")
+
+    def test_validator_error_message_no_longer_mentions_construction_or_primitives(self) -> None:
+        from art_style_search.prompt._parse import _check_anchor_sub_blocks
+
+        template = PromptTemplate(
+            sections=[
+                PromptSection(name="style_foundation", description="missing marker", value="no marker here"),
+                PromptSection(
+                    name="subject_anchor",
+                    description="ok",
+                    value="Proportions: 3.2 heads tall, chibi archetype. Identity: person. Distinguishing Features: stuff.",
+                ),
+            ],
+            negative_prompt="n",
+            caption_sections=["Art Style", "Subject"],
+            caption_length_target=3000,
+        )
+        errors = _check_anchor_sub_blocks(template)
+        combined = "\n".join(errors).lower()
+        assert "construction" not in combined, f"validator error still mentions 'construction': {combined}"
+        assert "silhouette primitives" not in combined, (
+            f"validator error still mentions 'silhouette primitives': {combined}"
+        )

@@ -111,7 +111,8 @@ def _check_anchor_sub_blocks(template: PromptTemplate) -> list[str]:
     if foundation and _STYLE_FOUNDATION_DRAWING_MARKER not in foundation:
         errors.append(
             "style_foundation.value must contain a 'How to Draw:' sub-block "
-            "(silhouette primitives, construction order, line policy, shading layers, signature quirk)"
+            "describing the finished surface (medium + line/edge policy). "
+            "Drawing procedure, primitives, and fabrication steps are NOT expected content here."
         )
     if foundation_raw:
         methodology_hits = [p.pattern for p in _CANON_METHODOLOGY_PATTERNS if p.search(foundation_raw)]

@@ -443,7 +443,8 @@ def _schema_word_block(token: str, *, words: int = 260) -> str:
 
 
 _STYLE_FOUNDATION_DRAWING_PREFIX = (
-    "How to Draw: [declarative medium identification + construction order + line policy for this style]. "
+    "How to Draw: [declarative medium identification + line/edge policy describing the finished surface of "
+    "this style; NO construction steps, primitives, or fabrication]. "
     "Shading & Light: [declarative shading-layer stack + edge softness + key/fill/rim direction and temperature]. "
     "Color Principle: [palette families + value range + saturation policy + shadow-direction rule; no image-specific hues]. "
     "Surface & Texture: [grain/noise policy + material vocabulary self-consistent with the medium named above; "
