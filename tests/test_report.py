@@ -9,15 +9,27 @@ from pathlib import Path
 import pytest
 
 from art_style_search.report import build_report
-from art_style_search.report_data import ReportData, _load_iteration_logs, _rel, load_report_data
+from art_style_search.report_data import (
+    CaptionEntry,
+    ReportData,
+    _load_iteration_logs,
+    _load_zero_step_captions,
+    _rel,
+    load_report_data,
+)
 from art_style_search.reporting.render import (
+    _caption_preview,
     _count_descendants,
+    _format_caption_text,
     _format_vision_feedback,
     _render_hypothesis_tree,
+    _render_image_detail,
     _render_open_problems,
+    _render_prompt_analysis_section,
 )
 from art_style_search.state import append_promotion_log, save_iteration_log, save_manifest, save_state
 from art_style_search.types import (
+    Caption,
     Hypothesis,
     KnowledgeBase,
     OpenProblem,
@@ -433,3 +445,204 @@ class TestBuildReport:
 
         text = build_report(run_dir).read_text(encoding="utf-8")
         assert '<tr class="promo-yes"><td>1</td><td>0</td>' in text
+
+
+# ---------------------------------------------------------------------------
+# Prompt analysis tab
+# ---------------------------------------------------------------------------
+
+
+_SAMPLE_CAPTION = (
+    "[Art Style]\n"
+    "How to Draw: This style renders as flat opaque color blocks with monoweight black contour.\n\n"
+    "Shading & Light: Two-layer cel shading per local hue.\n\n"
+    "[Subject]\n"
+    "A weather-worn figure carries a satchel of scavenged tools across cracked terracotta tiles."
+)
+
+
+class TestFormatCaptionText:
+    def test_renders_labeled_sections_as_styled_blocks(self) -> None:
+        out = _format_caption_text(_SAMPLE_CAPTION)
+        assert "<article class='cap-prose'>" in out
+        assert "<h5 class='cap-section-label'>Art Style</h5>" in out
+        assert "<h5 class='cap-section-label'>Subject</h5>" in out
+        # Each paragraph wrapped
+        assert out.count("<p>") >= 3
+
+    def test_falls_back_to_paragraph_split_when_no_labels(self) -> None:
+        out = _format_caption_text("First paragraph.\n\nSecond paragraph.")
+        assert "<div class='cap-prose'>" in out
+        assert "<p>First paragraph.</p>" in out
+        assert "<p>Second paragraph.</p>" in out
+
+    def test_empty_caption_returns_placeholder(self) -> None:
+        assert "(empty caption)" in _format_caption_text("   \n  ")
+
+
+class TestCaptionPreview:
+    def test_strips_section_labels(self) -> None:
+        preview = _caption_preview(_SAMPLE_CAPTION)
+        assert "[Art Style]" not in preview
+        assert "[Subject]" not in preview
+        assert "How to Draw" in preview
+
+    def test_truncates_long_captions(self) -> None:
+        long = "word " * 200
+        preview = _caption_preview(long)
+        assert preview.endswith("…")
+        assert len(preview) <= 145  # 140 chars + ellipsis tolerance
+
+
+class TestLoadZeroStepCaptions:
+    def test_reads_per_image_json_files(self, tmp_path: Path) -> None:
+        captions_dir = tmp_path / "captions"
+        captions_dir.mkdir()
+        payload = {"image_path": "/data/refs/img_001.png", "text": "[Art Style]\nFlat color."}
+        (captions_dir / "img_001.json").write_text(json.dumps(payload), encoding="utf-8")
+
+        loaded = _load_zero_step_captions(captions_dir)
+        assert loaded == {Path("/data/refs/img_001.png"): "[Art Style]\nFlat color."}
+
+    def test_missing_directory_returns_empty(self, tmp_path: Path) -> None:
+        assert _load_zero_step_captions(tmp_path / "nope") == {}
+
+    def test_skips_malformed_files(self, tmp_path: Path) -> None:
+        captions_dir = tmp_path / "captions"
+        captions_dir.mkdir()
+        (captions_dir / "broken.json").write_text("{not json", encoding="utf-8")
+        (captions_dir / "missing_fields.json").write_text('{"image_path": "/a.png"}', encoding="utf-8")
+        assert _load_zero_step_captions(captions_dir) == {}
+
+
+class TestCaptionHistoryFor:
+    def _build_data(self) -> tuple[ReportData, Path]:
+        ref = Path("/data/refs/img_001.png")
+        kept_caption = Caption(image_path=ref, text="[Art Style]\nKept caption.")
+        loser_caption = Caption(image_path=ref, text="[Art Style]\nLoser caption.")
+        synth_caption = Caption(image_path=ref, text="[Art Style]\nSynthesis caption.")
+
+        kept = make_iteration_result(branch_id=2, iteration=1)
+        kept.kept = True
+        kept.iteration_captions = [kept_caption]
+        kept.aggregated = replace(kept.aggregated, dreamsim_similarity_mean=0.55, color_histogram_mean=0.5)
+        kept.hypothesis = "Kept hypothesis"
+
+        loser = make_iteration_result(branch_id=0, iteration=1)
+        loser.kept = False
+        loser.iteration_captions = [loser_caption]
+        loser.aggregated = replace(loser.aggregated, dreamsim_similarity_mean=0.30, color_histogram_mean=0.3)
+        loser.hypothesis = "Loser hypothesis"
+
+        synth = make_iteration_result(branch_id=8, iteration=1)
+        synth.kept = False
+        synth.experiment = "Synthesis of top experiments"
+        synth.iteration_captions = [synth_caption]
+        synth.aggregated = replace(synth.aggregated, dreamsim_similarity_mean=0.40, color_histogram_mean=0.4)
+        synth.hypothesis = "Merged template"
+
+        data = ReportData(
+            run_name="demo",
+            run_dir=Path("/tmp/demo"),
+            state=make_loop_state(),
+            iteration_logs={1: [loser, kept, synth]},
+        )
+        return data, ref
+
+    def test_pins_kept_first_then_top_raw_then_descending_score(self) -> None:
+        data, ref = self._build_data()
+        history = data.caption_history_for(ref)
+        entries = history[1]
+        # Kept is branch 2 (composite ~0.55 puts it on top); loser branch 0 (~0.30); synth branch 8 (~0.40)
+        assert entries[0].is_kept is True
+        assert entries[0].branch_id == 2
+        # Synthesis comes second by score (0.40 > 0.30)
+        assert entries[1].is_synthesis is True
+        assert entries[1].branch_id == 8
+
+    def test_synthesis_flag_detected_via_experiment_prefix(self) -> None:
+        data, ref = self._build_data()
+        history = data.caption_history_for(ref)
+        entries = history[1]
+        synth = next(e for e in entries if e.branch_id == 8)
+        assert synth.is_synthesis is True
+
+    def test_returns_empty_when_image_has_no_captions(self) -> None:
+        data, _ = self._build_data()
+        history = data.caption_history_for(Path("/data/refs/missing.png"))
+        assert history == {}
+
+
+class TestCaptionEntryDataclass:
+    def test_default_flags_are_false(self) -> None:
+        entry = CaptionEntry(
+            iteration=1,
+            branch_id=3,
+            text="hello",
+            score=0.42,
+            hypothesis="h",
+            is_kept=False,
+            is_top_raw=False,
+            is_synthesis=False,
+        )
+        assert entry.score == pytest.approx(0.42)
+        assert (entry.is_kept, entry.is_top_raw, entry.is_synthesis) == (False, False, False)
+
+
+class TestRenderPromptAnalysisSection:
+    def test_empty_data_renders_placeholder(self, tmp_path: Path) -> None:
+        data = ReportData(
+            run_name="demo",
+            run_dir=tmp_path,
+            state=make_loop_state(),
+        )
+        # No fixed_references and no iteration logs → no images.
+        data.state.fixed_references.clear()
+        out = _render_prompt_analysis_section(data, tmp_path)
+        assert "Prompt Analysis" in out
+        assert "No captions recorded yet" in out
+
+    def test_renders_image_grid_and_detail_blocks(self, tmp_path: Path) -> None:
+        ref = Path("/data/refs/img_001.png")
+        kept = make_iteration_result(branch_id=0, iteration=1)
+        kept.iteration_captions = [Caption(image_path=ref, text="[Art Style]\nKept body.")]
+        kept.kept = True
+
+        data = ReportData(
+            run_name="demo",
+            run_dir=tmp_path,
+            state=make_loop_state(),
+            iteration_logs={1: [kept]},
+            zero_step_captions={ref: "[Art Style]\nZero-step body."},
+        )
+
+        out = _render_prompt_analysis_section(data, tmp_path)
+        assert "data-pa-index" in out
+        assert "data-pa-detail" in out
+        assert 'data-pa-target="pa-img-000"' in out
+        # Zero-step + iteration sections both rendered
+        assert "Zero-step" in out
+        assert "Iteration 01" in out
+        # Kept-card highlight
+        assert "cap-card-kept" in out
+
+    def test_per_image_detail_isolates_one_image(self, tmp_path: Path) -> None:
+        ref_a = Path("/data/refs/a.png")
+        ref_b = Path("/data/refs/b.png")
+        kept = make_iteration_result(branch_id=0, iteration=1)
+        kept.iteration_captions = [
+            Caption(image_path=ref_a, text="[Art Style]\nA body."),
+            Caption(image_path=ref_b, text="[Art Style]\nB body."),
+        ]
+        kept.kept = True
+
+        data = ReportData(
+            run_name="demo",
+            run_dir=tmp_path,
+            state=make_loop_state(),
+            iteration_logs={1: [kept]},
+        )
+        out = _render_image_detail(data, ref_a, tmp_path, image_id="pa-img-000")
+        assert 'id="pa-img-000"' in out
+        assert "A body" in out
+        assert "B body" not in out

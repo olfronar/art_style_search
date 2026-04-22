@@ -16,6 +16,21 @@ from art_style_search.types import IterationResult, LoopState, PromotionDecision
 logger = logging.getLogger(__name__)
 
 _LOG_PATTERN = re.compile(r"iter_(\d+)_branch_(\d+)\.json$")
+_SYNTHESIS_EXP_PREFIX = "Synthesis"
+
+
+@dataclass(frozen=True)
+class CaptionEntry:
+    """One caption produced for a specific image by a specific experiment."""
+
+    iteration: int
+    branch_id: int
+    text: str
+    score: float
+    hypothesis: str
+    is_kept: bool
+    is_top_raw: bool
+    is_synthesis: bool
 
 
 @dataclass
@@ -28,10 +43,65 @@ class ReportData:
     iteration_logs: dict[int, list[IterationResult]] = field(default_factory=dict)
     manifest: RunManifest | None = None
     promotion_decisions: list[PromotionDecision] = field(default_factory=list)
+    zero_step_captions: dict[Path, str] = field(default_factory=dict)
 
     def iteration_numbers(self) -> list[int]:
         """Sorted list of iteration indices that have at least one log."""
         return sorted(self.iteration_logs.keys())
+
+    def reference_images(self) -> list[Path]:
+        """Stable, sorted list of reference image paths seen across all iterations.
+
+        Drawn from per-iteration ``Caption.image_path`` rather than ``state.fixed_references``
+        so the report works for resumed/partial runs where state and disk diverge.
+        """
+        seen: dict[str, Path] = {}
+        # Zero-step first, then iteration captions — earliest reference wins for stable ordering.
+        for ref in sorted(self.zero_step_captions.keys()):
+            seen.setdefault(str(ref), ref)
+        for iteration in self.iteration_numbers():
+            for result in self.iteration_logs[iteration]:
+                for cap in result.iteration_captions:
+                    seen.setdefault(str(cap.image_path), cap.image_path)
+        # Fallback: pull any state.fixed_references not seen above (e.g. zero-iteration runs).
+        for ref in self.state.fixed_references:
+            seen.setdefault(str(ref), ref)
+        return sorted(seen.values(), key=lambda p: p.as_posix())
+
+    def caption_history_for(self, image_path: Path) -> dict[int, list[CaptionEntry]]:
+        """Map iteration → ordered CaptionEntry list (winner first) for one reference image."""
+        history: dict[int, list[CaptionEntry]] = {}
+        target = str(image_path)
+        for iteration in self.iteration_numbers():
+            results = self.iteration_logs[iteration]
+            kept_id = k.branch_id if (k := self.kept_of(iteration)) else None
+            top_id = t.branch_id if (t := self.top_scoring_of(iteration)) else None
+            entries: list[CaptionEntry] = []
+            for result in results:
+                cap_text = next(
+                    (c.text for c in result.iteration_captions if str(c.image_path) == target),
+                    None,
+                )
+                if cap_text is None:
+                    continue
+                exp = (result.experiment or "").strip()
+                entries.append(
+                    CaptionEntry(
+                        iteration=iteration,
+                        branch_id=result.branch_id,
+                        text=cap_text,
+                        score=composite_score(result.aggregated),
+                        hypothesis=result.hypothesis,
+                        is_kept=(result.branch_id == kept_id),
+                        is_top_raw=(result.branch_id == top_id),
+                        is_synthesis=exp.startswith(_SYNTHESIS_EXP_PREFIX),
+                    )
+                )
+            if entries:
+                # Pin kept first, then top_raw (if distinct), then by descending score.
+                entries.sort(key=lambda e: (not e.is_kept, not e.is_top_raw, -e.score))
+                history[iteration] = entries
+        return history
 
     @property
     def requested_ref_count(self) -> int:
@@ -95,6 +165,25 @@ def _load_iteration_logs(log_dir: Path) -> dict[int, list[IterationResult]]:
     return result
 
 
+def _load_zero_step_captions(captions_dir: Path) -> dict[Path, str]:
+    """Read the per-image JSON files at ``<run>/logs/captions/`` written by the bootstrap captioner."""
+    result: dict[Path, str] = {}
+    if not captions_dir.is_dir():
+        return result
+    for path in sorted(captions_dir.glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("Skipping malformed zero-step caption %s: %s", path, exc)
+            continue
+        image_path_str = payload.get("image_path")
+        text = payload.get("text")
+        if not isinstance(image_path_str, str) or not isinstance(text, str):
+            continue
+        result[Path(image_path_str)] = text
+    return result
+
+
 def load_report_data(run_dir: Path) -> ReportData:
     """Load *state.json* and all iteration logs from *run_dir*."""
     state_file = run_dir / "state.json"
@@ -109,6 +198,7 @@ def load_report_data(run_dir: Path) -> ReportData:
         iteration_logs=_load_iteration_logs(run_dir / "logs"),
         manifest=load_manifest(run_dir / "run_manifest.json"),
         promotion_decisions=load_promotion_log(run_dir / "promotion_log.jsonl"),
+        zero_step_captions=_load_zero_step_captions(run_dir / "logs" / "captions"),
     )
 
 

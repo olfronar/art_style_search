@@ -1,13 +1,13 @@
 # reporting/ — HTML report
 
-Note: the façade lives at `src/art_style_search/report.py` (re-exports `build_report`, `build_all_reports`, `load_report_data`, `ReportData`). Data loading lives in `report_data.py` (`ReportData` dataclass centralizes state, iteration logs, manifest, promotion decisions).
+Note: the façade lives at `src/art_style_search/report.py` (re-exports `build_report`, `build_all_reports`, `load_report_data`, `ReportData`). Data loading lives in `report_data.py` (`ReportData` dataclass centralizes state, iteration logs, manifest, promotion decisions, and zero-step captions).
 
 ## Module map
 
-- `render.py` - HTML section renderers: header, summary (score trajectory + hypothesis outcomes + top open problems), trajectories, iteration drilldown, KB, protocol, promotion decisions. Vision feedback XML tags parsed into styled verdict cards. Prompt diffs via `difflib.unified_diff`.
+- `render.py` - HTML section renderers: header, summary (score trajectory + hypothesis outcomes + top open problems), trajectories, iteration drilldown, KB, protocol, promotion decisions, **prompt analysis** (`_render_prompt_analysis_section` → image grid + per-image detail blocks). Vision feedback XML tags parsed into styled verdict cards. Prompt diffs via `difflib.unified_diff`. `_format_caption_text` parses `[Section]` blocks into styled headers + paragraphs; `_caption_preview` produces a single-line preview that strips section labels.
 - `charts.py` - Plotly chart builders (composite trajectory + per-metric subplots); lazy-imports Plotly.
-- `document.py` - HTML5 document assembly; CSS lazy-loaded via `functools.cache`. `--offline` embeds Plotly JS inline.
-- `report.css` - Editorial dark-theme design system (CSS custom properties, responsive at 880px).
+- `document.py` - HTML5 document assembly; CSS lazy-loaded via `functools.cache`. `--offline` embeds Plotly JS inline. Wraps overview + prompt-analysis sections in two `<div class="tab-panel">` blocks toggled by an inline `tab_script` (Overview default, Prompt Analysis on demand). The same script handles per-image drill-down (tile click → detail; back button → grid).
+- `report.css` - Editorial dark-theme design system (CSS custom properties, responsive at 880px). Tab nav is sticky to the top of the viewport. Caption cards highlight via left border: accent for kept, gold for top-raw, dashed for synthesis, gold for the zero-step baseline.
 
 ## Conventions
 
@@ -15,3 +15,4 @@ Note: the façade lives at `src/art_style_search/report.py` (re-exports `build_r
 - Vision comparison verdicts are ternary (MATCH/PARTIAL/MISS) — the canonical `VERDICT_PATTERN` lives in `evaluate.py` and is consumed here via `reporting/render.py` to parse vision feedback XML tags into styled cards.
 - Open-problem text: the `[HIGH]/[MED]/[LOW]` priority prefix is stripped at render time via `strip_priority_prefix` (shared with `knowledge.py`); parsed priority overrides the code heuristic.
 - Style-gap observations: `_render_style_gap_observations` renders `KnowledgeBase.style_gap_observations` (the vision judge's canon-actionable deltas, deduplicated ring buffer) as an ordered list in the Knowledge Base section. Each entry feeds the next iteration's canon-edit proposals. CSS classes `.style-gap-list` / `.style-gap-item` / `.sg-num` / `.sg-text` mirror the open-problems styling.
+- Prompt-analysis tab data: `ReportData.reference_images()` returns the stable sorted union of zero-step caption refs + per-iteration `Caption.image_path` + `state.fixed_references` (so resumed/partial runs render correctly). `ReportData.caption_history_for(image)` returns `dict[iteration → list[CaptionEntry]]` ordered with **kept first, then top-raw, then descending `composite_score`**. Two highlight styles: `is_kept` (the experiment that updated the running template — accent left border, expanded by default) and `is_top_raw` (highest `composite_score` — gold). Synthesis is detected via `IterationResult.experiment.startswith("Synthesis")` and rendered with a dashed left border + `[synthesis]` badge. Replicates are not surfaced in this tab — they have no separate `IterationResult` entries (medians are aggregated into the parent). Zero-step captions are loaded from `<run>/logs/captions/*.json` by `_load_zero_step_captions` and pinned at the top of each per-image detail as a baseline card.

@@ -13,6 +13,7 @@ from art_style_search.reporting.render import (
     _render_iteration_drilldown,
     _render_kb_section,
     _render_promotion_section,
+    _render_prompt_analysis_section,
     _render_protocol_section,
     _render_summary_section,
     _render_trajectories_section,
@@ -58,6 +59,7 @@ def _assemble_html(data: ReportData, report_dir, *, offline: bool = False) -> st
     kb_section = _render_kb_section(data)
     protocol_section = _render_protocol_section(data)
     promotion_section = _render_promotion_section(data)
+    prompt_analysis_section = _render_prompt_analysis_section(data, report_dir)
 
     plot_script = ""
     if composite_json and multi_json:
@@ -80,6 +82,71 @@ def _assemble_html(data: ReportData, report_dir, *, offline: bool = False) -> st
 </script>
 """
 
+    tab_script = """
+<script>
+(function() {
+  var nav = document.querySelector('[data-tab-nav]');
+  var panels = document.querySelectorAll('[data-tab-panel]');
+  if (!nav || !panels.length) return;
+
+  function activate(tabId) {
+    nav.querySelectorAll('[data-tab-target]').forEach(function(btn) {
+      var on = btn.getAttribute('data-tab-target') === tabId;
+      btn.classList.toggle('tab-btn-active', on);
+      btn.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    panels.forEach(function(p) {
+      p.hidden = (p.id !== tabId);
+    });
+    if (tabId === 'tab-prompts') showIndex();
+    window.scrollTo({top: 0, behavior: 'instant'});
+  }
+
+  function showIndex() {
+    var root = document.querySelector('[data-pa-root]');
+    if (!root) return;
+    var index = root.querySelector('[data-pa-index]');
+    if (index) index.hidden = false;
+    root.querySelectorAll('[data-pa-detail]').forEach(function(d) { d.hidden = true; });
+  }
+
+  function showDetail(targetId) {
+    var root = document.querySelector('[data-pa-root]');
+    if (!root) return;
+    var index = root.querySelector('[data-pa-index]');
+    if (index) index.hidden = true;
+    root.querySelectorAll('[data-pa-detail]').forEach(function(d) {
+      d.hidden = (d.id !== targetId);
+    });
+    var target = document.getElementById(targetId);
+    if (target) target.scrollIntoView({behavior: 'instant', block: 'start'});
+  }
+
+  nav.addEventListener('click', function(ev) {
+    var btn = ev.target.closest('[data-tab-target]');
+    if (!btn) return;
+    activate(btn.getAttribute('data-tab-target'));
+  });
+
+  document.addEventListener('click', function(ev) {
+    var tile = ev.target.closest('[data-pa-target]');
+    if (tile) {
+      ev.preventDefault();
+      showDetail(tile.getAttribute('data-pa-target'));
+      return;
+    }
+    var back = ev.target.closest('[data-pa-back]');
+    if (back) {
+      ev.preventDefault();
+      showIndex();
+    }
+  });
+
+  activate('tab-overview');
+})();
+</script>
+"""
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -95,14 +162,24 @@ def _assemble_html(data: ReportData, report_dir, *, offline: bool = False) -> st
 <body>
   <main class="page">
     {header}
-    {summary_section}
-    {trajectories}
-    {iterations_section}
-    {kb_section}
-    {protocol_section}
-    {promotion_section}
+    <nav class="tab-nav" data-tab-nav role="tablist" aria-label="Report sections">
+      <button type="button" class="tab-btn" data-tab-target="tab-overview" role="tab" aria-selected="true">Overview</button>
+      <button type="button" class="tab-btn" data-tab-target="tab-prompts" role="tab" aria-selected="false">Prompt Analysis</button>
+    </nav>
+    <div id="tab-overview" class="tab-panel" data-tab-panel role="tabpanel">
+      {summary_section}
+      {trajectories}
+      {iterations_section}
+      {kb_section}
+      {protocol_section}
+      {promotion_section}
+    </div>
+    <div id="tab-prompts" class="tab-panel" data-tab-panel role="tabpanel" hidden>
+      {prompt_analysis_section}
+    </div>
   </main>
   {plot_script}
+  {tab_script}
 </body>
 </html>
 """

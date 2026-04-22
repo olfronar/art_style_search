@@ -9,7 +9,7 @@ from pathlib import Path
 
 from art_style_search.evaluate import VERDICT_PATTERN
 from art_style_search.knowledge import strip_priority_prefix as _strip_priority_prefix
-from art_style_search.report_data import ReportData, _rel
+from art_style_search.report_data import CaptionEntry, ReportData, _rel
 from art_style_search.scoring import adaptive_composite_score, composite_score
 from art_style_search.types import (
     CategoryProgress,
@@ -19,6 +19,9 @@ from art_style_search.types import (
     MetricScores,
     OpenProblem,
 )
+
+_LABELED_SECTION_RE = re.compile(r"^\[([^\]]+)\]\s*$", re.MULTILINE)
+_CAPTION_PREVIEW_CHARS = 140
 
 logger = logging.getLogger(__name__)
 
@@ -802,6 +805,238 @@ def _render_promotion_section(data: ReportData) -> str:
         {"".join(rows)}
       </tbody>
     </table>
+  </div>
+</section>
+"""
+
+
+# ---------------------------------------------------------------------------
+# Prompt analysis tab
+# ---------------------------------------------------------------------------
+
+
+def _format_caption_text(text: str) -> str:
+    """Render a caption's ``[Section]`` blocks as styled headers + paragraphs."""
+    if not text.strip():
+        return "<p class='caption-empty'>(empty caption)</p>"
+
+    parts = _LABELED_SECTION_RE.split(text)
+    # Without any labels, fall back to paragraph-split prose.
+    if len(parts) < 3:
+        paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+        body = "".join(f"<p>{_h(p)}</p>" for p in paragraphs)
+        return f"<div class='cap-prose'>{body}</div>"
+
+    out: list[str] = []
+    preamble = parts[0].strip()
+    if preamble:
+        out.append(f"<p class='cap-preamble'>{_h(preamble)}</p>")
+
+    for i in range(1, len(parts), 2):
+        if i + 1 >= len(parts):
+            break
+        label = parts[i].strip()
+        body = parts[i + 1]
+        paragraphs = [p.strip() for p in body.split("\n\n") if p.strip()]
+        para_html = "".join(f"<p>{_h(p)}</p>" for p in paragraphs) or f"<p>{_h(body.strip())}</p>"
+        out.append(
+            f"<section class='cap-section'>"
+            f"<h5 class='cap-section-label'>{_h(label)}</h5>"
+            f"<div class='cap-section-body'>{para_html}</div>"
+            f"</section>"
+        )
+    return f"<article class='cap-prose'>{''.join(out)}</article>"
+
+
+def _caption_preview(text: str) -> str:
+    """Short single-line preview of a caption (skips section labels)."""
+    if not text:
+        return ""
+    # Strip [Section] labels and collapse whitespace.
+    stripped = _LABELED_SECTION_RE.sub("", text)
+    flat = " ".join(stripped.split())
+    if not flat:
+        return ""
+    if len(flat) > _CAPTION_PREVIEW_CHARS:
+        return flat[:_CAPTION_PREVIEW_CHARS].rstrip() + "…"
+    return flat
+
+
+def _render_caption_card(entry: CaptionEntry, *, expanded: bool) -> str:
+    """Render one experiment's caption card. Winner expanded, others collapsed."""
+    badges: list[str] = []
+    if entry.is_kept:
+        badges.append("<span class='cap-badge cap-badge-kept'>kept</span>")
+    if entry.is_top_raw and not entry.is_kept:
+        badges.append("<span class='cap-badge cap-badge-top'>top raw</span>")
+    if entry.is_top_raw and entry.is_kept:
+        badges.append("<span class='cap-badge cap-badge-top'>top raw</span>")
+    if entry.is_synthesis:
+        badges.append("<span class='cap-badge cap-badge-synth'>synthesis</span>")
+    badges_html = "".join(badges)
+
+    card_classes = ["cap-card"]
+    if entry.is_kept:
+        card_classes.append("cap-card-kept")
+    if entry.is_top_raw:
+        card_classes.append("cap-card-top")
+    if entry.is_synthesis:
+        card_classes.append("cap-card-synth")
+    open_attr = " open" if expanded else ""
+
+    preview = _caption_preview(entry.text)
+    formatted = _format_caption_text(entry.text)
+
+    hyp = entry.hypothesis.strip()
+    hyp_html = f"<p class='cap-hypothesis'>{_h(hyp)}</p>" if hyp else ""
+
+    return f"""
+<details class="{" ".join(card_classes)}"{open_attr}>
+  <summary class="cap-summary">
+    <span class="cap-branch">exp {entry.branch_id:02d}</span>
+    {badges_html}
+    <code class="cap-score">{_fmt_score(entry.score)}</code>
+    <span class="cap-preview">{_h(preview)}</span>
+  </summary>
+  <div class="cap-body">
+    {hyp_html}
+    {formatted}
+  </div>
+</details>"""
+
+
+def _render_zero_step_card(text: str) -> str:
+    """Render the zero-step (pre-iteration) caption as a pinned baseline card."""
+    formatted = _format_caption_text(text)
+    return f"""
+<details class="cap-card cap-card-zero" open>
+  <summary class="cap-summary">
+    <span class="cap-branch">zero-step</span>
+    <span class="cap-badge cap-badge-zero">baseline</span>
+    <span class="cap-preview">{_h(_caption_preview(text))}</span>
+  </summary>
+  <div class="cap-body">{formatted}</div>
+</details>"""
+
+
+def _render_image_detail(
+    data: ReportData,
+    image_path: Path,
+    report_dir: Path,
+    *,
+    image_id: str,
+) -> str:
+    """One reference image's full caption history (zero-step + per-iteration cards)."""
+    history = data.caption_history_for(image_path)
+    iterations = sorted(history.keys())
+
+    iteration_blocks: list[str] = []
+    zero_text = data.zero_step_captions.get(image_path)
+    if zero_text:
+        iteration_blocks.append(
+            "<section class='pa-iter pa-iter-zero'>"
+            "<header class='pa-iter-head'>"
+            "<h4 class='pa-iter-title'>Zero-step</h4>"
+            "<span class='pa-iter-meta'>baseline caption written before any optimization</span>"
+            "</header>"
+            f"{_render_zero_step_card(zero_text)}"
+            "</section>"
+        )
+
+    for iteration in iterations:
+        entries = history[iteration]
+        cards = "".join(_render_caption_card(e, expanded=(idx == 0)) for idx, e in enumerate(entries))
+        n_kept = sum(1 for e in entries if e.is_kept)
+        kept_note = " · kept experiment expanded" if n_kept else ""
+        iteration_blocks.append(
+            f"<section class='pa-iter'>"
+            f"<header class='pa-iter-head'>"
+            f"<h4 class='pa-iter-title'>Iteration {iteration:02d}</h4>"
+            f"<span class='pa-iter-meta'>{len(entries)} experiments{kept_note}</span>"
+            f"</header>"
+            f"<div class='pa-iter-cards'>{cards}</div>"
+            f"</section>"
+        )
+
+    if not iteration_blocks:
+        body = "<p class='empty'>No captions recorded for this image yet.</p>"
+    else:
+        body = "".join(iteration_blocks)
+
+    ref_rel = _rel(image_path, report_dir)
+    short_name = image_path.stem[:48] + ("…" if len(image_path.stem) > 48 else "")
+
+    return f"""
+<article class="pa-image-detail" id="{image_id}" data-pa-detail hidden>
+  <header class="pa-detail-head">
+    <button type="button" class="pa-back" data-pa-back>&larr; All images</button>
+    <figure class="pa-detail-thumb">
+      <img src="{_h(ref_rel)}" alt="{_h(short_name)}" loading="lazy">
+    </figure>
+    <div class="pa-detail-meta">
+      <h3 class="pa-detail-title">{_h(short_name)}</h3>
+      <p class="pa-detail-kicker">Caption evolution across iterations. Winner per iteration is expanded; others collapse to a one-line preview.</p>
+    </div>
+  </header>
+  <div class="pa-detail-body">{body}</div>
+</article>"""
+
+
+def _render_image_index(data: ReportData, report_dir: Path, *, id_for: dict[Path, str]) -> str:
+    """Top-level grid of reference images (entry point for the prompt-analysis tab)."""
+    images = data.reference_images()
+    if not images:
+        return "<p class='empty'>No reference images recorded yet.</p>"
+
+    cards: list[str] = []
+    for image in images:
+        target_id = id_for[image]
+        ref_rel = _rel(image, report_dir)
+        short_name = image.stem[:32] + ("…" if len(image.stem) > 32 else "")
+        n_iters = len(data.caption_history_for(image))
+        zero = "✓" if data.zero_step_captions.get(image) else "—"
+        cards.append(
+            f"""
+<button type="button" class="pa-tile" data-pa-target="{_h(target_id)}">
+  <figure class="pa-tile-thumb">
+    <img src="{_h(ref_rel)}" alt="{_h(short_name)}" loading="lazy">
+  </figure>
+  <figcaption class="pa-tile-meta">
+    <span class="pa-tile-name">{_h(short_name)}</span>
+    <span class="pa-tile-stats">{n_iters} iter · zero-step {zero}</span>
+  </figcaption>
+</button>"""
+        )
+    return f"<div class='pa-image-grid' data-pa-index>{''.join(cards)}</div>"
+
+
+def _render_prompt_analysis_section(data: ReportData, report_dir: Path) -> str:
+    """Top-level renderer for the Prompt Analysis tab."""
+    images = data.reference_images()
+    if not images:
+        return """
+<section class="prompt-analysis-section">
+  <div class="section-head">
+    <span class="section-numeral">VI</span>
+    <h2>Prompt Analysis</h2>
+  </div>
+  <p class="empty">No captions recorded yet — run the loop first.</p>
+</section>
+"""
+
+    id_for: dict[Path, str] = {image: f"pa-img-{i:03d}" for i, image in enumerate(images)}
+    index_html = _render_image_index(data, report_dir, id_for=id_for)
+    detail_blocks = "".join(_render_image_detail(data, image, report_dir, image_id=id_for[image]) for image in images)
+    return f"""
+<section class="prompt-analysis-section">
+  <div class="section-head">
+    <span class="section-numeral">VI</span>
+    <h2>Prompt Analysis</h2>
+    <p class="section-kicker">Per-image caption evolution across iterations. Click a thumbnail to drill into one image.</p>
+  </div>
+  <div class="pa-root" data-pa-root>
+    {index_html}
+    {detail_blocks}
   </div>
 </section>
 """
