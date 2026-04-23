@@ -23,6 +23,7 @@ from art_style_search.reporting.render import (
     _format_caption_text,
     _format_vision_feedback,
     _render_hypothesis_tree,
+    _render_hypothesis_tree_section,
     _render_image_detail,
     _render_open_problems,
     _render_prompt_analysis_section,
@@ -646,3 +647,162 @@ class TestRenderPromptAnalysisSection:
         assert 'id="pa-img-000"' in out
         assert "A body" in out
         assert "B body" not in out
+
+
+class TestRenderHypothesisTreeSection:
+    def test_empty_data_renders_placeholder(self, tmp_path: Path) -> None:
+        data = ReportData(
+            run_name="demo",
+            run_dir=tmp_path,
+            state=make_loop_state(),
+        )
+        out = _render_hypothesis_tree_section(data)
+        assert "Hypothesis Tree" in out
+        assert "No iterations yet" in out
+
+    def test_renders_without_proposal_log_falls_back_to_executed_view(self, tmp_path: Path) -> None:
+        kept = make_iteration_result(branch_id=0, iteration=1)
+        kept.kept = True
+        kept.direction_id = "D1"
+        kept.direction_summary = "Tighten subject"
+        kept.hypothesis = "subject fidelity will improve when rules are crisper"
+        data = ReportData(
+            run_name="demo",
+            run_dir=tmp_path,
+            state=make_loop_state(),
+            iteration_logs={1: [kept]},
+        )
+        out = _render_hypothesis_tree_section(data)
+        assert "Hypothesis Tree" in out
+        assert "iter 001" in out
+        assert "D1" in out
+        assert "Tighten subject" in out
+        assert "No proposal log" in out
+
+    def test_builds_tree_from_recorder_and_highlights_executed(self, tmp_path: Path) -> None:
+        from art_style_search.contracts import ExperimentSketch
+        from art_style_search.workflow.proposal_recorder import ProposalBatchRecorder
+
+        def _s(rank: int, direction: str, risk: str = "targeted") -> ExperimentSketch:
+            return ExperimentSketch(
+                hypothesis=f"sketch #{rank}",
+                target_category="subject_anchor",
+                failure_mechanism="weak rules",
+                intervention_type="tighten",
+                direction_id=direction,
+                direction_summary=f"Direction {direction}",
+                risk_level=risk,
+                expected_primary_metric="dreamsim_similarity_mean",
+            )
+
+        recorder = ProposalBatchRecorder(iteration=2)
+        recorder.record_brainstorm([_s(0, "D1"), _s(1, "D1", risk="bold"), _s(2, "D2"), _s(3, "D3")])
+        recorder.mark_deduped_stage1(1, "collision")
+        recorder.mark_not_picked(3)
+        recorder.mark_executed(0, 0)
+        recorder.mark_executed(2, 1)
+
+        exec_0 = make_iteration_result(branch_id=0, iteration=2)
+        exec_0.kept = True
+        exec_0.hypothesis = "sketch #0"
+        exec_1 = make_iteration_result(branch_id=1, iteration=2)
+        exec_1.kept = False
+        exec_1.hypothesis = "sketch #2"
+
+        data = ReportData(
+            run_name="demo",
+            run_dir=tmp_path,
+            state=make_loop_state(),
+            iteration_logs={2: [exec_0, exec_1]},
+            iteration_proposals={2: recorder},
+        )
+        out = _render_hypothesis_tree_section(data)
+        assert "iter 002" in out
+        # Each direction renders.
+        assert "D1" in out and "D2" in out and "D3" in out
+        # Fate badges.
+        assert "deduped" in out
+        assert "not picked" in out
+        assert "executed" in out
+        # Risk tags.
+        assert "[targeted]" in out
+        assert "[bold]" in out
+        # Kept/rejected modifier on executed branches.
+        assert "kept" in out
+        assert "rejected" in out
+        # Hypothesis text is escaped-present.
+        assert "sketch #0" in out
+
+    def test_escapes_hypothesis_html(self, tmp_path: Path) -> None:
+        from art_style_search.contracts import ExperimentSketch
+        from art_style_search.workflow.proposal_recorder import ProposalBatchRecorder
+
+        recorder = ProposalBatchRecorder(iteration=0)
+        recorder.record_brainstorm(
+            [
+                ExperimentSketch(
+                    hypothesis="<script>alert('xss')</script>",
+                    target_category="",
+                    failure_mechanism="",
+                    intervention_type="",
+                    direction_id="D1",
+                    direction_summary="<b>bold</b>",
+                    risk_level="targeted",
+                    expected_primary_metric="",
+                )
+            ]
+        )
+        data = ReportData(
+            run_name="demo",
+            run_dir=tmp_path,
+            state=make_loop_state(),
+            iteration_proposals={0: recorder},
+        )
+        out = _render_hypothesis_tree_section(data)
+        assert "<script>alert" not in out
+        assert "&lt;script&gt;" in out
+        assert "<b>bold</b>" not in out
+        assert "&lt;b&gt;bold" in out
+
+
+class TestReportWithHypothesisTreeTab:
+    def test_built_report_has_hypothesis_tree_tab(self, tmp_path: Path) -> None:
+        from art_style_search.contracts import ExperimentSketch
+        from art_style_search.state import save_iteration_proposals
+        from art_style_search.workflow.proposal_recorder import ProposalBatchRecorder
+
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        log_dir = run_dir / "logs"
+        log_dir.mkdir()
+        save_state(make_loop_state(), run_dir / "state.json")
+
+        kept = make_iteration_result(branch_id=0, iteration=1)
+        kept.kept = True
+        kept.hypothesis = "demo hypothesis"
+        kept.direction_id = "D1"
+        kept.direction_summary = "directional summary"
+        save_iteration_log(kept, log_dir)
+
+        recorder = ProposalBatchRecorder(iteration=1)
+        recorder.record_brainstorm(
+            [
+                ExperimentSketch(
+                    hypothesis="demo hypothesis",
+                    target_category="subject_anchor",
+                    failure_mechanism="m",
+                    intervention_type="i",
+                    direction_id="D1",
+                    direction_summary="directional summary",
+                    risk_level="targeted",
+                    expected_primary_metric="",
+                )
+            ]
+        )
+        recorder.mark_executed(0, 0)
+        save_iteration_proposals(recorder, log_dir)
+
+        text = build_report(run_dir).read_text(encoding="utf-8")
+        assert 'data-tab-target="tab-hypothesis-tree"' in text
+        assert 'id="tab-hypothesis-tree"' in text
+        assert "demo hypothesis" in text

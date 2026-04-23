@@ -226,24 +226,30 @@ async def test_propose_iteration_experiments_requests_raw_batch_and_selects_port
     async def fake_brainstorm(*args, **kwargs):
         seen_num_sketches.append(kwargs["num_sketches"])
         return [
-            _make_sketch(ref.direction_id, idx, mechanism=ref.failure_mechanism) for idx, ref in enumerate(refinements)
+            _make_sketch(
+                ref.direction_id, idx, mechanism=ref.failure_mechanism, intervention_type=ref.intervention_type
+            )
+            for idx, ref in enumerate(refinements)
         ], False
 
     async def fake_rank(*args, **kwargs):
         return kwargs.get("sketches", args[0])
 
+    sketch_to_refinement = {f"{ref.direction_id} sketch {idx}": ref for idx, ref in enumerate(refinements)}
+
     async def fake_expand(*args, **kwargs):
-        return list(refinements)
+        sketches = kwargs["sketches"]
+        return [sketch_to_refinement.get(s.hypothesis) for s in sketches]
 
     monkeypatch.setattr("art_style_search.workflow.iteration_proposals.brainstorm_experiment_sketches", fake_brainstorm)
     monkeypatch.setattr("art_style_search.workflow.iteration_proposals.rank_experiment_sketches", fake_rank)
     monkeypatch.setattr("art_style_search.workflow.iteration_proposals.expand_experiment_sketches", fake_expand)
     monkeypatch.setattr(
         "art_style_search.workflow.iteration_proposals.enforce_hypothesis_diversity",
-        lambda refinements, template: refinements,
+        lambda refinements, template, **_: refinements,
     )
 
-    proposals, should_stop = await _propose_iteration_experiments(state, ctx, "", "", "")
+    proposals, should_stop, _ = await _propose_iteration_experiments(state, ctx, "", "", "")
 
     assert should_stop is False
     assert seen_num_sketches == [18]
@@ -325,14 +331,14 @@ async def test_propose_iteration_experiments_keeps_proposal_with_removed_incumbe
     monkeypatch.setattr("art_style_search.workflow.iteration_proposals.expand_experiment_sketches", fake_expand)
     monkeypatch.setattr(
         "art_style_search.workflow.iteration_proposals.enforce_hypothesis_diversity",
-        lambda refinements, template: refinements,
+        lambda refinements, template, **_: refinements,
     )
     monkeypatch.setattr(
         "art_style_search.workflow.iteration_proposals.select_experiment_portfolio",
         lambda refinements, **kwargs: refinements,
     )
 
-    proposals, should_stop = await _propose_iteration_experiments(state, ctx, "", "", "")
+    proposals, should_stop, _ = await _propose_iteration_experiments(state, ctx, "", "", "")
 
     assert should_stop is False
     assert len(proposals) == 1
@@ -398,14 +404,14 @@ async def test_propose_iteration_experiments_recovers_caption_structure_alias_fr
     monkeypatch.setattr("art_style_search.workflow.iteration_proposals.expand_experiment_sketches", fake_expand)
     monkeypatch.setattr(
         "art_style_search.workflow.iteration_proposals.enforce_hypothesis_diversity",
-        lambda refinements, template: refinements,
+        lambda refinements, template, **_: refinements,
     )
     monkeypatch.setattr(
         "art_style_search.workflow.iteration_proposals.select_experiment_portfolio",
         lambda refinements, **kwargs: refinements,
     )
 
-    proposals, should_stop = await _propose_iteration_experiments(state, ctx, "", "", "")
+    proposals, should_stop, _ = await _propose_iteration_experiments(state, ctx, "", "", "")
 
     assert should_stop is False
     assert len(proposals) == 1
@@ -450,14 +456,14 @@ async def test_propose_iteration_experiments_forwards_iteration_context_to_reaso
     monkeypatch.setattr("art_style_search.workflow.iteration_proposals.expand_experiment_sketches", fake_expand)
     monkeypatch.setattr(
         "art_style_search.workflow.iteration_proposals.enforce_hypothesis_diversity",
-        lambda refinements, template: refinements,
+        lambda refinements, template, **_: refinements,
     )
     monkeypatch.setattr(
         "art_style_search.workflow.iteration_proposals.select_experiment_portfolio",
         lambda refinements, **kwargs: refinements,
     )
 
-    proposals, should_stop = await _propose_iteration_experiments(state, ctx, "", "", "")
+    proposals, should_stop, _ = await _propose_iteration_experiments(state, ctx, "", "", "")
 
     assert should_stop is False
     assert len(proposals) == 1
@@ -551,7 +557,7 @@ async def test_propose_iteration_experiments_logs_recovery_summary(monkeypatch, 
     monkeypatch.setattr("art_style_search.workflow.iteration_proposals.expand_experiment_sketches", fake_expand)
     monkeypatch.setattr(
         "art_style_search.workflow.iteration_proposals.enforce_hypothesis_diversity",
-        lambda refinements, template: refinements,
+        lambda refinements, template, **_: refinements,
     )
     monkeypatch.setattr(
         "art_style_search.workflow.iteration_proposals.select_experiment_portfolio",
@@ -559,7 +565,7 @@ async def test_propose_iteration_experiments_logs_recovery_summary(monkeypatch, 
     )
 
     with caplog.at_level("INFO"):
-        proposals, should_stop = await _propose_iteration_experiments(state, ctx, "", "", "")
+        proposals, should_stop, _ = await _propose_iteration_experiments(state, ctx, "", "", "")
 
     assert should_stop is False
     assert len(proposals) == 1
@@ -611,7 +617,7 @@ async def test_propose_iteration_experiments_honors_brainstorm_stop_before_ranki
         "art_style_search.workflow.iteration_proposals._should_honor_stop", lambda *args, **kwargs: True
     )
 
-    proposals, should_stop = await _propose_iteration_experiments(state, ctx, "", "", "")
+    proposals, should_stop, _ = await _propose_iteration_experiments(state, ctx, "", "", "")
 
     assert proposals == []
     assert should_stop is True
@@ -665,14 +671,14 @@ async def test_propose_iteration_experiments_deduplicates_ranked_sketches_before
     )
     monkeypatch.setattr(
         "art_style_search.workflow.iteration_proposals.enforce_hypothesis_diversity",
-        lambda refinements, template: refinements,
+        lambda refinements, template, **_: refinements,
     )
     monkeypatch.setattr(
         "art_style_search.workflow.iteration_proposals.select_experiment_portfolio",
         lambda refinements, **kwargs: refinements,
     )
 
-    proposals, should_stop = await _propose_iteration_experiments(state, ctx, "", "", "")
+    proposals, should_stop, _ = await _propose_iteration_experiments(state, ctx, "", "", "")
 
     assert should_stop is False
     assert len(proposals) == 1

@@ -6,6 +6,7 @@ import html
 import logging
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING, get_args
 
 from art_style_search.evaluate import VERDICT_PATTERN
 from art_style_search.knowledge import strip_priority_prefix as _strip_priority_prefix
@@ -13,12 +14,16 @@ from art_style_search.report_data import CaptionEntry, ReportData, _rel
 from art_style_search.scoring import adaptive_composite_score, composite_score
 from art_style_search.types import (
     CategoryProgress,
+    DirectionId,
     Hypothesis,
     IterationResult,
     KnowledgeBase,
     MetricScores,
     OpenProblem,
 )
+
+if TYPE_CHECKING:
+    from art_style_search.workflow.proposal_recorder import ProposalBatchRecorder, ProposalRecord
 
 _LABELED_SECTION_RE = re.compile(r"^\[([^\]]+)\]\s*$", re.MULTILINE)
 _CAPTION_PREVIEW_CHARS = 140
@@ -1008,6 +1013,264 @@ def _render_image_index(data: ReportData, report_dir: Path, *, id_for: dict[Path
 </button>"""
         )
     return f"<div class='pa-image-grid' data-pa-index>{''.join(cards)}</div>"
+
+
+_DIRECTION_ORDER: tuple[str, ...] = get_args(DirectionId)
+_FATE_LABEL: dict[str, str] = {
+    "executed": "executed",
+    "invalid_template": "invalid template",
+    "not_picked": "not picked",
+    "deduped_stage2": "deduped · post-expand",
+    "deduped_stage1": "deduped · pre-expand",
+    "trimmed": "trimmed by rank",
+    "brainstormed": "no fate recorded",
+}
+_FATE_CSS: dict[str, str] = {
+    "executed": "hyp-fate-executed",
+    "invalid_template": "hyp-fate-invalid",
+    "not_picked": "hyp-fate-notpicked",
+    "deduped_stage2": "hyp-fate-deduped",
+    "deduped_stage1": "hyp-fate-deduped",
+    "trimmed": "hyp-fate-trimmed",
+    "brainstormed": "hyp-fate-trimmed",
+}
+
+
+def _render_hypothesis_tree_section(data: ReportData) -> str:
+    """Top-level renderer for the Hypothesis Tree tab.
+
+    Shows per-iteration ideation: each direction (D1/D2/D3) expands into every raw proposal
+    the reasoner emitted, annotated with the stage at which it was kept or dropped and,
+    when it was executed, its composite score + kept flag from the matching IterationResult.
+    """
+    if not data.iteration_proposals and not data.iteration_logs:
+        return """
+<section class="hypothesis-tree-section">
+  <div class="section-head">
+    <span class="section-numeral">VII</span>
+    <h2>Hypothesis Tree</h2>
+  </div>
+  <p class="empty">No iterations yet — run the loop first.</p>
+</section>
+"""
+
+    iterations = sorted(
+        set(data.iteration_proposals.keys()) | set(data.iteration_logs.keys()),
+        reverse=True,
+    )
+
+    iteration_blocks: list[str] = [_render_hypothesis_tree_iteration(data, it) for it in iterations]
+
+    return f"""
+<section class="hypothesis-tree-section">
+  <div class="section-head">
+    <span class="section-numeral">VII</span>
+    <h2>Hypothesis Tree</h2>
+    <p class="section-kicker">Per-iteration ideation trail: directions → proposals → fates. Each iteration lists
+    every sketch the reasoner emitted, grouped by direction, annotated with the stage it survived to.</p>
+  </div>
+  <div class="hyp-tree-root">
+    {"".join(iteration_blocks)}
+  </div>
+</section>
+"""
+
+
+def _render_hypothesis_tree_iteration(data: ReportData, iteration: int) -> str:
+    recorder = data.iteration_proposals.get(iteration)
+    exp_results_by_branch: dict[int, IterationResult] = {r.branch_id: r for r in data.iteration_logs.get(iteration, [])}
+    kept = data.kept_of(iteration)
+    kept_score = composite_score(kept.aggregated) if kept else None
+
+    baseline: float | None = None
+    if data.state.best_metrics is not None:
+        baseline = composite_score(data.state.best_metrics)
+
+    header_bits: list[str] = [f"<span class='hyp-iter'>iter {iteration:03d}</span>"]
+    if kept is not None and kept_score is not None:
+        baseline_txt = _fmt_score(baseline) if baseline is not None else "—"
+        header_bits.append(
+            f"<span class='hyp-sep'>·</span><span class='hyp-summary-score'>"
+            f"{_h(baseline_txt)} → {_h(_fmt_score(kept_score))}"
+            f"</span>"
+        )
+        header_bits.append(
+            f"<span class='hyp-sep'>·</span><span class='hyp-summary-branch'>branch {kept.branch_id}</span>"
+        )
+
+    if recorder is None:
+        # Legacy iteration with only surviving experiments on disk. Synthesize a minimal tree.
+        direction_blocks = _render_direction_blocks_from_exp_results(exp_results_by_branch)
+        return (
+            f"<section class='hyp-iter-block'>"
+            f"<div class='hyp-iter-head'>{''.join(header_bits)}</div>"
+            f"<div class='hyp-iter-body'>{direction_blocks}</div>"
+            f"<p class='hyp-iter-note'>No proposal log — showing surviving experiments only.</p>"
+            f"</section>"
+        )
+
+    direction_blocks = _render_direction_blocks_from_recorder(recorder, exp_results_by_branch)
+    return (
+        f"<section class='hyp-iter-block'>"
+        f"<div class='hyp-iter-head'>{''.join(header_bits)}</div>"
+        f"<div class='hyp-iter-body'>{direction_blocks}</div>"
+        f"</section>"
+    )
+
+
+def _render_direction_blocks_from_recorder(
+    recorder: ProposalBatchRecorder,
+    exp_results_by_branch: dict[int, IterationResult],
+) -> str:
+    grouped: dict[str, list] = {}
+    for record in recorder.records:
+        direction = record.sketch.direction_id or "UNGROUPED"
+        grouped.setdefault(direction, []).append(record)
+
+    ordered_directions = [d for d in _DIRECTION_ORDER if d in grouped]
+    ordered_directions += [d for d in grouped if d not in _DIRECTION_ORDER]
+
+    blocks: list[str] = []
+    for direction in ordered_directions:
+        records = sorted(grouped[direction], key=lambda r: r.rank)
+        summary = records[0].sketch.direction_summary if records else ""
+        proposal_nodes = "".join(_render_proposal_node(r, exp_results_by_branch) for r in records)
+        blocks.append(
+            f"<details class='hyp-direction' open>"
+            f"<summary>"
+            f"<span class='hyp-direction-id'>{_h(direction)}</span>"
+            f"<span class='hyp-direction-summary'>{_h(summary)}</span>"
+            f"<span class='hyp-direction-count'>{len(records)} proposals</span>"
+            f"</summary>"
+            f"<div class='hyp-children'>{proposal_nodes}</div>"
+            f"</details>"
+        )
+    return "".join(blocks) if blocks else "<p class='empty'>No proposals recorded.</p>"
+
+
+def _render_direction_blocks_from_exp_results(exp_results_by_branch: dict[int, IterationResult]) -> str:
+    if not exp_results_by_branch:
+        return "<p class='empty'>No experiments to show.</p>"
+    grouped: dict[str, list[IterationResult]] = {}
+    for result in exp_results_by_branch.values():
+        grouped.setdefault(result.direction_id or "UNGROUPED", []).append(result)
+    ordered_directions = [d for d in _DIRECTION_ORDER if d in grouped]
+    ordered_directions += [d for d in grouped if d not in _DIRECTION_ORDER]
+    blocks: list[str] = []
+    for direction in ordered_directions:
+        results = sorted(grouped[direction], key=lambda r: composite_score(r.aggregated), reverse=True)
+        summary = results[0].direction_summary if results else ""
+        rows = "".join(_render_executed_only_node(r) for r in results)
+        blocks.append(
+            f"<details class='hyp-direction' open>"
+            f"<summary>"
+            f"<span class='hyp-direction-id'>{_h(direction)}</span>"
+            f"<span class='hyp-direction-summary'>{_h(summary)}</span>"
+            f"<span class='hyp-direction-count'>{len(results)} executed</span>"
+            f"</summary>"
+            f"<div class='hyp-children'>{rows}</div>"
+            f"</details>"
+        )
+    return "".join(blocks)
+
+
+def _render_proposal_node(record: ProposalRecord, exp_results_by_branch: dict[int, IterationResult]) -> str:
+    fate = record.fate
+    css = f"hyp hyp-proposal {_FATE_CSS.get(fate, 'hyp-fate-trimmed')}"
+    risk = record.sketch.risk_level or "targeted"
+    hypothesis = _h(record.sketch.hypothesis)
+    category = _h(record.sketch.target_category.replace("_", " "))
+    mechanism = _h(record.sketch.failure_mechanism)
+    intervention = _h(record.sketch.intervention_type)
+
+    score_bit = ""
+    kept_bit = ""
+    exp_result = None
+    if record.branch_id is not None:
+        exp_result = exp_results_by_branch.get(record.branch_id)
+    if exp_result is not None:
+        score = composite_score(exp_result.aggregated)
+        score_bit = f"<span class='hyp-sep'>·</span><span class='hyp-score'>{_h(_fmt_score(score))}</span>"
+        if exp_result.kept:
+            kept_bit = "<span class='hyp-sep'>·</span><span class='hyp-kept'>kept</span>"
+        else:
+            kept_bit = "<span class='hyp-sep'>·</span><span class='hyp-rejected'>rejected</span>"
+
+    meta_bits = [
+        f"<span class='hyp-rank'>#{record.rank:02d}</span>",
+        "<span class='hyp-sep'>·</span>",
+        f"<span class='hyp-risk hyp-risk-{_h(risk)}'>[{_h(risk)}]</span>",
+        "<span class='hyp-sep'>·</span>",
+        f"<span class='hyp-fate'>{_h(_FATE_LABEL.get(fate, fate))}</span>",
+    ]
+    if record.branch_id is not None:
+        meta_bits.append("<span class='hyp-sep'>·</span>")
+        meta_bits.append(f"<span class='hyp-branch'>branch {record.branch_id}</span>")
+    if score_bit:
+        meta_bits.append(score_bit)
+    if kept_bit:
+        meta_bits.append(kept_bit)
+
+    triple_line = ""
+    if category or mechanism or intervention:
+        triple_line = (
+            f"<div class='hyp-triple'>"
+            f"<span>{category or '—'}</span>"
+            f"<span class='hyp-sep'>·</span>"
+            f"<span>{mechanism or '—'}</span>"
+            f"<span class='hyp-sep'>·</span>"
+            f"<span>{intervention or '—'}</span>"
+            f"</div>"
+        )
+
+    reason_line = f"<div class='hyp-fate-reason'>{_h(record.fate_reason)}</div>" if record.fate_reason else ""
+
+    return (
+        f"<div class='{css}'>"
+        f"<div class='hyp-meta'>{''.join(meta_bits)}</div>"
+        f"<div class='hyp-statement'>{hypothesis}</div>"
+        f"{triple_line}"
+        f"{reason_line}"
+        f"</div>"
+    )
+
+
+def _render_executed_only_node(result: IterationResult) -> str:
+    score = composite_score(result.aggregated)
+    risk = result.risk_level or "targeted"
+    kept_css = "hyp-fate-executed" if result.kept else "hyp-fate-notpicked"
+    hypothesis = _h(result.hypothesis)
+    category = _h((result.target_category or "").replace("_", " "))
+    mechanism = _h(result.failure_mechanism or "")
+    intervention = _h(result.intervention_type or "")
+    kept_bit = (
+        "<span class='hyp-sep'>·</span><span class='hyp-kept'>kept</span>"
+        if result.kept
+        else "<span class='hyp-sep'>·</span><span class='hyp-rejected'>rejected</span>"
+    )
+    triple_line = (
+        f"<div class='hyp-triple'>"
+        f"<span>{category or '—'}</span>"
+        f"<span class='hyp-sep'>·</span>"
+        f"<span>{mechanism or '—'}</span>"
+        f"<span class='hyp-sep'>·</span>"
+        f"<span>{intervention or '—'}</span>"
+        f"</div>"
+    )
+    return (
+        f"<div class='hyp hyp-proposal {kept_css}'>"
+        f"<div class='hyp-meta'>"
+        f"<span class='hyp-branch'>branch {result.branch_id}</span>"
+        f"<span class='hyp-sep'>·</span>"
+        f"<span class='hyp-risk hyp-risk-{_h(risk)}'>[{_h(risk)}]</span>"
+        f"<span class='hyp-sep'>·</span>"
+        f"<span class='hyp-score'>{_h(_fmt_score(score))}</span>"
+        f"{kept_bit}"
+        f"</div>"
+        f"<div class='hyp-statement'>{hypothesis}</div>"
+        f"{triple_line}"
+        f"</div>"
+    )
 
 
 def _render_prompt_analysis_section(data: ReportData, report_dir: Path) -> str:

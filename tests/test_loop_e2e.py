@@ -413,7 +413,7 @@ def _apply_all_patches(monkeypatch, tmp_path: Path, ref_paths: list[Path]):
     monkeypatch.setattr("art_style_search.workflow.iteration_proposals.expand_experiment_sketches", fake_expand)
 
     # 6. Mock enforce_hypothesis_diversity (pass-through)
-    def fake_enforce_diversity(results, template):
+    def fake_enforce_diversity(results, template, **_):
         return results
 
     monkeypatch.setattr(

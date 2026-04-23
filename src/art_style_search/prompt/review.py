@@ -82,7 +82,6 @@ _REVIEW_DELTA_LABELS: dict[str, str] = {
     "vision_composition": "vision_composition",
     "vision_medium": "vision_medium",
     "vision_proportions": "vision_proportions",
-    "style_consistency": "style_consistency",
     "completion_rate": "completion_rate",
     "compliance": "compliance",
 }
@@ -127,7 +126,6 @@ def _noise_floor_summary(experiments: list[IterationResult]) -> str:
         "vision_composition": [m.vision_composition for m in metrics],
         "vision_medium": [m.vision_medium for m in metrics],
         "vision_proportions": [m.vision_proportions for m in metrics],
-        "style_consistency": [m.style_consistency for m in metrics],
         "completion_rate": [m.completion_rate for m in metrics],
         "compliance": [compliance_mean(m) for m in metrics],
     }

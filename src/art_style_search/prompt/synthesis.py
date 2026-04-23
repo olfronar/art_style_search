@@ -26,7 +26,6 @@ _SYNTHESIS_DELTA_LABELS: dict[str, str] = {
     "vision_composition": "vision_composition",
     "vision_medium": "vision_medium",
     "vision_proportions": "vision_proportions",
-    "style_consistency": "style_consistency",
 }
 
 
@@ -98,7 +97,6 @@ async def synthesize_templates(
         "- If it improved vision_subject, its subject_anchor section is likely strong.\n"
         "- If two experiments improved DIFFERENT aspects, combine their strongest sections — this is the ideal outcome.\n"
         "- When metric annotations are ambiguous, prefer the experiment with higher overall DreamSim.\n"
-        "For caption_sections ordering: prefer the experiment with higher style_consistency.\n"
         "For caption_length_target: prefer the experiment with higher completion_rate.\n"
         "Preserve embedded style rules in section values. Keep the template 8-20 sections, 2000-8000 words rendered. "
         "The caption contract: [Art Style] holds generic RULES only, 400-800 words across the 5 skeleton slots; "

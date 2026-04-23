@@ -6,8 +6,14 @@ import dataclasses
 import enum
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
+from art_style_search.contracts import (
+    ExperimentProposal,
+    ExperimentSketch,
+    Lessons,
+    RefinementResult,
+)
 from art_style_search.types import (
     AggregatedMetrics,
     CanonEditLedgerEntry,
@@ -23,6 +29,11 @@ from art_style_search.types import (
     PromptSection,
     PromptTemplate,
     StyleProfile,
+)
+from art_style_search.workflow.proposal_recorder import (
+    ProposalBatchRecorder,
+    ProposalFate,
+    ProposalRecord,
 )
 
 
@@ -277,4 +288,125 @@ def _canon_edit_ledger_entry_from_dict(d: dict[str, Any]) -> CanonEditLedgerEntr
         metric_deltas=dict(d.get("metric_deltas", {})),
         accepted=bool(d.get("accepted", False)),
         canon_ops=list(d.get("canon_ops", [])),
+    )
+
+
+def _experiment_sketch_from_dict(d: dict[str, Any]) -> ExperimentSketch:
+    return ExperimentSketch(
+        hypothesis=d.get("hypothesis", ""),
+        target_category=d.get("target_category", ""),
+        failure_mechanism=d.get("failure_mechanism", ""),
+        intervention_type=d.get("intervention_type", ""),
+        direction_id=d.get("direction_id", ""),
+        direction_summary=d.get("direction_summary", ""),
+        risk_level=d.get("risk_level", "targeted"),
+        expected_primary_metric=d.get("expected_primary_metric", ""),
+        builds_on=d.get("builds_on", ""),
+    )
+
+
+def _lessons_from_dict(d: dict[str, Any]) -> Lessons:
+    return Lessons(
+        confirmed=d.get("confirmed", ""),
+        rejected=d.get("rejected", ""),
+        new_insight=d.get("new_insight", ""),
+    )
+
+
+def _refinement_result_from_dict(d: dict[str, Any]) -> RefinementResult:
+    return RefinementResult(
+        template=prompt_template_from_dict(d["template"]),
+        analysis=d.get("analysis", ""),
+        template_changes=d.get("template_changes", ""),
+        should_stop=bool(d.get("should_stop", False)),
+        hypothesis=d.get("hypothesis", ""),
+        experiment=d.get("experiment", ""),
+        lessons=_lessons_from_dict(d.get("lessons", {})),
+        builds_on=d.get("builds_on"),
+        open_problems=list(d.get("open_problems", [])),
+        changed_section=d.get("changed_section", ""),
+        changed_sections=d.get("changed_sections"),
+        target_category=d.get("target_category", ""),
+        direction_id=d.get("direction_id", ""),
+        direction_summary=d.get("direction_summary", ""),
+        failure_mechanism=d.get("failure_mechanism", ""),
+        intervention_type=d.get("intervention_type", ""),
+        risk_level=d.get("risk_level", "targeted"),
+        expected_primary_metric=d.get("expected_primary_metric", ""),
+        expected_tradeoff=d.get("expected_tradeoff", ""),
+        canon_ops=list(d.get("canon_ops", [])),
+    )
+
+
+def _experiment_proposal_from_dict(d: dict[str, Any]) -> ExperimentProposal:
+    return ExperimentProposal(
+        template=prompt_template_from_dict(d["template"]),
+        hypothesis=d.get("hypothesis", ""),
+        experiment_desc=d.get("experiment_desc", ""),
+        builds_on=d.get("builds_on"),
+        open_problems=list(d.get("open_problems", [])),
+        lessons=_lessons_from_dict(d.get("lessons", {})),
+        analysis=d.get("analysis", ""),
+        template_changes=d.get("template_changes", ""),
+        changed_section=d.get("changed_section", ""),
+        changed_sections=d.get("changed_sections"),
+        target_category=d.get("target_category", ""),
+        direction_id=d.get("direction_id", ""),
+        direction_summary=d.get("direction_summary", ""),
+        failure_mechanism=d.get("failure_mechanism", ""),
+        intervention_type=d.get("intervention_type", ""),
+        risk_level=d.get("risk_level", "targeted"),
+        expected_primary_metric=d.get("expected_primary_metric", ""),
+        expected_tradeoff=d.get("expected_tradeoff", ""),
+        canon_ops=list(d.get("canon_ops", [])),
+    )
+
+
+_VALID_PROPOSAL_FATES: frozenset[str] = frozenset(get_args(ProposalFate))
+
+
+def _proposal_record_to_dict(record: ProposalRecord) -> dict[str, Any]:
+    """Serialize a ProposalRecord minus the transient ``refinement`` / ``proposal`` anchors.
+
+    Those two fields exist only for in-iteration identity-map lookups (``refinement_to_rank`` /
+    ``proposal_to_rank``) and are never consumed post-load — persisting them doubles the payload
+    for no reader.
+    """
+    return {
+        "rank": record.rank,
+        "sketch": to_dict(record.sketch),
+        "fate": record.fate,
+        "fate_reason": record.fate_reason,
+        "branch_id": record.branch_id,
+    }
+
+
+def proposal_batch_to_dict(recorder: ProposalBatchRecorder) -> dict[str, Any]:
+    """Slim serializer for ``ProposalBatchRecorder`` that omits transient anchor fields."""
+    return {
+        "iteration": recorder.iteration,
+        "records": [_proposal_record_to_dict(r) for r in recorder.records],
+    }
+
+
+def _proposal_record_from_dict(d: dict[str, Any]) -> ProposalRecord:
+    fate_raw = d.get("fate", "brainstormed")
+    fate: ProposalFate = fate_raw if fate_raw in _VALID_PROPOSAL_FATES else "brainstormed"
+    refinement_raw = d.get("refinement")
+    proposal_raw = d.get("proposal")
+    return ProposalRecord(
+        rank=int(d["rank"]),
+        sketch=_experiment_sketch_from_dict(d["sketch"]),
+        refinement=_refinement_result_from_dict(refinement_raw) if isinstance(refinement_raw, dict) else None,
+        proposal=_experiment_proposal_from_dict(proposal_raw) if isinstance(proposal_raw, dict) else None,
+        fate=fate,
+        fate_reason=d.get("fate_reason"),
+        branch_id=d.get("branch_id"),
+    )
+
+
+def proposal_batch_from_dict(d: dict[str, Any]) -> ProposalBatchRecorder:
+    return ProposalBatchRecorder(
+        iteration=int(d.get("iteration", 0)),
+        records=[_proposal_record_from_dict(r) for r in d.get("records", [])],
     )

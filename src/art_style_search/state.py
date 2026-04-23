@@ -17,6 +17,8 @@ from art_style_search.state_codec import (
     _metric_scores_from_dict,
     _prompt_section_from_dict,
     prompt_template_from_dict,
+    proposal_batch_from_dict,
+    proposal_batch_to_dict,
     style_profile_from_dict,
     to_dict,
 )
@@ -24,6 +26,7 @@ from art_style_search.state_migrations import (
     _ITERATION_LOG_SCHEMA_VERSION,
     _MANIFEST_SCHEMA_VERSION,
     _PROMOTION_LOG_SCHEMA_VERSION,
+    _PROPOSAL_LOG_SCHEMA_VERSION,
     _SCHEMA_VERSION,
     _migrate_iteration_log_payload,
     _migrate_manifest_payload,
@@ -31,6 +34,7 @@ from art_style_search.state_migrations import (
     _migrate_state_payload,
 )
 from art_style_search.types import IterationResult, LoopState, PromotionDecision, RunManifest
+from art_style_search.workflow.proposal_recorder import ProposalBatchRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -44,11 +48,13 @@ __all__ = [
     "_prompt_section_from_dict",
     "append_promotion_log",
     "load_iteration_log",
+    "load_iteration_proposals",
     "load_manifest",
     "load_promotion_log",
     "load_state",
     "prompt_template_from_dict",
     "save_iteration_log",
+    "save_iteration_proposals",
     "save_manifest",
     "save_state",
     "style_profile_from_dict",
@@ -112,6 +118,29 @@ def load_iteration_log(path: Path) -> IterationResult:
     raw = json.loads(path.read_text(encoding="utf-8"))
     version = raw.pop("_schema_version", 0)
     return _iteration_result_from_dict(_migrate_iteration_log_payload(raw, version))
+
+
+def save_iteration_proposals(recorder: ProposalBatchRecorder, log_dir: Path) -> None:
+    """Write the full proposal batch (with rejects + fates) for one iteration.
+
+    Output: ``{log_dir}/iter_{NNN}_proposals.json``. Covers every sketch the reasoner
+    emitted, not just portfolio survivors. Overwrites on each call so the execution phase
+    can re-save with ``mark_executed`` attached.
+    """
+    log_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"iter_{recorder.iteration:03d}_proposals.json"
+    log_path = log_dir / filename
+    data = proposal_batch_to_dict(recorder)
+    data["_schema_version"] = _PROPOSAL_LOG_SCHEMA_VERSION
+    log_path.write_text(json.dumps(data, cls=_Encoder, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info("Iteration proposals written to %s", log_path)
+
+
+def load_iteration_proposals(path: Path) -> ProposalBatchRecorder:
+    """Inverse of :func:`save_iteration_proposals`."""
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw.pop("_schema_version", 0)
+    return proposal_batch_from_dict(raw)
 
 
 # ---------------------------------------------------------------------------

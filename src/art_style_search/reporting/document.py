@@ -10,6 +10,7 @@ from art_style_search.reporting.charts import _build_composite_trajectory, _buil
 from art_style_search.reporting.render import (
     _h,
     _render_header,
+    _render_hypothesis_tree_section,
     _render_iteration_drilldown,
     _render_kb_section,
     _render_promotion_section,
@@ -60,6 +61,7 @@ def _assemble_html(data: ReportData, report_dir, *, offline: bool = False) -> st
     protocol_section = _render_protocol_section(data)
     promotion_section = _render_promotion_section(data)
     prompt_analysis_section = _render_prompt_analysis_section(data, report_dir)
+    hypothesis_tree_section = _render_hypothesis_tree_section(data)
 
     plot_script = ""
     if composite_json and multi_json:
@@ -165,6 +167,7 @@ def _assemble_html(data: ReportData, report_dir, *, offline: bool = False) -> st
     <nav class="tab-nav" data-tab-nav role="tablist" aria-label="Report sections">
       <button type="button" class="tab-btn" data-tab-target="tab-overview" role="tab" aria-selected="true">Overview</button>
       <button type="button" class="tab-btn" data-tab-target="tab-prompts" role="tab" aria-selected="false">Prompt Analysis</button>
+      <button type="button" class="tab-btn" data-tab-target="tab-hypothesis-tree" role="tab" aria-selected="false">Hypothesis Tree</button>
     </nav>
     <div id="tab-overview" class="tab-panel" data-tab-panel role="tabpanel">
       {summary_section}
@@ -176,6 +179,9 @@ def _assemble_html(data: ReportData, report_dir, *, offline: bool = False) -> st
     </div>
     <div id="tab-prompts" class="tab-panel" data-tab-panel role="tabpanel" hidden>
       {prompt_analysis_section}
+    </div>
+    <div id="tab-hypothesis-tree" class="tab-panel" data-tab-panel role="tabpanel" hidden>
+      {hypothesis_tree_section}
     </div>
   </main>
   {plot_script}

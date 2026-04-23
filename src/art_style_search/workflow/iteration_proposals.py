@@ -5,9 +5,10 @@ from __future__ import annotations
 import logging
 from collections import Counter, defaultdict
 
-from art_style_search.contracts import ExperimentProposal, ExperimentSketch
+from art_style_search.contracts import ExperimentProposal, ExperimentSketch, RefinementResult
 from art_style_search.prompt._parse import validate_template
 from art_style_search.prompt.experiments import (
+    _sketch_diversity_key,
     brainstorm_experiment_sketches,
     enforce_hypothesis_diversity,
     expand_experiment_sketches,
@@ -15,10 +16,10 @@ from art_style_search.prompt.experiments import (
     select_experiment_portfolio,
     template_structural_signature,
 )
-from art_style_search.scoring import classify_hypothesis
 from art_style_search.types import ConvergenceReason, LoopState, get_category_names
 from art_style_search.workflow.context import RunContext
 from art_style_search.workflow.policy import _should_honor_stop
+from art_style_search.workflow.proposal_recorder import ProposalBatchRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -129,18 +130,15 @@ def _recover_proposal_change_metadata(
 def _dedupe_ranked_sketches(
     sketches: list[ExperimentSketch],
     current_template,
+    *,
+    recorder: ProposalBatchRecorder | None = None,
 ) -> list[ExperimentSketch]:
     seen: set[tuple[str, str, str]] = set()
     deduped: list[ExperimentSketch] = []
     category_names = get_category_names(current_template)
 
-    for sketch in sketches:
-        category = sketch.target_category or classify_hypothesis(sketch.hypothesis, category_names)
-        key = (
-            category,
-            sketch.failure_mechanism.strip().lower(),
-            sketch.intervention_type.strip().lower(),
-        )
+    for idx, sketch in enumerate(sketches):
+        key = _sketch_diversity_key(sketch, category_names)
         if key in seen:
             logger.warning(
                 "Dropping duplicate ranked sketch (category=%s, mechanism=%s, intervention=%s): %s",
@@ -149,6 +147,11 @@ def _dedupe_ranked_sketches(
                 key[2] or "<none>",
                 sketch.hypothesis[:80],
             )
+            if recorder is not None:
+                recorder.mark_deduped_stage1(
+                    idx,
+                    f"category={key[0]}; mechanism={key[1] or '<none>'}; intervention={key[2] or '<none>'}",
+                )
             continue
         seen.add(key)
         deduped.append(sketch)
@@ -162,8 +165,14 @@ async def _propose_iteration_experiments(
     vision_fb: str,
     roundtrip_fb: str,
     caption_diffs: str,
-) -> tuple[list[ExperimentProposal], bool]:
-    """Phase 1: brainstorm sketches, rank them, expand survivors, then select a portfolio."""
+) -> tuple[list[ExperimentProposal], bool, ProposalBatchRecorder]:
+    """Phase 1: brainstorm sketches, rank them, expand survivors, then select a portfolio.
+
+    Returns ``(valid_proposals, should_stop, recorder)``. The *recorder* captures every raw
+    sketch and its downstream fate (kept / deduped / not-picked / invalid-template / executed)
+    so ``save_iteration_proposals`` can persist the full ideation trail for the HTML report.
+    """
+    recorder = ProposalBatchRecorder(iteration=state.iteration)
     requested_sketches = max(ctx.config.raw_proposals * 2, ctx.config.raw_proposals)
     sketches, converged = await brainstorm_experiment_sketches(
         state.style_profile,
@@ -189,7 +198,7 @@ async def _propose_iteration_experiments(
             logger.info("Reasoning model signaled convergence during brainstorm — honored")
             state.converged = True
             state.convergence_reason = ConvergenceReason.REASONING_STOP
-            return [], True
+            return [], True, recorder
         logger.info("Reasoning model signaled convergence during brainstorm — guard rejected")
 
     if not sketches:
@@ -197,9 +206,9 @@ async def _propose_iteration_experiments(
             logger.warning("No experiment sketches proposed — honoring stop")
             state.converged = True
             state.convergence_reason = ConvergenceReason.REASONING_STOP
-            return [], True
+            return [], True, recorder
         logger.warning("No experiment sketches proposed — guard rejected, continuing with empty batch")
-        return [], False
+        return [], False, recorder
 
     ranked_sketches = await rank_experiment_sketches(
         sketches,
@@ -208,13 +217,17 @@ async def _propose_iteration_experiments(
         client=ctx.reasoning_client,
         model=ctx.config.reasoning_model,
     )
-    ranked_sketches = ranked_sketches[: ctx.config.raw_proposals]
-    logger.info("Ranking step kept %d/%d sketches for expansion", len(ranked_sketches), len(sketches))
+    recorder.record_brainstorm(ranked_sketches)
+    kept_sketches = ranked_sketches[: ctx.config.raw_proposals]
+    trimmed_ranks = list(range(len(kept_sketches), len(ranked_sketches)))
+    if trimmed_ranks:
+        recorder.mark_trimmed(trimmed_ranks)
+    logger.info("Ranking step kept %d/%d sketches for expansion", len(kept_sketches), len(sketches))
 
-    ranked_sketches = _dedupe_ranked_sketches(ranked_sketches, state.current_template)
-    logger.info("Sketch diversity filter kept %d sketches for expansion", len(ranked_sketches))
+    kept_sketches = _dedupe_ranked_sketches(kept_sketches, state.current_template, recorder=recorder)
+    logger.info("Sketch diversity filter kept %d sketches for expansion", len(kept_sketches))
 
-    refinements = await expand_experiment_sketches(
+    raw_refinements = await expand_experiment_sketches(
         state.style_profile,
         state.current_template,
         state.knowledge_base,
@@ -222,7 +235,7 @@ async def _propose_iteration_experiments(
         state.last_iteration_results,
         client=ctx.reasoning_client,
         model=ctx.config.reasoning_model,
-        sketches=ranked_sketches,
+        sketches=kept_sketches,
         vision_feedback=vision_fb,
         roundtrip_feedback=roundtrip_fb,
         caption_diffs=caption_diffs,
@@ -231,14 +244,26 @@ async def _propose_iteration_experiments(
         plateau_counter=state.plateau_counter,
         canon_edit_ledger=state.canon_edit_ledger,
     )
+
+    sketch_rank_by_identity: dict[int, int] = {id(rec.sketch): rec.rank for rec in recorder.records}
+    refinement_rank_pairs: list[tuple[int, RefinementResult]] = []
+    for sketch, refinement in zip(kept_sketches, raw_refinements, strict=True):
+        if refinement is None:
+            continue
+        rank = sketch_rank_by_identity.get(id(sketch))
+        if rank is not None:
+            refinement_rank_pairs.append((rank, refinement))
+    recorder.attach_refinements(refinement_rank_pairs)
+    refinements: list[RefinementResult] = [r for _, r in refinement_rank_pairs]
     logger.info("Expand step returned %d refinement proposals", len(refinements))
 
-    refinements = enforce_hypothesis_diversity(refinements, state.current_template)
+    refinements = enforce_hypothesis_diversity(refinements, state.current_template, recorder=recorder)
     refinements = select_experiment_portfolio(
         refinements,
         num_experiments=ctx.config.num_branches,
         num_directions=3,
         incumbent_template=state.current_template,
+        recorder=recorder,
     )
     if refinements:
         incumbent_sig = template_structural_signature(state.current_template)
@@ -250,6 +275,8 @@ async def _propose_iteration_experiments(
             len(refinements),
             novel_count,
         )
+    refinement_rank_by_identity = recorder.refinement_to_rank()
+    proposal_rank_by_identity: dict[int, int] = {}
     proposals: list[ExperimentProposal] = []
     for refinement in refinements:
         if refinement.should_stop:
@@ -257,40 +284,43 @@ async def _propose_iteration_experiments(
                 logger.info("Reasoning model signaled convergence — honored")
                 state.converged = True
                 state.convergence_reason = ConvergenceReason.REASONING_STOP
-                return [], True
+                return [], True, recorder
             refinement.should_stop = False
-        proposals.append(
-            ExperimentProposal(
-                template=refinement.template,
-                hypothesis=refinement.hypothesis,
-                experiment_desc=refinement.experiment,
-                builds_on=refinement.builds_on,
-                open_problems=refinement.open_problems,
-                lessons=refinement.lessons,
-                analysis=refinement.analysis,
-                template_changes=refinement.template_changes,
-                changed_section=refinement.changed_section,
-                changed_sections=list(refinement.changed_sections or []),
-                target_category=refinement.target_category,
-                direction_id=refinement.direction_id,
-                direction_summary=refinement.direction_summary,
-                failure_mechanism=refinement.failure_mechanism,
-                intervention_type=refinement.intervention_type,
-                risk_level=refinement.risk_level,
-                expected_primary_metric=refinement.expected_primary_metric,
-                expected_tradeoff=refinement.expected_tradeoff,
-                canon_ops=list(refinement.canon_ops),
-            )
+        proposal = ExperimentProposal(
+            template=refinement.template,
+            hypothesis=refinement.hypothesis,
+            experiment_desc=refinement.experiment,
+            builds_on=refinement.builds_on,
+            open_problems=refinement.open_problems,
+            lessons=refinement.lessons,
+            analysis=refinement.analysis,
+            template_changes=refinement.template_changes,
+            changed_section=refinement.changed_section,
+            changed_sections=list(refinement.changed_sections or []),
+            target_category=refinement.target_category,
+            direction_id=refinement.direction_id,
+            direction_summary=refinement.direction_summary,
+            failure_mechanism=refinement.failure_mechanism,
+            intervention_type=refinement.intervention_type,
+            risk_level=refinement.risk_level,
+            expected_primary_metric=refinement.expected_primary_metric,
+            expected_tradeoff=refinement.expected_tradeoff,
+            canon_ops=list(refinement.canon_ops),
         )
+        proposals.append(proposal)
+        rank = refinement_rank_by_identity.get(id(refinement))
+        if rank is not None:
+            recorder.attach_proposal(rank, proposal)
+            proposal_rank_by_identity[id(proposal)] = rank
 
     if not proposals:
         if _should_honor_stop(state, ctx, reason="no experiments proposed"):
             logger.warning("No experiments proposed — honoring stop")
             state.converged = True
             state.convergence_reason = ConvergenceReason.REASONING_STOP
-            return [], True
+            return [], True, recorder
         logger.warning("No experiments proposed — guard rejected, continuing with empty batch")
-        return [], False
+        return [], False, recorder
 
     valid_proposals: list[ExperimentProposal] = []
     direction_counts: defaultdict[str, int] = defaultdict(int)
@@ -314,6 +344,9 @@ async def _propose_iteration_experiments(
         if proposal.risk_level == "targeted" and len(proposal.changed_sections or []) != 1:
             errors = [*errors, "targeted experiments must change exactly 1 section"]
         if errors:
+            proposal_rank = proposal_rank_by_identity.get(id(proposal))
+            if proposal_rank is not None:
+                recorder.mark_invalid(proposal_rank, errors)
             logger.warning("Skipping invalid proposal (hyp: %.80s): %s", proposal.hypothesis, "; ".join(errors))
             for error in errors:
                 rejection_counts[error.split(":")[0]] += 1
@@ -332,4 +365,4 @@ async def _propose_iteration_experiments(
         logger.warning("Top proposal rejection reasons: %s", top_reasons)
     if valid_proposals:
         logger.info("Selected proposal portfolio across %d directions", len([k for k in direction_counts if k]))
-    return valid_proposals, False
+    return valid_proposals, False, recorder

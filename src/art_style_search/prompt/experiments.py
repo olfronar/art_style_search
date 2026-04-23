@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import TYPE_CHECKING
 
 from art_style_search.caption_sections import parse_labeled_sections
 from art_style_search.contracts import ExperimentSketch, Lessons, RefinementResult
@@ -35,6 +36,9 @@ from art_style_search.types import (
     get_category_names,
 )
 from art_style_search.utils import ReasoningClient
+
+if TYPE_CHECKING:
+    from art_style_search.workflow.proposal_recorder import ProposalBatchRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -192,14 +196,13 @@ def _experiment_system_prompt(
             "| Aesthetics | 1-10 | 7+ | Visual quality (LAION predictor) |\n"
             "| MegaStyle | 0-1 | 0.6+ | Style-space cosine (SigLIP fine-tuned; content-disentangled, primary style signal) |\n"
             "| vision_style/subject/composition/medium/proportions | 0-1 | MATCH=1.0, PARTIAL=0.5, MISS=0.0 | Gemini ternary verdicts (coarse) |\n"
-            "| style_consistency | 0-1 | 0.8+ | Jaccard word-overlap across caption [Art Style] blocks (canon pull-through alarm) |\n"
             "Weights are ADAPTIVE — metrics with more variance across experiments get higher weight.\n\n"
         )
     else:
         context = (
             "## Metrics reminder\n"
             "Same pipeline and metrics as before: DreamSim, Color histogram, SSIM, HPS v2, Aesthetics, "
-            "MegaStyle, Vision (style/subject/composition/medium/proportions), style_consistency.\n\n"
+            "MegaStyle, Vision (style/subject/composition/medium/proportions).\n\n"
         )
 
     strategy = (
@@ -585,11 +588,18 @@ def _dedupe_sketches(sketches: list[ExperimentSketch], template: PromptTemplate)
 def enforce_hypothesis_diversity(
     results: list[RefinementResult],
     template: PromptTemplate,
+    *,
+    recorder: ProposalBatchRecorder | None = None,
 ) -> list[RefinementResult]:
-    """Deduplicate exact mechanism repeats while allowing multiple ideas per category."""
+    """Deduplicate exact mechanism repeats while allowing multiple ideas per category.
+
+    When *recorder* is passed, each dropped refinement is tagged ``deduped_stage2`` on the
+    recorder with the colliding key as its reason — lets the report render the full fate trail.
+    """
     seen_keys: set[tuple[str, str, str]] = set()
     diverse_results: list[RefinementResult] = []
     category_names = get_category_names(template)
+    refinement_to_rank = recorder.refinement_to_rank() if recorder is not None else {}
 
     for r in results:
         key = _refinement_diversity_key(r, category_names)
@@ -601,6 +611,13 @@ def enforce_hypothesis_diversity(
                 key[2] or "<none>",
                 r.hypothesis[:80],
             )
+            if recorder is not None:
+                rank = refinement_to_rank.get(id(r))
+                if rank is not None:
+                    recorder.mark_deduped_stage2(
+                        rank,
+                        f"category={key[0]}; mechanism={key[1] or '<none>'}; intervention={key[2] or '<none>'}",
+                    )
             continue
         seen_keys.add(key)
         diverse_results.append(r)
@@ -657,6 +674,7 @@ def select_experiment_portfolio(
     num_directions: int = 3,
     incumbent_template: PromptTemplate | None = None,
     max_per_category: int = _DEFAULT_MAX_PER_CATEGORY,
+    recorder: ProposalBatchRecorder | None = None,
 ) -> list[RefinementResult]:
     """Select a portfolio from raw proposals.
 
@@ -671,6 +689,12 @@ def select_experiment_portfolio(
     swap the lowest-priority non-targeted pick for a structurally-novel candidate when one exists.
     """
     if not results or num_experiments <= 0:
+        if recorder is not None:
+            refinement_to_rank = recorder.refinement_to_rank()
+            for r in results:
+                rank = refinement_to_rank.get(id(r))
+                if rank is not None:
+                    recorder.mark_not_picked(rank)
         return []
 
     direction_order: list[str] = []
@@ -750,6 +774,16 @@ def select_experiment_portfolio(
                     "Portfolio has no structurally novel proposals vs incumbent and no swap candidate available — "
                     "mode-collapse risk for this iteration"
                 )
+
+    if recorder is not None:
+        refinement_to_rank = recorder.refinement_to_rank()
+        selected_ids = {id(r) for r in selected}
+        for r in results:
+            if id(r) in selected_ids:
+                continue
+            rank = refinement_to_rank.get(id(r))
+            if rank is not None:
+                recorder.mark_not_picked(rank)
 
     return selected
 
@@ -860,7 +894,11 @@ async def expand_experiment_sketches(
     iteration: int = 0,
     plateau_counter: int = 0,
     canon_edit_ledger: list[CanonEditLedgerEntry] | None = None,
-) -> list[RefinementResult]:
+) -> list[RefinementResult | None]:
+    """Expand each sketch in parallel. Returns a list aligned positionally with ``sketches``:
+    each entry is either a ``RefinementResult`` or ``None`` if that sketch's expansion failed.
+    Callers needing a plain list should filter out Nones after pairing with the source sketches.
+    """
     if not sketches:
         return []
 
@@ -905,14 +943,14 @@ async def expand_experiment_sketches(
         for idx, sketch in enumerate(sketches)
     ]
     raw_results = await asyncio.gather(*tasks, return_exceptions=True)
-    results: list[RefinementResult] = []
+    results: list[RefinementResult | None] = []
     failures = 0
     for raw in raw_results:
         if isinstance(raw, BaseException):
             failures += 1
             logger.warning("Expansion failed: %s: %s", type(raw).__name__, raw)
+            results.append(None)
             continue
-        # Programmatic post-expand verification
         issues = _validate_expanded_template(raw, current_template)
         if issues:
             logger.warning(
@@ -921,8 +959,9 @@ async def expand_experiment_sketches(
                 "; ".join(issues),
             )
         results.append(raw)
-    logger.info("Expansion finished: %d/%d succeeded", len(results), len(sketches))
-    if failures and not results:
+    succeeded = sum(1 for r in results if r is not None)
+    logger.info("Expansion finished: %d/%d succeeded", succeeded, len(sketches))
+    if failures and succeeded == 0:
         logger.warning("All experiment expansions failed")
     return results
 
@@ -976,7 +1015,7 @@ async def propose_experiments(
         model=model,
     )
     ranked = _dedupe_sketches(ranked[:num_experiments], current_template)
-    results = await expand_experiment_sketches(
+    raw_results = await expand_experiment_sketches(
         style_profile,
         current_template,
         knowledge_base,
@@ -993,6 +1032,7 @@ async def propose_experiments(
         plateau_counter=plateau_counter,
         canon_edit_ledger=canon_edit_ledger,
     )
+    results: list[RefinementResult] = [r for r in raw_results if r is not None]
 
     if converged:
         if results:

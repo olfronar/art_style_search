@@ -21,7 +21,7 @@ from art_style_search.prompt import (
     synthesize_templates,
     validate_template,
 )
-from art_style_search.state import load_state
+from art_style_search.state import load_state, save_iteration_proposals
 from art_style_search.types import ConvergenceReason, LoopState
 from art_style_search.workflow.context import (
     RunContext,
@@ -125,11 +125,22 @@ async def run(config: Config) -> LoopState:
         logger.info("=== Iteration %d/%d ===", iteration + 1, config.max_iterations)
 
         vision_fb, roundtrip_fb, caption_diffs = _build_iteration_context(state)
-        proposals, converged = await _propose_iteration_experiments(state, ctx, vision_fb, roundtrip_fb, caption_diffs)
+        proposals, converged, proposal_recorder = await _propose_iteration_experiments(
+            state, ctx, vision_fb, roundtrip_fb, caption_diffs
+        )
+        save_iteration_proposals(proposal_recorder, ctx.config.log_dir)
         if converged:
             break
 
         exp_results = await _run_experiments_parallel(state, ctx, proposals, iteration)
+        # Enrich the recorder with branch_ids for every surviving experiment, then overwrite the file.
+        proposal_rank_lookup = proposal_recorder.proposal_to_rank()
+        for exp_result in exp_results:
+            if 0 <= exp_result.branch_id < len(proposals):
+                rank = proposal_rank_lookup.get(id(proposals[exp_result.branch_id]))
+                if rank is not None:
+                    proposal_recorder.mark_executed(rank, exp_result.branch_id)
+        save_iteration_proposals(proposal_recorder, ctx.config.log_dir)
         if not exp_results:
             logger.warning("All experiments failed this iteration")
             state.plateau_counter += 1

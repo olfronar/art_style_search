@@ -26,6 +26,7 @@ _SCHEMA_VERSION = (
 _ITERATION_LOG_SCHEMA_VERSION = 1
 _MANIFEST_SCHEMA_VERSION = 3
 _PROMOTION_LOG_SCHEMA_VERSION = 1
+_PROPOSAL_LOG_SCHEMA_VERSION = 1
 
 
 def _migrate_metric_scores_payload(data: dict[str, Any]) -> dict[str, Any]:

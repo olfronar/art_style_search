@@ -19,33 +19,34 @@ _HPS_CEILING = 0.35  # default empirical max for HPS v2 scores; used to normaliz
 # Fixed metric weights for composite scoring.
 # Base weights sum to 1.00 for composite_score (experiment-level).
 # per_image_composite omits _W_STYLE_CON (experiment-level only) but includes _W_MEGASTYLE
-# (per-image paired similarity) → its weights sum to 0.97 (max output 0.97).
-# Rebalanced for the canon-first regime: since every caption's [Art Style] block is expected
-# to be a verbatim copy of the meta-prompt's ``style_foundation`` canon, ``style_consistency``
-# (Jaccard across [Art Style] blocks) is now a regression alarm — divergence means the canon
-# contract is slipping. Funded by halving the pixel-level SSIM weight, which is already
-# largely subsumed by DreamSim (perceptual) + color_histogram (color).
+# (per-image paired similarity) → its weights sum to 1.00 (max output 1.00) since
+# _W_STYLE_CON is now 0.
 _W_DREAMSIM = 0.34
 _W_HPS = 0.07
 _W_AESTHETICS = 0.06
 _W_COLOR = 0.17
 _W_SSIM = 0.06
-# style_consistency demoted 0.08 → 0.03 with the MegaStyle-Encoder addition: the 754-pair
-# homescapes sweep found token-overlap on caption [Art Style] blocks has Spearman ≈0 with
-# image-space style similarity, so it was carrying essentially noise at 0.08. The 0.05
-# funded _W_MEGASTYLE, which measures the thing style_consistency was supposed to proxy.
-_W_STYLE_CON = 0.03
+# style_consistency weight history: 0.08 → 0.03 with the MegaStyle-Encoder addition
+# (754-pair homescapes sweep found token-overlap on caption [Art Style] blocks has
+# Spearman ≈0 with image-space style similarity); then 0.03 → 0.00 on 2026-04-23 after
+# the homescapes-run evaluation confirmed that the captioner-contract-enforced canon-
+# verbatim-paste makes caption Jaccard a near-constant when the contract holds, and
+# ``style_canon_fidelity`` (LCS ratio, in the compliance penalty) plus
+# ``observation_boilerplate_purity`` (trigram containment) already measure canon
+# pull-through directly. The axis is retained at 0 weight as a KB diagnostic
+# (metric_deltas + iteration_persistence); the 0.03 was absorbed into _W_MEGASTYLE.
+_W_STYLE_CON = 0.00
 # MegaStyle-Encoder cosine similarity (ref vs gen) in SigLIP SoViT-400M embedding space
 # fine-tuned on 1.4M style-paired images (arxiv 2604.08364). Independent axis vs DreamSim
 # (content) and the Gemini vision judge (ternary); Spearman ≈0 with both across 754 pairs,
 # so it adds a continuous, content-disentangled style-space signal not captured elsewhere.
-# Promoted 0.05 → 0.08 after the homescapes run showed vision_style (ternary, Gemini)
+# Weight history: 0.05 (initial MegaStyle addition, funded by demoting style_consistency
+# 0.08 → 0.03) → 0.08 (after the homescapes run showed vision_style ternary judge
 # systematically demoting branches with the highest MegaStyle — two nominal "style" signals
-# anti-correlating in practice. MegaStyle is continuous/cheap, vision_style is coarse/costly;
-# making MegaStyle the primary style weight (0.08 vs vision_style 0.03) lets fine gradients
-# drive selection while keeping the Gemini verdict as a regression alarm alongside
-# style_consistency (also 0.03).
-_W_MEGASTYLE = 0.08
+# anti-correlating in practice, so MegaStyle became the primary style weight with
+# vision_style as regression alarm) → 0.11 on 2026-04-23 (absorbing the remaining
+# style_consistency 0.03 when that axis was zeroed; see _W_STYLE_CON comment).
+_W_MEGASTYLE = 0.11
 # Vision slice rebalanced to make room for the medium-class + proportions dims.
 # The medium verdict diagnoses a root cause of many style misses (2D/3D misclassification)
 # and the proportions verdict diagnoses subject-fidelity misses at the anatomy level, so
@@ -271,7 +272,6 @@ def adaptive_composite_score(
         lambda r: r.aesthetics_score_mean / 10.0,
         lambda r: r.color_histogram_mean,
         lambda r: r.ssim_mean,
-        lambda r: r.style_consistency,
         lambda r: r.megastyle_similarity_mean,
         lambda r: r.vision_style,
         lambda r: r.vision_subject,
@@ -357,8 +357,8 @@ def per_image_composite(s: MetricScores) -> float:
 
     Unlike ``composite_score`` (which operates on aggregated means), this computes
     the score for a single image — no variance penalty since there's only one observation.
-    Omits ``_W_STYLE_CON`` (style consistency is experiment-level only) but includes
-    ``_W_MEGASTYLE`` (per-image paired similarity), so max output is 0.97.
+    Omits ``_W_STYLE_CON`` (experiment-level only; 0-weight since 2026-04-23) but includes
+    ``_W_MEGASTYLE`` (per-image paired similarity), so max output is 1.00.
     """
     return (
         _W_DREAMSIM * s.dreamsim_similarity

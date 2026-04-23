@@ -10,12 +10,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from art_style_search.scoring import composite_score
-from art_style_search.state import load_iteration_log, load_manifest, load_promotion_log, load_state
+from art_style_search.state import (
+    load_iteration_log,
+    load_iteration_proposals,
+    load_manifest,
+    load_promotion_log,
+    load_state,
+)
 from art_style_search.types import IterationResult, LoopState, PromotionDecision, RunManifest
+from art_style_search.workflow.proposal_recorder import ProposalBatchRecorder
 
 logger = logging.getLogger(__name__)
 
 _LOG_PATTERN = re.compile(r"iter_(\d+)_branch_(\d+)\.json$")
+_PROPOSALS_LOG_PATTERN = re.compile(r"iter_(\d+)_proposals\.json$")
 _SYNTHESIS_EXP_PREFIX = "Synthesis"
 
 
@@ -41,6 +49,7 @@ class ReportData:
     run_dir: Path
     state: LoopState
     iteration_logs: dict[int, list[IterationResult]] = field(default_factory=dict)
+    iteration_proposals: dict[int, ProposalBatchRecorder] = field(default_factory=dict)
     manifest: RunManifest | None = None
     promotion_decisions: list[PromotionDecision] = field(default_factory=list)
     zero_step_captions: dict[Path, str] = field(default_factory=dict)
@@ -165,6 +174,23 @@ def _load_iteration_logs(log_dir: Path) -> dict[int, list[IterationResult]]:
     return result
 
 
+def _load_iteration_proposals(log_dir: Path) -> dict[int, ProposalBatchRecorder]:
+    """Parse every ``iter_NNN_proposals.json`` under *log_dir* into a recorder per iteration."""
+    result: dict[int, ProposalBatchRecorder] = {}
+    if not log_dir.is_dir():
+        return result
+    for path in sorted(log_dir.glob("iter_*_proposals.json")):
+        if not _PROPOSALS_LOG_PATTERN.search(path.name):
+            continue
+        try:
+            recorder = load_iteration_proposals(path)
+        except (json.JSONDecodeError, KeyError, ValueError) as exc:
+            logger.warning("Skipping malformed proposals log %s: %s", path, exc)
+            continue
+        result[recorder.iteration] = recorder
+    return result
+
+
 def _load_zero_step_captions(captions_dir: Path) -> dict[Path, str]:
     """Read the per-image JSON files at ``<run>/logs/captions/`` written by the bootstrap captioner."""
     result: dict[Path, str] = {}
@@ -196,6 +222,7 @@ def load_report_data(run_dir: Path) -> ReportData:
         run_dir=run_dir,
         state=state,
         iteration_logs=_load_iteration_logs(run_dir / "logs"),
+        iteration_proposals=_load_iteration_proposals(run_dir / "logs"),
         manifest=load_manifest(run_dir / "run_manifest.json"),
         promotion_decisions=load_promotion_log(run_dir / "promotion_log.jsonl"),
         zero_step_captions=_load_zero_step_captions(run_dir / "logs" / "captions"),
